@@ -40,7 +40,7 @@ typedef struct
     queue_t active_taskcxt_queue;
     queue_t free_taskcxt_queue;
     queue_t task_queue;
-    struct tasklet_struct tasklet;
+    struct work_struct dpc_work;
     queue_t DPC_queue;
     atomic_t need_reschedue_DPC;
     mem_model_pool_handle_t taskcxt_pool; 
@@ -68,9 +68,8 @@ typedef struct
 
 
 
-
 static task_cxt_t *task_model_get_taskcxt(task_model_cxt_t *task_model_cxt,task_model_task_t *task_info);
-static void task_model_tasklet_func(unsigned long data);
+static void task_model_dpc_work_func(struct work_struct *work);
 static void task_model_release_taskcxt(task_model_cxt_t *task_model_cxt,task_cxt_t *task_cxt);
 static void task_model_cancel_task(task_cxt_t *task_cxt);
 static void task_model_prepare_task(task_model_cxt_t *task_model_cxt,task_cxt_t *task_cxt);
@@ -109,8 +108,8 @@ static void task_model_release(void *context)
            }
        }
        
+       cancel_work_sync(&task_model_cxt->dpc_work);
        destroy_workqueue(task_model_cxt->wq);
-       tasklet_kill(&task_model_cxt->tasklet);
        mem_model_release_pool(task_model_cxt->taskcxt_pool);
        mem_model_release_pool(task_model_cxt->task_pool);
        if(task_model_cxt->memmgr)
@@ -184,7 +183,7 @@ task_model_handle_t task_model_init(cxt_mgr_handle_t cxt_mgr)
         spin_lock_init(&task_model_cxt->free_lock);
         spin_lock_init(&task_model_cxt->active_lock);
         spin_lock_init(&task_model_cxt->DPC_lock);
-        tasklet_init(&task_model_cxt->tasklet, task_model_tasklet_func, (unsigned long)task_model_cxt);
+        INIT_WORK(&task_model_cxt->dpc_work, task_model_dpc_work_func);
         atomic_set(&task_model_cxt->need_reschedue_DPC,1);
         
     }while(0);
@@ -278,9 +277,13 @@ static task_cxt_t *task_model_get_DPC_queue(task_model_cxt_t *task_model_cxt)
     return task_cxt;
 }
 
-static void task_model_tasklet_func(unsigned long data) //check
+/* DPC handler — runs in workqueue (process) context so sleeping is allowed.
+ * Previously this was a tasklet (atomic/softirq context) which caused
+ * "BUG: scheduling while atomic" when the blob's ite68051_task called
+ * sleeping functions like msleep(). */
+static void task_model_dpc_work_func(struct work_struct *work)
 {
-        task_model_cxt_t *task_model_cxt=(task_model_cxt_t *)data;
+        task_model_cxt_t *task_model_cxt=container_of(work, task_model_cxt_t, dpc_work);
         task_cxt_t *task_cxt;
         queue_t task_queue;
         task_cxt_t *pos,*next;
@@ -311,7 +314,7 @@ static void task_model_tasklet_func(unsigned long data) //check
         //mesg("]\n");
         if(!queue_empty(&task_model_cxt->DPC_queue))
         {
-            tasklet_schedule(&task_model_cxt->tasklet);
+            queue_work(task_model_cxt->wq, &task_model_cxt->dpc_work);
             //mesg(";");
         }else
         {
@@ -320,7 +323,7 @@ static void task_model_tasklet_func(unsigned long data) //check
             if(!queue_empty(&task_model_cxt->DPC_queue)) {
                 printk("interrupt add que Detection\n");
                 atomic_set(&task_model_cxt->need_reschedue_DPC,0);
-                tasklet_schedule(&task_model_cxt->tasklet);
+                queue_work(task_model_cxt->wq, &task_model_cxt->dpc_work);
             }
             #endif
         } 
@@ -532,7 +535,7 @@ void task_model_schedule_DPC(task_model_handle_t task_model_handle,task_handle_t
         if(atomic_read(&task_model_cxt->need_reschedue_DPC)==1)
         {
             atomic_set(&task_model_cxt->need_reschedue_DPC,0);
-            tasklet_schedule(&task_model_cxt->tasklet);
+            queue_work(task_model_cxt->wq, &task_model_cxt->dpc_work);
             //mesg(".");
         }
     }

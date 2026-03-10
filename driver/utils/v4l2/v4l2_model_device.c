@@ -128,15 +128,19 @@ v4l2_model_handle_t v4l2_model_init(cxt_mgr_handle_t cxt_mgr,
 #endif
       dev = cxt_manager_get_dev(cxt_mgr);
       if (!dev) {
+        printk("v4l2_model_init: ERROR no dev from cxt_mgr\n");
         err = V4L2_MODEL_ERROR_NO_DEV;
         break;
       }
+      printk("v4l2_model_init: dev=%p\n", dev);
       context = cxt_manager_add_cxt(cxt_mgr, V4L2_CXT_ID, v4l2_model_alloc,
                                     v4l2_model_release);
       if (!context) {
+        printk("v4l2_model_init: ERROR alloc context failed\n");
         err = V4L2_MODEL_ERROR_ALLOC;
         break;
       }
+      printk("v4l2_model_init: context alloc ok\n");
       context->dev = dev;
       mutex_init(&context->lock);
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 18, 0)
@@ -165,9 +169,11 @@ v4l2_model_handle_t v4l2_model_init(cxt_mgr_handle_t cxt_mgr,
       }
       ret = v4l2_device_register(dev, &context->v4l2_dev);
       if (ret) {
+        printk("v4l2_model_init: ERROR v4l2_device_register failed ret=%d\n", ret);
         err = V4L2_MODEL_ERROR_REGISTER_V4L2;
         break;
       }
+      printk("v4l2_model_init: v4l2_device_register ok\n");
       context->framegrabber_handle = framegrabber_handle;
       // framegrabber_associate_v4l2dev(framegrabber_handle,&context->v4l2_dev);
       context->v4l2_dev.notify = v4l2_model_notify;
@@ -175,9 +181,11 @@ v4l2_model_handle_t v4l2_model_init(cxt_mgr_handle_t cxt_mgr,
       context->vb2_context = v4l2_model_vb2_init(
           &context->queue, devicetype, device_info->buffer_type, dev, context);
       if (!context->vb2_context) {
+        printk("v4l2_model_init: ERROR vb2_init failed\n");
         err = V4L2_MODEL_ERROR_VIDEO_BUF;
         break;
       }
+      printk("v4l2_model_init: vb2_init ok\n");
       context->pic_bmp_handle =
           cxt_manager_get_context(cxt_mgr, PCI_BMP_CXT_ID, 0);
 
@@ -198,11 +206,14 @@ v4l2_model_handle_t v4l2_model_init(cxt_mgr_handle_t cxt_mgr,
 #endif
       video_set_drvdata(vdev, context);
 
+      printk("v4l2_model_init: calling video_register_device...\n");
       ret = video_register_device(vdev, devicetype, -1);
       if (ret) {
+        printk("v4l2_model_init: ERROR video_register_device failed ret=%d\n", ret);
         err = V4L2_MODEL_ERROR_REGISTER_VIDEO;
         break;
       }
+      printk("v4l2_model_init: video_register_device ok => /dev/video%d\n", vdev->num);
 
     } while (0);
     if (err != V4L2_MODEL_OK) {

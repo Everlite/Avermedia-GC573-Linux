@@ -829,6 +829,7 @@ static void cx511h_ite6805_event(void *cxt,ite6805_event_e event)
 
 void board_v4l2_init(cxt_mgr_handle_t cxt_mgr, int board_id)
 {
+    printk(KERN_ERR "DEBUG: EINTRITT IN board_v4l2_init board_id=%d\n", board_id);
     framegrabber_handle_t framegrabber_handle;
     board_v4l2_context_t *board_v4l2_cxt=NULL;
     v4l2_model_handle_t v4l2_handle;
@@ -855,16 +856,20 @@ void board_v4l2_init(cxt_mgr_handle_t cxt_mgr, int board_id)
     {
         if (!cxt_mgr)
         {
+            printk("board_v4l2_init: ERROR no cxt_mgr\n");
             err = BOARD_V4L2_ERROR_CXT_MGR;
             break;
         }
+        printk("board_v4l2_init: cxt_mgr ok\n");
 
         framegrabber_handle = framegrabber_init(cxt_mgr, &cl511h_property, &cx511h_ops);
         if (framegrabber_handle == NULL)
         {
+            printk("board_v4l2_init: ERROR framegrabber_init failed\n");
             err = BOARD_V4L2_ERROR_FRAMEGRABBER_INIT;
             break;
         }
+        printk("board_v4l2_init: framegrabber_init ok\n");
         board_v4l2_cxt = cxt_manager_add_cxt(cxt_mgr, BOARD_V4L2_CXT_ID, board_v4l2_alloc, board_v4l2_release);
         if (!board_v4l2_cxt)
         {
@@ -874,12 +879,15 @@ void board_v4l2_init(cxt_mgr_handle_t cxt_mgr, int board_id)
         board_v4l2_cxt->fg_handle = framegrabber_handle;
         framegrabber_set_data(framegrabber_handle,board_v4l2_cxt);
         
+        printk("board_v4l2_init: calling v4l2_model_init...\n");
         v4l2_handle = v4l2_model_init(cxt_mgr, &device_info,framegrabber_handle);
         if(v4l2_handle==NULL)
 	    {
+            printk("board_v4l2_init: ERROR v4l2_model_init returned NULL\n");
             err=BOARD_V4L2_ERROR_V4L2_MODEL_INIT;
 		    break;
 	    }
+        printk("board_v4l2_init: v4l2_model_init ok, handle=%p\n", v4l2_handle);
 	    board_v4l2_cxt->v4l2_handle=v4l2_handle;
         aver_xilinx_handle=cxt_manager_get_context(cxt_mgr,AVER_XILINX_CXT_ID,0);
 	    if(aver_xilinx_handle==NULL)
@@ -952,6 +960,7 @@ void board_v4l2_init(cxt_mgr_handle_t cxt_mgr, int board_id)
         default:
             break;
         }
+        printk("board_v4l2_init: FAILED with err=%d\n", err);
         debug_msg("%s err %d\n", __func__, err);
     }
 }

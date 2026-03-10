@@ -1,30 +1,33 @@
-# AVerMedia Live Gamer 4K (GC573) - Linux Driver (Kernel 6.17+ / 6.18+ Fix)
+# AVerMedia Live Gamer 4K (GC573) - Linux Driver (Kernel 6.19+ Development)
 
-This repository contains a community-maintained version of the AVerMedia GC573 Linux driver, updated for modern kernels and featuring a unique binary patch to resolve compatibility issues with the closed-source library.
+This repository contains a community-maintained and heavily patched version of the AVerMedia GC573 Linux driver. It has been modernized for the latest kernels, but **is currently in an unstable state.**
 
-## 🚀 Status: Experimental (WIP)
+## 🚀 Status: ⚠️ UNSTABLE / BROKEN / WIP
 
-*   **Kernel Compatibility:** Tested and building on **Kernel 6.18.7** (Pop!_OS 24.04).
-*   **Binary Patch:** Successfully bypassed the `#PF` (Page Fault) / Stack Canary crash caused by the legacy `AverMediaLib_64.a`.
-*   **Current State:** Driver loads, binds to hardware, and detects HDMI signals (via `v4l2-ctl`). **Capture attempts currently cause system hangs.**
+*   **Kernel Compatibility:** Builds on **Kernel 6.19.6** (CachyOS / Arch).
+*   **Current State:** 
+    *   **Loads:** Yes (often auto-loads if previously installed).
+    *   **Signal Detection:** Hardware appears to detect signal (ITE6805 fallback). Kernel logs confirm **4K/60Hz sync**, but V4L2 reporting remains stuck at "no power".
+    *   **Capture:** **NOT WORKING.** Attempting to capture or preview results in no image or system instability.
+    *   **Unloading:** **CRITICAL BUG.** Attempting to unload the module (`rmmod`) or using `rmmod -f` causes a **complete system freeze**.
 
-## ✨ Key Improvements
+## ✨ Recent Changes & Fixes (Under Investigation)
 
-*   **Automated Binary Patching:** Includes a Python script (in `tools/`) to patch the stack canary checks (`%gs:0x28` access) in the pre-compiled `AverMediaLib_64.a`, which caused crashes on modern kernels.
-*   **API Modernization:** Updated for ALSA, V4L2, and Timer APIs for Kernel 6.x.
-*   **Fixed V4L2 Callbacks:** Resolved legacy callback mismatches in modern kernels.
-*   **RGB LED Control:** Driver exposes module parameters to control the RGB LED pins, fixing the default "flashing red" behavior.
+### 1. Modern Kernel Support (V4L2 & IBT)
+- **API Modernization**: Updated to the new 2-argument `v4l2_fh_add/del` signatures.
+- **Intel IBT (CET) Bypass**: Implemented `MODULE_INFO(ibt, "N")` and custom CFLAGS to allow the proprietary binary blob to run.
 
-## ⚠️ Known Issues
+### 2. Stability Architecture (Workqueues)
+- **Tasklet to Workqueue Conversion**: Replaced the legacy tasklet system with a workqueue to prevent "scheduling while atomic" panics. 
+- **Atomic-Aware Locking**: Patched system wrappers to detect atomic context.
 
-*   **Capture Instability:** Capture is currently unstable. Invoking a stream (e.g., via OBS or `v4l2-ctl`) may result in a kernel schedule bug or system freeze. Contributions are welcome to resolve the interrupt/scheduling conflict.
-*   The system log (dmesg) often shows a __schedule_bug or workqueue warning when the capture starts, indicating a potential scheduling conflict within the binary blob.
+### 3. I2C & Signal Logic
+- **Linker Fallback**: Manual `attach` for the ITE6805 chip.
+- **Device Registration**: Manual registration to expose the chip to V4L2.
 
-## 🛠️ How to Build & Install
+## 🛠️ How to Build & Install (FOR DEVELOPERS ONLY)
 
-### Prerequisites
-*   Linux Kernel 5.x or 6.x (Tested up to 6.18.7)
-*   GCC, Make, Kernel Headers
+**WARNING: Running this driver may freeze your system.**
 
 ### Installation
 
@@ -34,43 +37,24 @@ This repository contains a community-maintained version of the AVerMedia GC573 L
     cd Avermedia-GC573-Linux
     ```
 
-2.  **Build and Install:**
-    You can use the provided helper scripts or standard make commands.
-
-    **Option A (Script):**
+2.  **Build:**
     ```bash
-    ./build.sh
-    sudo ./install.sh
+    ./build.sh LLVM=1
     ```
 
-    **Option B (Manual):**
+3.  **Load:**
     ```bash
-    cd driver
-    make
+    sudo insmod driver/cx511h.ko
     ```
 
-3.  **Load the Driver:**
-    ```bash
-    sudo insmod driver/cx511h.ko led_pin_r=3 led_pin_g=4 led_pin_b=5
-    ```
-    *Note: The `led_pin` parameters map the FPGA GPIOs to RGB LEDs (Defaults: 3, 4, 5).*
-
-## 🔧 Binary Patching Details
-
-If you need to use a clean version of `AverMediaLib_64.a` from a new vendor release, it **will crash** on kernels > 5.18 due to the stack protection ABI change. You must re-apply the binary patch:
-
-```bash
-# Apply the patch (This effectively disables stack protection in the library)
-python3 tools/patch_library.py path/to/clean/AverMediaLib_64.a
-```
+## ⚠️ Known Blockers
+1.  **System Freeze on Unload**: The module reference count management or hardware teardown is broken, leading to a hard lockup during `rmmod`.
+2.  **No Image Data**: Although the signal is detected, the DMA transfer or V4L2 buffer management is not delivering actual video frames.
 
 ## ⚖️ Disclaimer
 
-**This is an unofficial patch. Use at your own risk.**
-The driver includes a **binary-patched** static library (`AverMediaLib_64.a`) where stack canary checks have been replaced with NOPs to ensure compatibility. This theoretically reduces security within the driver's proprietary blob but is necessary for functionality on modern systems.
+**This is an unofficial, experimental patch. Use at your own risk.**
+This project is currently a work-in-progress to rescue the driver for modern Linux systems.
 
-## Acknowledgements
-
-This project is a fork of the original work by derrod, updated for modern kernels.
-Based on the original AverMedia Linux driver for CL511HN.
-Updated and patched for Kernel 6.17+ by the community.
+---
+*Maintained by the community. Credits to derrod.*

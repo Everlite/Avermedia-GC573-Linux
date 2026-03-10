@@ -1,6 +1,8 @@
 #ifndef __I2C_H__
 #define __I2C_H__
 
+#include "typedef.h"
+
 
 
 #define I2C_CXT_ID fourcc_id('I','2','C','_')
@@ -96,5 +98,7 @@ int i2c_model_transfer(i2c_model_bus_handle_t bus_handle,i2c_model_msg_t i2c_mod
 int i2c_model_read(i2c_model_bus_handle_t bus_handle, U8_T slaveAddr, U32_T subAddr, U8_T* pBuf, U8_T bufLen);
 int i2c_model_write(i2c_model_bus_handle_t bus_handle, U8_T slaveAddr, U32_T subAddr, U8_T* pBuf, U8_T bufLen);
 i2c_model_handle_t i2c_model_bus_get_mgr(i2c_model_bus_handle_t bus_handle);
+
+void i2c_model_force_register_driver_handle(i2c_model_handle_t handle, const char *drv_name, void *drv_cxt);
 
 #endif

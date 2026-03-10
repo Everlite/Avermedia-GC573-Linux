@@ -669,10 +669,16 @@ int pci_model_driver_init(pci_model_driver_setup_t *pcidrv_setup)
                     driver->id_table=pci_model_drv_cxt->id_table;
             } 
         
+            printk(KERN_ERR "DEBUG: pci_register_driver mit vendor=%04x device=%04x subvendor=%04x subdevice=%04x\n",
+                   pci_model_drv_cxt->id_table[0].vendor,
+                   pci_model_drv_cxt->id_table[0].device,
+                   pci_model_drv_cxt->id_table[0].subvendor,
+                   pci_model_drv_cxt->id_table[0].subdevice);
             err = pci_register_driver(&pci_model_drv_cxt->driver);
             if (err ==0)
             {
 				printk(">>>pci_register_driver ok\n"); 
+				printk(KERN_ERR "DEBUG: TEST NACH PCI REG\n");
 			}
             else
             {

@@ -54,6 +54,13 @@ $(MODULE_NAME)-objs := $(basic-objs) $(utils_objs) $(board_objs) AverMediaLib_64
 
 # ccflags-y is the modern kbuild variable (EXTRA_CFLAGS is deprecated since 5.x)
 ccflags-y += $(common-include) -Wno-maybe-uninitialized -Wno-implicit-fallthrough
+
+# AverMediaLib_64.a is a precompiled blob without CET/ENDBR64 support.
+# Disable CET code generation so indirect calls into the blob don't trap
+# on kernels with Intel IBT enabled.
+KBUILD_CFLAGS += -fcf-protection=none
+KBUILD_CFLAGS += -fno-stack-protector
+
 obj-m += $(MODULE_NAME).o
 
 KDIR := /lib/modules/$(shell uname -r)/build

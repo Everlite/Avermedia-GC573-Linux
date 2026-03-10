@@ -51,3 +51,10 @@ static struct pci_device_id aver_ids[  ] = {
 
 MODULE_DEVICE_TABLE(pci, aver_ids);
 
+MODULE_SOFTDEP("pre: videobuf2-dma-contig videobuf2-dma-sg videobuf2-vmalloc");
+
+/* AverMediaLib_64.a is a precompiled blob without ENDBR64 instructions.
+ * Disable IBT enforcement for this module so indirect calls into the
+ * blob (e.g. aver_xilinx_alloc via cxt_manager_add_cxt) don't trap. */
+MODULE_INFO(ibt, "N");
+

@@ -1,6 +1,7 @@
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/i2c.h>
+#include <linux/preempt.h>
 #include "cxt_mgr.h"
 #include "mem_model.h"
 #include "i2c_model.h"
@@ -123,10 +124,12 @@ static int i2c_model_bus_i2c_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[
     }
     if(bus->xfer_func)
     {
-        mutex_lock(&bus->lock);
+        if(!in_atomic())
+            mutex_lock(&bus->lock);
         ret=bus->xfer_func(bus->ref_cxt,bus->bus_data,&i2c_model_msg[0],num);
               
-        mutex_unlock(&bus->lock);
+        if(!in_atomic())
+            mutex_unlock(&bus->lock);
     }
     
     return ret;
@@ -176,10 +179,12 @@ int i2c_model_read(i2c_model_bus_handle_t bus_handle, U8_T slaveAddr, U32_T subA
 
     if(bus->read_func)
     {
-        mutex_lock(&bus->lock);
+        if(!in_atomic())
+            mutex_lock(&bus->lock);
         ret=bus->read_func(bus->ref_cxt, 0, slaveAddr, subAddr, 1, pBuf, bufLen);
               
-        mutex_unlock(&bus->lock);
+        if(!in_atomic())
+            mutex_unlock(&bus->lock);
     }
     
     return ret;
@@ -192,10 +197,12 @@ int i2c_model_write(i2c_model_bus_handle_t bus_handle, U8_T slaveAddr, U32_T sub
 
     if(bus->write_func)
     {
-        mutex_lock(&bus->lock);
+        if(!in_atomic())
+            mutex_lock(&bus->lock);
         ret=bus->write_func(bus->ref_cxt, 0, slaveAddr, subAddr, 1, pBuf, bufLen);
               
-        mutex_unlock(&bus->lock);
+        if(!in_atomic())
+            mutex_unlock(&bus->lock);
     }
     
     return ret;
@@ -551,6 +558,26 @@ void *i2c_model_get_nth_driver_handle(i2c_model_handle_t handle,const char *drv_
 //		}
 //	}
 //}
+
+void i2c_model_force_register_driver_handle(i2c_model_handle_t handle, const char *drv_name, void *drv_cxt)
+{
+    i2c_model_t *model = (i2c_model_t *)handle;
+    i2c_model_driver_item_t *item;
+
+    if (!model || !drv_cxt)
+        return;
+
+    item = (i2c_model_driver_item_t *)kzalloc(sizeof(i2c_model_driver_item_t), GFP_KERNEL);
+    if (item) {
+        init_queue(&item->queue);
+        item->drv_name = drv_name;
+        item->drv_cxt = drv_cxt;
+        /* Note: attach/detach/addr/info are not strictly needed for lookup
+         * by name, but we could set them if needed. */
+        queue_add_tail(&item->queue, &model->active_i2c_driver_queue);
+        printk(KERN_ERR "DEBUG: i2c_model: %s manually registered handle %p\n", drv_name, drv_cxt);
+    }
+}
 
 i2c_model_handle_t i2c_model_init(cxt_mgr_handle_t cxt_mgr)
 {

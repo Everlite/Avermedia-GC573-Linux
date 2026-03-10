@@ -7,6 +7,7 @@
 #include <linux/kernel.h>
 #include <linux/ktime.h>
 #include <linux/mutex.h>
+#include <linux/preempt.h>
 #include <linux/semaphore.h>
 #include <linux/slab.h>
 #include <linux/timekeeping.h>
@@ -27,11 +28,14 @@ unsigned long long sys_gettimestamp(void) {
   return timestamp;
 }
 
-/* --- Spinlock & Semaphore Logik (Original erhalten) --- */
+/* --- Spinlock & Semaphore Logik --- */
+/* PROC-level locks use a mutex instead of spinlock because the blob
+ * calls sleeping functions (sys_msleep, I2C ops) while holding them. */
 typedef struct {
   sys_spin_lock_t interface;
   sys_spin_lock_level_e level;
   spinlock_t lock;
+  struct mutex mlock;
   unsigned long flags;
 } sys_spin_lock_cxt_t;
 
@@ -44,7 +48,13 @@ typedef struct {
   atomic_t value;
 } sys_atomic_cxt_t;
 
-void sys_msleep(unsigned ms) { msleep(ms); }
+/* sys_msleep: use mdelay when in atomic context to avoid scheduling crashes */
+void sys_msleep(unsigned ms) {
+  if (in_atomic() || irqs_disabled())
+    mdelay(ms);
+  else
+    msleep(ms);
+}
 void sys_mdelay(unsigned ms) { mdelay(ms); }
 void sys_udelay(unsigned us) { udelay(us); }
 
@@ -125,17 +135,19 @@ sys_spin_lock_t *sys_new_spinlock(const char *name,
     lock_cxt->interface.name = name;
     lock_cxt->level = level;
     spin_lock_init(&lock_cxt->lock);
+    mutex_init(&lock_cxt->mlock);
     return &lock_cxt->interface;
   }
   return NULL;
 }
 
+/* PROC level uses mutex (allows sleeping), BH/IRQ levels use spinlock */
 void sys_spin_lock(sys_spin_lock_t *lock) {
   sys_spin_lock_cxt_t *lock_cxt =
       container_of(lock, sys_spin_lock_cxt_t, interface);
   if (lock_cxt) {
     if (lock_cxt->level == SYS_SPINLOCK_LEVEL_PROC)
-      spin_lock(&lock_cxt->lock);
+      mutex_lock(&lock_cxt->mlock);
     else if (lock_cxt->level == SYS_SPINLOCK_LEVEL_BH)
       spin_lock_bh(&lock_cxt->lock);
     else if (lock_cxt->level == SYS_SPINLOCK_LEVEL_IRQ)
@@ -148,7 +160,7 @@ void sys_spin_unlock(sys_spin_lock_t *lock) {
       container_of(lock, sys_spin_lock_cxt_t, interface);
   if (lock_cxt) {
     if (lock_cxt->level == SYS_SPINLOCK_LEVEL_PROC)
-      spin_unlock(&lock_cxt->lock);
+      mutex_unlock(&lock_cxt->mlock);
     else if (lock_cxt->level == SYS_SPINLOCK_LEVEL_BH)
       spin_unlock_bh(&lock_cxt->lock);
     else if (lock_cxt->level == SYS_SPINLOCK_LEVEL_IRQ)
