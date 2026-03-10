@@ -1,6 +1,6 @@
 # AVerMedia Live Gamer 4K (GC573) - Linux Driver (Kernel 6.19+ Development)
 
-This repository contains a community-maintained and heavily patched version of the AVerMedia GC573 Linux driver. It has been modernized for the latest kernels, but **is currently in an unstable state.**
+This repository contains a community-maintained, AI driven and heavily patched version of the AVerMedia GC573 Linux driver. It has been modernized for the latest kernels, but **is currently in an unstable state.**
 
 ## 🚀 Status: ⚠️ UNSTABLE / BROKEN / WIP
 
