@@ -1,6 +1,12 @@
 # AVerMedia Live Gamer 4K (GC573) - Linux Driver (Kernel 6.19+ Development)
 
-This repository contains a community-maintained, AI driven and heavily patched version of the AVerMedia GC573 Linux driver. It has been modernized for the latest kernels, but **is currently in an unstable state.**
+This repository contains a community-maintained, AI-Agent driven and heavily patched version of the AVerMedia GC573 Linux driver. It has been modernized for the latest kernels, but **is currently in an unstable state.**
+
+### ⚠️ Essential Kernel Parameter (Intel Users)
+Since the proprietary binary blob is not compatible with Intel's Indirect Branch Tracking (IBT), you **must** disable it in your bootloader, or the module will fail to load.
+
+**Add this to your kernel command line:**
+ibt=off
 
 ## 🚀 Status: ⚠️ UNSTABLE / BROKEN / WIP
 
