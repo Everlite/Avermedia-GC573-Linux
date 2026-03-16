@@ -399,7 +399,7 @@ static int v4l2_model_fops_open(struct file *fp) {
   if (v4l2m_fh) {
     v4l2_fh_init(&v4l2m_fh->fh, &v4l2m_context->vdev);
     fp->private_data = &v4l2m_fh->fh;
-    v4l2_fh_add(&v4l2m_fh->fh, fp);
+    v4l2_fh_add(&v4l2m_fh->fh);
   }
 
   return 0;
@@ -418,7 +418,7 @@ static int v4l2_model_fops_release(struct file *fp) {
     vdev->queue->owner = NULL;
   }
 
-  v4l2_fh_del(&v4l2m_fh->fh, fp);
+  v4l2_fh_del(&v4l2m_fh->fh);
   v4l2_fh_exit(&v4l2m_fh->fh);
   kfree(v4l2m_fh);
 
