@@ -13,6 +13,13 @@
 #include <linux/kernel.h>
 #include "linux/pci.h"
 #include "linux/interrupt.h"
+
+/* Compat: PCI_IRQ_INTX was introduced in kernel 6.8 as a rename of
+ * PCI_IRQ_LEGACY. Provide a fallback for older kernels. */
+#ifndef PCI_IRQ_INTX
+#define PCI_IRQ_INTX PCI_IRQ_LEGACY
+#endif
+
 #include "cxt_mgr.h"
 #include "mem_model.h"
 #include "pci_model.h"
@@ -150,12 +157,18 @@ static int pci_model_probe(struct pci_dev *pci_dev,const struct pci_device_id *p
             break;
         }
         pci_cxt->pci_dev=pci_dev;
-        if(pci_enable_device(pci_dev))
         {
-            err=ERROR_ENABLE_PCI_DEV;
-            break;
+            int enable_ret = pci_enable_device(pci_dev);
+            printk(KERN_ERR "[cx511h-debug] pci_enable_device returned: %d, irq=%u\n",
+                   enable_ret, pci_dev->irq);
+            if(enable_ret)
+            {
+                err=ERROR_ENABLE_PCI_DEV;
+                break;
+            }
         }
         pci_set_master(pci_dev);
+        printk(KERN_ERR "[cx511h-debug] pci_set_master done, irq=%u\n", pci_dev->irq);
         if(pci_request_regions(pci_dev,pci_name(pci_dev)))
         {
             err=ERROR_REQUEST_REGIONS;
@@ -198,30 +211,65 @@ static int pci_model_probe(struct pci_dev *pci_dev,const struct pci_device_id *p
         
         user_disable_msi = flags & PCI_MODEL_DISABLE_MSI;
         pci_cxt->msi_enabled = false;
-        if(!user_disable_msi && pci_find_capability(pci_dev,PCI_CAP_ID_MSI))
-        {
-            mesg_debug("MSI\n");
-            if(pci_enable_msi(pci_dev))
-            {
-                err=ERROR_ENABLE_MSI;
-                break;
-            }else
-            {
-                pci_cxt->msi_enabled = true;
-                 if(request_irq(pci_dev->irq, pci_model_irq,0, pci_name(pci_dev), pci_cxt) <0)
-                 {
-                    err=ERROR_REQUEST_IRQ;
+
+        printk(KERN_ERR "[cx511h-debug] flags=0x%x user_disable_msi=%d irq_before_alloc=%u\n",
+               flags, user_disable_msi, pci_dev->irq);
+
+        /* Modern IRQ allocation: try MSI first, fall back to legacy INTx.
+         * The old code treated pci_enable_msi() failure as fatal, which
+         * broke IRQ registration on modern Intel platforms entirely. */
+        if (!user_disable_msi) {
+            int irq_vectors;
+            irq_vectors = pci_alloc_irq_vectors(pci_dev, 1, 1,
+                                                 PCI_IRQ_MSI | PCI_IRQ_INTX);
+            printk(KERN_ERR "[cx511h-debug] pci_alloc_irq_vectors returned: %d\n",
+                   irq_vectors);
+            if (irq_vectors >= 1) {
+                int irq_num = pci_irq_vector(pci_dev, 0);
+                pci_cxt->msi_enabled = pci_dev->msi_enabled;
+                printk(KERN_ERR "[cx511h-debug] IRQ allocated: irq=%d msi=%s\n",
+                       irq_num,
+                       pci_cxt->msi_enabled ? "yes" : "no (legacy)");
+                if (request_irq(irq_num, pci_model_irq,
+                                pci_cxt->msi_enabled ? 0 : IRQF_SHARED,
+                                pci_name(pci_dev), pci_cxt) < 0)
+                {
+                    printk(KERN_ERR "[cx511h-debug] request_irq FAILED for irq %d\n",
+                           irq_num);
+                    pci_free_irq_vectors(pci_dev);
+                    err = ERROR_REQUEST_IRQ;
                     break;
-                 }
+                }
+                printk(KERN_ERR "[cx511h-debug] request_irq SUCCESS for irq %d\n",
+                       irq_num);
+            } else {
+                printk(KERN_ERR "[cx511h-debug] pci_alloc_irq_vectors FAILED (%d), "
+                       "trying direct request_irq on irq %u\n",
+                       irq_vectors, pci_dev->irq);
+                /* Last resort: try direct request_irq with the raw PCI irq */
+                if (request_irq(pci_dev->irq, pci_model_irq, IRQF_SHARED,
+                                pci_name(pci_dev), pci_cxt) < 0)
+                {
+                    printk(KERN_ERR "[cx511h-debug] direct request_irq ALSO FAILED\n");
+                    err = ERROR_REQUEST_IRQ;
+                    break;
+                }
+                printk(KERN_ERR "[cx511h-debug] direct request_irq SUCCESS on irq %u\n",
+                       pci_dev->irq);
             }
-        }else
-        {
-            if(request_irq(pci_dev->irq, pci_model_irq,IRQF_SHARED, pci_name(pci_dev), pci_cxt)<0)
+        } else {
+            printk(KERN_ERR "[cx511h-debug] MSI disabled by flags, using legacy irq %u\n",
+                   pci_dev->irq);
+            /* MSI explicitly disabled by driver flags — use legacy only */
+            if (request_irq(pci_dev->irq, pci_model_irq, IRQF_SHARED,
+                            pci_name(pci_dev), pci_cxt) < 0)
             {
-                err=ERROR_REQUEST_IRQ;
+                err = ERROR_REQUEST_IRQ;
                 break;
             }
         }
+
+
         if(err!=NO_ERROR)
             break;
         
@@ -308,13 +356,9 @@ static void pci_model_remove(struct pci_dev *pci_dev)
         {
             iounmap(pci_cxt->bar_info[i].mmio);
         }
-        free_irq(pci_dev->irq, pci_cxt);
-
-        if(pci_cxt->msi_enabled)
-        {
-            pci_disable_msi(pci_dev);
-            pci_cxt->msi_enabled = false;
-        }
+        free_irq(pci_irq_vector(pci_dev, 0), pci_cxt);
+        pci_free_irq_vectors(pci_dev);
+        pci_cxt->msi_enabled = false;
     }
     
     pci_release_regions(pci_dev);
@@ -338,13 +382,9 @@ static int pci_model_suspend (struct pci_dev *pci_dev, pm_message_t state)
 
         pci_model_drv_cxt->suspend_func(dev);
 
-        free_irq(pci_dev->irq, pci_cxt);
-
-        if(pci_cxt->msi_enabled)
-        {
-            pci_disable_msi(pci_dev);
-            pci_cxt->msi_enabled = false;
-        }
+        free_irq(pci_irq_vector(pci_dev, 0), pci_cxt);
+        pci_free_irq_vectors(pci_dev);
+        pci_cxt->msi_enabled = false;
     }
 
     pci_disable_device(pci_dev);
@@ -374,24 +414,20 @@ static int pci_model_resume(struct pci_dev *pci_dev)
     }
 
     pci_cxt->msi_enabled = false;
-    if(!user_disable_msi && pci_find_capability(pci_dev,PCI_CAP_ID_MSI))
     {
-        mesg_debug("MSI\n");
-        if(pci_enable_msi(pci_dev))
-        {
-            return -1;
-        }else
-        {
-            pci_cxt->msi_enabled = true;
-             if(request_irq(pci_dev->irq, pci_model_irq,0, pci_name(pci_dev), pci_cxt) <0)
-             {
-                 return -1;
-             }
-        }
-    }else
-    {
-        if(request_irq(pci_dev->irq, pci_model_irq,IRQF_SHARED, pci_name(pci_dev), pci_cxt)<0)
-        {
+        int irq_vectors;
+        irq_vectors = pci_alloc_irq_vectors(pci_dev, 1, 1,
+                                             PCI_IRQ_MSI | PCI_IRQ_INTX);
+        if (irq_vectors >= 1) {
+            pci_cxt->msi_enabled = pci_dev->msi_enabled;
+            if (request_irq(pci_irq_vector(pci_dev, 0), pci_model_irq,
+                            pci_cxt->msi_enabled ? 0 : IRQF_SHARED,
+                            pci_name(pci_dev), pci_cxt) < 0)
+            {
+                pci_free_irq_vectors(pci_dev);
+                return -1;
+            }
+        } else {
             return -1;
         }
     }

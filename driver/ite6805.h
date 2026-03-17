@@ -44,7 +44,7 @@
 #endif
 
 #ifndef EDID_SELECT_TABLE
-#define EDID_SELECT_TABLE	(16)  // 8->16 only 3840 EDID
+#define EDID_SELECT_TABLE	(8)   // 8 = 1080p max (was 16 = 3840 only)
 #endif
 
 

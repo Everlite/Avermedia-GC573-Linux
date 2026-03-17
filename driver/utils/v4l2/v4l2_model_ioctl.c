@@ -589,6 +589,12 @@ int v4l2_model_ioctl_g_parm(struct file *file, void *fh,struct v4l2_streamparm *
 	v4l2_model_context_t *v4l2m_context = video_drvdata(file);
 	//int current_denominator;
 	//printk("%s...\n",__func__);
+
+	if (!v4l2m_context || !v4l2m_context->framegrabber_handle) {
+		printk(KERN_ERR "[cx511h] g_parm: null context or framegrabber_handle\n");
+		return -ENODEV;
+	}
+
 	if (a->type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
 	{
 		printk("%s..\n",__func__);
@@ -621,17 +627,41 @@ int v4l2_model_ioctl_s_parm(struct file *file, void *fh,struct v4l2_streamparm *
 	v4l2_model_context_t *v4l2m_context = video_drvdata(file);
 	U32_T io_frame_rate;
 	U32_T in_frame_rate;
-	//printk("%s...a->parm.capture.timeperframe.denominator=%d\n",__func__,a->parm.capture.timeperframe.denominator);
-	io_frame_rate = a->parm.capture.timeperframe.denominator/a->parm.capture.timeperframe.numerator;
+
+	if (!v4l2m_context || !v4l2m_context->framegrabber_handle) {
+		printk(KERN_ERR "[cx511h] s_parm: null context or framegrabber_handle\n");
+		return -ENODEV;
+	}
+
+	if (!a) {
+		printk(KERN_ERR "[cx511h] s_parm: null streamparm\n");
+		return -EINVAL;
+	}
+
+	/* Guard against division by zero — OBS may send numerator=0 */
+	if (a->parm.capture.timeperframe.numerator == 0) {
+		printk(KERN_WARNING "[cx511h] s_parm: numerator is 0, defaulting to input framerate\n");
+		in_frame_rate = framegrabber_g_input_framerate(v4l2m_context->framegrabber_handle);
+		if (in_frame_rate == 0)
+			in_frame_rate = 60; /* safe fallback */
+		framegrabber_s_out_framerate(v4l2m_context->framegrabber_handle, in_frame_rate);
+		a->parm.capture.timeperframe.numerator = 1;
+		a->parm.capture.timeperframe.denominator = in_frame_rate;
+		return 0;
+	}
+
+	io_frame_rate = a->parm.capture.timeperframe.denominator / a->parm.capture.timeperframe.numerator;
 	in_frame_rate = framegrabber_g_input_framerate(v4l2m_context->framegrabber_handle);
+
     if ((io_frame_rate  !=0) /*&& (io_frame_rate <=85)*/)
     {
         framegrabber_s_out_framerate(v4l2m_context->framegrabber_handle,io_frame_rate);
-        //a->parm.capture.timeperframe.denominator = io_frame_rate;
         printk("%s set io_framerate= %u\n", __func__, io_frame_rate);
 	}
 	else
 	{
+		if (in_frame_rate == 0)
+			in_frame_rate = 60; /* safe fallback */
 		framegrabber_s_out_framerate(v4l2m_context->framegrabber_handle,in_frame_rate);
 		printk("%s set in_framerate= %u\n", __func__, in_frame_rate);
 	}
@@ -641,6 +671,7 @@ int v4l2_model_ioctl_s_parm(struct file *file, void *fh,struct v4l2_streamparm *
 	//printk("%s..%d  %d\n",__func__,a->parm.capture.timeperframe.denominator,a->parm.capture.timeperframe.numerator);
 	return 0;
 }
+
 
 int v4l2_model_ioctl_g_ctrl(struct file *file, void *fh,struct v4l2_control *a)//
 {

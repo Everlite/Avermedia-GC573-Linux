@@ -141,10 +141,12 @@ int board_probe(struct device *dev,unsigned long driver_info)
     }err=NO_ERROR;
     
         
+    printk(KERN_ERR "[cx511h-debug] Step 1: board_probe ENTRY\n");
     mesg("board_probe start \n");
     debug_msg("%s\n",__func__);
     do
     {
+        printk(KERN_ERR "[cx511h-debug] Step 2: pci_model_get_handle...\n");
         pci_handle=pci_model_get_handle(cxt_mgr);
         if(!pci_handle)
         {
@@ -152,6 +154,7 @@ int board_probe(struct device *dev,unsigned long driver_info)
             err=NO_PCI_HANDLE;
             break;
         } 
+        printk(KERN_ERR "[cx511h-debug] Step 3: i2c_model_init...\n");
 	    i2c_mgr=i2c_model_init(cxt_mgr);
 	    if(!i2c_mgr)
 	    {
@@ -159,6 +162,7 @@ int board_probe(struct device *dev,unsigned long driver_info)
             err=ERROR_I2C_MGR;
             break;
 	    }
+        printk(KERN_ERR "[cx511h-debug] Step 4: gpio_model_init...\n");
         gpio_mgr=gpio_model_init(cxt_mgr);
         if(!gpio_mgr)
         {
@@ -166,6 +170,7 @@ int board_probe(struct device *dev,unsigned long driver_info)
             err=ERROR_GPIO_MGR;
             break;
         }
+        printk(KERN_ERR "[cx511h-debug] Step 5: mem_model_init...\n");
         mem_handle=mem_model_init(cxt_mgr);
         if(!mem_handle)
         {
@@ -173,6 +178,7 @@ int board_probe(struct device *dev,unsigned long driver_info)
             err=ERROR_MEM_HANDLE;
             break;
         }
+        printk(KERN_ERR "[cx511h-debug] Step 6: task_model_init...\n");
         task_handle=task_model_init(cxt_mgr);
         if(!task_handle)
         {
@@ -180,6 +186,7 @@ int board_probe(struct device *dev,unsigned long driver_info)
             err=ERROR_TASK_HANDLE;
             break;
         }
+        printk(KERN_ERR "[cx511h-debug] Step 7: aver_xilinx_init...\n");
         aver_xilinx_handle=aver_xilinx_init(cxt_mgr,pci_handle,&aver_xilinx_cfg);
         if(!aver_xilinx_handle)
         {
@@ -187,6 +194,7 @@ int board_probe(struct device *dev,unsigned long driver_info)
             err=ERROR_AVER_XILINX;
             break;
         }
+        printk(KERN_ERR "[cx511h-debug] Step 8: aver_xilinx_init_registers...\n");
         aver_xilinx_init_registers(aver_xilinx_handle, &aver_xilinx_cfg);
         //aver_xilinx_add_trace(aver_xilinx_handle,trace_handle);
         for(i=0;i<BOARD_I2C_BUS_NUM;i++)
@@ -205,6 +213,7 @@ int board_probe(struct device *dev,unsigned long driver_info)
             }
             
         }
+        printk(KERN_ERR "[cx511h-debug] Step 9: board_gpio_init...\n");
         ret=board_gpio_init(cxt_mgr);
         if(ret!=0)
         {
@@ -258,10 +267,12 @@ int board_probe(struct device *dev,unsigned long driver_info)
 	    mesg("%s subsystem_id=%x\n",__func__,subsystem_id);
 
         pic_bmp_init(cxt_mgr, no_signal_pic, NULL, copy_protetion_pic);
-        printk(KERN_ERR "DEBUG: board_alsa_init starten...\n");
+        printk(KERN_ERR "[cx511h-debug] Step 12: board_alsa_init starten...\n");
         board_alsa_init(cxt_mgr); 
-        printk(KERN_ERR "DEBUG: board_v4l2_init starten...\n");
+        printk(KERN_ERR "[cx511h-debug] Step 12b: board_alsa_init DONE\n");
+        printk(KERN_ERR "[cx511h-debug] Step 13: board_v4l2_init starten...\n");
         board_v4l2_init(cxt_mgr,subsystem_id);  
+        printk(KERN_ERR "[cx511h-debug] Step 14: board_v4l2_init DONE\n");
         //aver_xilinx_sha204_init(aver_xilinx_handle);
         
     }while(0);

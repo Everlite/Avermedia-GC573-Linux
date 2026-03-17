@@ -745,8 +745,31 @@ static void cx511h_ite6805_event(void *cxt,ite6805_event_e event)
             
 //            aver_xilinx_hdmi_hotplug(board_v4l2_cxt->aver_xilinx_handle);
         
-            mesg("%s locked fe %dx%d%c\n",__func__,fe_frameinfo->width,fe_frameinfo->height,(fe_frameinfo->is_interlace)?'i':'p'/*,fe_frameinfo->framerate*/);
-            //debug_msg("pixclock %d colorspace %d\n",fe_frameinfo->pixel_clock,fe_frameinfo->colorspace);
+            mesg("%s locked fe %dx%d%c (raw)\n",__func__,fe_frameinfo->width,fe_frameinfo->height,(fe_frameinfo->is_interlace)?'i':'p');
+
+            /* FORCED 1080p OVERRIDE: The ITE6805 EDID RAM still advertises 4K
+             * (EDID is cached in chip). Force any resolution above 1920 wide
+             * down to 1920x1080p60 so the FPGA/DMA pipeline can handle it.
+             * pixel_clock is in Hz (downstream check: >170000000 triggers dual-pixel). */
+            if (fe_frameinfo->width > 1920) {
+                printk(KERN_ERR "[cx511h-debug] FORCING 1080p mode now "
+                       "(was %dx%d pclk=%u dual=%d dpl=%d)\n",
+                       fe_frameinfo->width, fe_frameinfo->height,
+                       fe_frameinfo->pixel_clock, fe_frameinfo->dual_pixel,
+                       fe_frameinfo->dual_pixel_like);
+                fe_frameinfo->width = 1920;
+                fe_frameinfo->height = 1080;
+                fe_frameinfo->is_interlace = 0;
+                fe_frameinfo->framerate = 60;
+                fe_frameinfo->denominator = 1;
+                fe_frameinfo->pixel_clock = 148500000;  /* 148.5 MHz in Hz */
+                fe_frameinfo->dual_pixel = 0;
+                fe_frameinfo->dual_pixel_like = 0;
+                fe_frameinfo->sampling_mode = 0;  /* single pixel */
+                fe_frameinfo->ddr_mode = 0;       /* SDR */
+            }
+
+
    
 //work around for ITE6805 detect issue      
             if ((fe_frameinfo->is_interlace==0) && ((fe_frameinfo->height == 240) || (fe_frameinfo->height == 288)))
