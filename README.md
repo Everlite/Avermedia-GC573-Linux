@@ -29,7 +29,7 @@ This repository contains a **community-maintained, AI-assisted**, and heavily pa
 - **EDID Override:** Patched three separate locations (`ite6805.h`, `ite6805_EDID.h`, `include/ite6805.h`) to force the card to identify as a **1080p-max device**. This prevents consoles (like PS5) from forcing an unstable 4K signal.
 - **Timing Correction:** Fixed a critical **Hz vs. kHz mismatch** in the `pixel_clock` calculation. The driver now correctly targets **148.5 MHz** for 1080p60.
 
-### 3. Hardware "Maulkorb" (Logic Override)
+### 3. Hardware "Signal Sanitization" (Logic Override)
 
 - **Hardcoded 1080p Mode:** Implemented a debug-level override that intercepts 4K signals and re-interprets them as stable 1080p streams.
 - **Single-Pixel Mode:** Forced the deactivation of `Dual-Pixel-Mode` and `DDR-Mode` to simplify the data path for modern V4L2 compatibility.
