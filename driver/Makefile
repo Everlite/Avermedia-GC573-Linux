@@ -54,6 +54,8 @@ $(MODULE_NAME)-objs := $(basic-objs) $(utils_objs) $(board_objs) AverMediaLib_64
 
 # ccflags-y is the modern kbuild variable (EXTRA_CFLAGS is deprecated since 5.x)
 ccflags-y += $(common-include) -Wno-maybe-uninitialized -Wno-implicit-fallthrough
+# Clang-specific: vendor code uses intentional enum cross-casts and callback-only functions
+ccflags-y += -Wno-implicit-enum-enum-cast -Wno-missing-prototypes -Wno-unused-variable
 
 # AverMediaLib_64.a is a precompiled blob without CET/ENDBR64 support.
 # Disable CET code generation so indirect calls into the blob don't trap
@@ -66,10 +68,17 @@ obj-m += $(MODULE_NAME).o
 KDIR := /lib/modules/$(shell uname -r)/build
 
 all:
-	cp ../AverMediaLib_64.a AverMediaLib_64.o
-	touch .AverMediaLib_64.o.cmd
 	$(MAKE) -C $(KDIR) M=$(CURDIR) modules
 
 clean:
 	$(MAKE) -C $(KDIR) M=$(CURDIR) clean
-	rm -f *.o .*.cmd *.ko *.mod.c *.mod .tmp_versions
+	rm -f AverMediaLib_64.o .AverMediaLib_64.o.cmd
+	rm -f *.ko *.mod.c *.mod .tmp_versions
+
+# Explicit kbuild rule: produce AverMediaLib_64.o from the pre-compiled blob.
+# $(src) is set by kbuild to the absolute source directory during the
+# recursive make invocation.  Without this rule, kbuild tries to compile
+# AverMediaLib_64.o from a non-existent .c file.
+$(obj)/AverMediaLib_64.o: $(src)/../AverMediaLib_64.a
+	cp $< $@
+	@echo 'cmd_$@ := cp $< $@' > $(obj)/.AverMediaLib_64.o.cmd

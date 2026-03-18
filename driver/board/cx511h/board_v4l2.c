@@ -11,6 +11,8 @@
  */
  
 //#include <linux/kernel.h>
+#include <linux/delay.h>
+#include <linux/moduleparam.h>
 #include "board.h"
 #include "cxt_mgr.h"
 #include "framegrabber.h"
@@ -27,6 +29,20 @@
 #include "board_i2c.h"
 
 static int cnt_retry=0;
+
+/* Module parameter: force HDMI input format override.
+ * 0 = Auto-detect from ITE6805 (default)
+ * 1 = Force YUV 4:2:2 BT.709 Limited
+ * 2 = Force YUV 4:4:4 BT.709 Limited
+ * 3 = Force RGB Full Range (0-255)
+ * 4 = Force RGB Limited Range (16-235)
+ * Usage: sudo insmod cx511h.ko force_input_mode=3
+ * Runtime: echo 3 > /sys/module/cx511h/parameters/force_input_mode
+ */
+static int force_input_mode = 0;
+module_param(force_input_mode, int, 0644);
+MODULE_PARM_DESC(force_input_mode,
+    "Force HDMI input format: 0=auto, 1=YUV422, 2=YUV444, 3=RGB-Full, 4=RGB-Limited");
 
 /*
  * Set LED color via FPGA GPIO pins.
@@ -203,7 +219,8 @@ static void cx511h_v4l2_stream_on(v4l2_model_callback_parameter_t *cb_info)
 {
     board_v4l2_context_t *board_v4l2_cxt=cb_info->asso_data;
     
-    debug_msg("%s %p\n",__func__,board_v4l2_cxt);
+    printk(KERN_ERR "[cx511h-dma] >>> VIDIOC_STREAMON callback fired! cxt=%p\n",
+           board_v4l2_cxt);
 
 }
 
@@ -315,6 +332,93 @@ static void cx511h_stream_on(framegrabber_handle_t handle)
     vip_cfg.in_packetcsc_bt = COLORMETRY_ITU709;
     ite6805_get_sampingmode(ite6805_handle, &(vip_cfg.in_packetsamplingmode));
     vip_cfg.currentCSC = CAPTURE_BT709_COMPUTER;
+
+    /* === DEBUG: Log all colorspace/CSC fields BEFORE any override === */
+    printk(KERN_ERR "[cx511h-color] --- Input Format Detection ---\n");
+    printk(KERN_ERR "[cx511h-color]   in_colorspacemode=%u (0=yuv,1=rgbL,2=rgbF)\n",
+           vip_cfg.in_colorspacemode);
+    printk(KERN_ERR "[cx511h-color]   in_packetsamplingmode=%u (0=rgb,1=422,2=444)\n",
+           vip_cfg.in_packetsamplingmode);
+    printk(KERN_ERR "[cx511h-color]   in_videoformat.colorspace=%u\n",
+           vip_cfg.in_videoformat.colorspace);
+    printk(KERN_ERR "[cx511h-color]   packet_colorspace=%d (0=YUV,1=RGBF,2=RGBL)\n",
+           vip_cfg.packet_colorspace);
+    printk(KERN_ERR "[cx511h-color]   in_packetcsc_bt=%u (1=601,2=709,3=2020)\n",
+           vip_cfg.in_packetcsc_bt);
+    printk(KERN_ERR "[cx511h-color]   in_workingmode=%u  in_ddrmode=%u\n",
+           vip_cfg.in_workingmode, vip_cfg.in_ddrmode);
+    printk(KERN_ERR "[cx511h-color]   currentCSC=%d  fe_pkt_cs=%d\n",
+           vip_cfg.currentCSC, fe_frameinfo->packet_colorspace);
+
+    /* === INPUT FORMAT OVERRIDE via module parameter ===
+     * force_input_mode: 0=auto, 1=YUV422, 2=YUV444, 3=RGB-Full, 4=RGB-Limited
+     * Can be changed at runtime: echo N > /sys/module/cx511h/parameters/force_input_mode */
+    switch (force_input_mode) {
+    case 1: /* YUV 4:2:2 BT.709 Limited */
+        vip_cfg.in_colorspacemode = 0;
+        vip_cfg.in_packetsamplingmode = 1;  /* 422 */
+        vip_cfg.in_packetcsc_bt = COLORMETRY_ITU709;
+        vip_cfg.currentCSC = CAPTURE_BT709_STUDIO;
+        vip_cfg.in_videoformat.colorspace = VIDEO_422_MODE;
+        vip_cfg.packet_colorspace = CS_YUV;
+        printk(KERN_ERR "[cx511h-color] MANUAL OVERRIDE: Mode 1 — YUV 4:2:2 BT709 Limited\n");
+        break;
+    case 2: /* YUV 4:4:4 BT.709 Limited */
+        vip_cfg.in_colorspacemode = 0;
+        vip_cfg.in_packetsamplingmode = 2;  /* 444 */
+        vip_cfg.in_packetcsc_bt = COLORMETRY_ITU709;
+        vip_cfg.currentCSC = CAPTURE_BT709_STUDIO;
+        vip_cfg.in_videoformat.colorspace = VIDEO_422_MODE;
+        vip_cfg.packet_colorspace = CS_YUV;
+        printk(KERN_ERR "[cx511h-color] MANUAL OVERRIDE: Mode 2 — YUV 4:4:4 BT709 Limited\n");
+        break;
+    case 3: /* RGB Full Range (0-255) */
+        vip_cfg.in_colorspacemode = 2;
+        vip_cfg.in_packetsamplingmode = 0;  /* RGB */
+        vip_cfg.in_packetcsc_bt = COLORMETRY_ITU709;
+        vip_cfg.currentCSC = CAPTURE_BT709_COMPUTER;
+        vip_cfg.in_videoformat.colorspace = VIDEO_RGB_MODE;
+        vip_cfg.packet_colorspace = CS_RGB_FULL;
+        printk(KERN_ERR "[cx511h-color] MANUAL OVERRIDE: Mode 3 — RGB Full BT709\n");
+        break;
+    case 4: /* RGB Limited Range (16-235) */
+        vip_cfg.in_colorspacemode = 1;
+        vip_cfg.in_packetsamplingmode = 0;  /* RGB */
+        vip_cfg.in_packetcsc_bt = COLORMETRY_ITU709;
+        vip_cfg.currentCSC = CAPTURE_BT709_STUDIO;
+        vip_cfg.in_videoformat.colorspace = VIDEO_RGB_MODE;
+        vip_cfg.packet_colorspace = CS_RGB_LIMIT;
+        printk(KERN_ERR "[cx511h-color] MANUAL OVERRIDE: Mode 4 — RGB Limited BT709\n");
+        break;
+    default: /* 0 = Auto-detect from ITE6805 */
+        if (fe_frameinfo->packet_colorspace == CS_YUV) {
+            vip_cfg.in_colorspacemode = 0;
+            vip_cfg.in_packetsamplingmode = 1;
+            vip_cfg.in_packetcsc_bt = COLORMETRY_ITU709;
+            vip_cfg.currentCSC = CAPTURE_BT709_STUDIO;
+            vip_cfg.in_videoformat.colorspace = VIDEO_422_MODE;
+            printk(KERN_ERR "[cx511h-color] AUTO: YUV 4:2:2 BT709 Limited\n");
+        } else if (fe_frameinfo->packet_colorspace == CS_RGB_FULL) {
+            vip_cfg.in_colorspacemode = 2;
+            vip_cfg.in_packetsamplingmode = 0;
+            vip_cfg.in_packetcsc_bt = COLORMETRY_ITU709;
+            vip_cfg.currentCSC = CAPTURE_BT709_COMPUTER;
+            vip_cfg.in_videoformat.colorspace = VIDEO_RGB_MODE;
+            printk(KERN_ERR "[cx511h-color] AUTO: RGB Full BT709\n");
+        } else if (fe_frameinfo->packet_colorspace == CS_RGB_LIMIT) {
+            vip_cfg.in_colorspacemode = 1;
+            vip_cfg.in_packetsamplingmode = 0;
+            vip_cfg.in_packetcsc_bt = COLORMETRY_ITU709;
+            vip_cfg.currentCSC = CAPTURE_BT709_STUDIO;
+            vip_cfg.in_videoformat.colorspace = VIDEO_RGB_MODE;
+            printk(KERN_ERR "[cx511h-color] AUTO: RGB Limited BT709\n");
+        } else {
+            printk(KERN_ERR "[cx511h-color] AUTO: UNKNOWN cs=%d — using blob defaults\n",
+                   fe_frameinfo->packet_colorspace);
+        }
+        break;
+    }
+
 	
     //enable video bypass
     if (((vip_cfg.in_videoformat.vactive == 4096) && (vip_cfg.out_videoformat.width == 4096)
@@ -377,12 +481,42 @@ static void cx511h_stream_on(framegrabber_handle_t handle)
         default:
             vip_cfg.pixel_format=AVER_XILINX_CS_YUV422;
             break;
-    }       
+    }
+
+    printk(KERN_ERR "[cx511h-dma] stream_on: BEFORE aver_xilinx_config_video_process\n");
+    printk(KERN_ERR "[cx511h-dma]   in=%dx%d out=%dx%d fps_in=%d fps_out=%d\n",
+           vip_cfg.in_videoformat.vactive, vip_cfg.in_videoformat.hactive,
+           vip_cfg.out_videoformat.width, vip_cfg.out_videoformat.height,
+           vip_cfg.in_videoformat.fps, vip_cfg.out_videoformat.fps);
+    printk(KERN_ERR "[cx511h-dma]   pclk=%u bypass=%d dual=%d ddr=%d pixfmt=%d\n",
+           vip_cfg.pixel_clock, vip_cfg.video_bypass,
+           vip_cfg.dual_pixel, vip_cfg.in_ddrmode,
+           vip_cfg.pixel_format);
+    printk(KERN_ERR "[cx511h-dma]   xilinx_handle=%p\n",
+           board_v4l2_cxt->aver_xilinx_handle);
+
+    /* SAFETY 1: Make sure streaming is off before reconfiguring.
+     * The blob may not handle a re-config while DMA is running. */
+    printk(KERN_ERR "[cx511h-dma] stream_on: disabling streaming before config\n");
+    aver_xilinx_enable_video_streaming(board_v4l2_cxt->aver_xilinx_handle, FALSE);
+
+    /* SAFETY 2: Small delay to let the FPGA/DMA engine fully stop */
+    msleep(50);
+
     aver_xilinx_config_video_process(board_v4l2_cxt->aver_xilinx_handle,&vip_cfg);
-    
-    //sys_msleep(200);
-    aver_xilinx_enable_video_streaming(board_v4l2_cxt->aver_xilinx_handle,TRUE);
-   
+
+    /* SAFETY 3: Settle delay after config — give the FPGA time to latch
+     * the new scaler/CSC/DMA settings before we start the stream.
+     * Too short = FPGA uses stale config = DMA writes to wrong addresses. */
+    printk(KERN_ERR "[cx511h-dma] stream_on: config done, settling 200ms...\n");
+    msleep(200);
+
+    /* Flush all printk messages to the log buffer so they survive a crash */
+    printk(KERN_ERR "[cx511h-dma] stream_on: >>> ENABLING STREAMING NOW <<<\n");
+
+    aver_xilinx_enable_video_streaming(board_v4l2_cxt->aver_xilinx_handle, TRUE);
+    printk(KERN_ERR "[cx511h-dma] stream_on: AFTER enable_video_streaming — survived!\n");
+
     //ite6805_set_freerun_screen(ite6805_handle,FALSE);    
 }
 
@@ -600,8 +734,14 @@ static void cx511h_v4l2_buffer_prepare(v4l2_model_callback_parameter_t *cb_info)
         framebufsize=bytesperline*height; 
         //debug_msg("%s %dx%d framesize %u\n",__func__,width,height,framebufsize);
       //  mesg("buf type %d count %d\n",buffer_info->buf_type,buffer_info->buf_count[0]);
+        printk(KERN_ERR "[cx511h-dma] buffer_prepare: %dx%d bpl=%u framesize=%u buf_count=%d\n",
+               width, height, bytesperline, framebufsize, buffer_info->buf_count[0]);
+
         for(i=0,desc=buffer_info->buf_info[0],remain=framebufsize;i<buffer_info->buf_count[0];i++)
         {
+            printk(KERN_ERR "[cx511h-dma]   desc[%d]: dma_addr=0x%08lx size=0x%lx (%lu) remain=%u\n",
+                   i, desc[i].addr, desc[i].size, desc[i].size, remain);
+
             if(remain >= desc[i].size)
             {
                 aver_xilinx_add_to_cur_desclist(board_v4l2_cxt->aver_xilinx_handle,desc[i].addr,desc[i].size);
@@ -612,10 +752,10 @@ static void cx511h_v4l2_buffer_prepare(v4l2_model_callback_parameter_t *cb_info)
                 remain =0;
                 break;
             }
-                
-            //mesg("addr %08x size %x\n",desc[i].addr,desc[i].size);
         }
 
+        printk(KERN_ERR "[cx511h-dma] buffer_prepare: activating desclist (xilinx=%p)\n",
+               board_v4l2_cxt->aver_xilinx_handle);
         aver_xilinx_active_current_desclist(board_v4l2_cxt->aver_xilinx_handle,cx511h_video_buffer_done,board_v4l2_cxt);   
     }  
 }
