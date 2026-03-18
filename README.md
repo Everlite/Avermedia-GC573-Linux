@@ -6,18 +6,20 @@ This repository contains a **community-maintained, AI-assisted**, and heavily pa
 
 ## 🚀 Status: ⚠️ EXPERIMENTAL / BETA
 
-**Kernel Compatibility:** Successfully builds and runs on **Kernel 6.19.6** (CachyOS / Arch / Gentoo).
+**Kernel Compatibility:** Successfully builds and runs on **Kernel 6.19.6+** (CachyOS / Arch / Gentoo).
 
 | Feature | Status |
 |---|---|
 | **Module Loading** | ✅ STABLE — No longer crashes the kernel upon loading |
 | **Signal Detection** | ✅ FUNCTIONAL — Hardware syncs via forced 1080p EDID handshake |
-| **System Stability** | ✅ MAJOR IMPROVEMENT — "Hard Lockup" resolved through proper IRQ allocation (MSI) |
-| **Capture** | 🔧 WIP — Signal is "Locked", but V4L2 buffers output a black frame |
+| **IRQ / Interrupts** | ✅ WORKING — MSI interrupt allocation with INTx fallback |
+| **System Stability** | ✅ STABLE — Hard lockup on STREAMON resolved via DMA safety guards |
+| **DMA Transfer** | ✅ WORKING — Valid YUYV buffer data (4,147,200 bytes per frame) |
+| **Capture** | 🔧 WIP — Signal is "Locked", DMA delivers frames, but pixel content is black (CSC mismatch under investigation) |
 
 ---
 
-## ✨ Recent Major Breakthroughs (March 2026)
+## ✨ Key Features & Fixes
 
 ### 1. Interrupt Infrastructure (MSI Support)
 
@@ -28,11 +30,33 @@ This repository contains a **community-maintained, AI-assisted**, and heavily pa
 
 - **EDID Override:** Patched three separate locations (`ite6805.h`, `ite6805_EDID.h`, `include/ite6805.h`) to force the card to identify as a **1080p-max device**. This prevents consoles (like PS5) from forcing an unstable 4K signal.
 - **Timing Correction:** Fixed a critical **Hz vs. kHz mismatch** in the `pixel_clock` calculation. The driver now correctly targets **148.5 MHz** for 1080p60.
-
-### 3. Hardware "Signal Sanitization" (Logic Override)
-
-- **Hardcoded 1080p Mode:** Implemented a debug-level override that intercepts 4K signals and re-interprets them as stable 1080p streams.
 - **Single-Pixel Mode:** Forced the deactivation of `Dual-Pixel-Mode` and `DDR-Mode` to simplify the data path for modern V4L2 compatibility.
+
+### 3. DMA Stability & STREAMON Safety
+
+- **Hard Lockup Fix:** Added safety sequence before enabling video streaming: `streaming disable → 50ms settle → config → 200ms settle → streaming enable`.
+- **DMA Address Logging:** Full debug output of scatter-gather descriptor addresses for every buffer prepare call.
+- **Makefile Modernization:** Proper kbuild rule for linking the pre-compiled `AverMediaLib_64.a` blob, fixing "no rule to make target" errors.
+
+### 4. Input Format Override (Module Parameter)
+
+Runtime-configurable module parameter (`force_input_mode`) to manually set the HDMI input colorspace, bypassing ITE6805 auto-detection:
+
+| Value | Mode | Description |
+|---|---|---|
+| `0` | Auto | ITE6805 detection (default) |
+| `1` | YUV 4:2:2 | BT.709 Limited Range |
+| `2` | YUV 4:4:4 | BT.709 Limited Range |
+| `3` | RGB Full | 0-255, BT.709 |
+| `4` | RGB Limited | 16-235, BT.709 |
+
+```bash
+# Set at load time:
+sudo insmod cx511h.ko force_input_mode=3
+
+# Change at runtime (no recompile needed):
+echo 3 | sudo tee /sys/module/cx511h/parameters/force_input_mode
+```
 
 ---
 
@@ -41,8 +65,12 @@ This repository contains a **community-maintained, AI-assisted**, and heavily pa
 ### Prerequisites
 
 > [!IMPORTANT]
-> **Intel Users:** You **must** disable Indirect Branch Tracking (IBT).
-> Add `ibt=off` to your kernel command line (e.g. in GRUB or systemd-boot).
+> **Kernel Parameters:** You **must** add these to your boot command line (GRUB / systemd-boot):
+> ```
+> ibt=off iommu=pt
+> ```
+> - `ibt=off` — Disables Intel Indirect Branch Tracking (required for proprietary blob compatibility)
+> - `iommu=pt` — Sets IOMMU passthrough mode (required for DMA access)
 
 - **Build Tools:** `base-devel`, `cmake`, `llvm`, `clang`
 
@@ -58,9 +86,25 @@ The driver includes automatic compatibility shims for different kernel versions:
 | **5.x – 6.7** | ⚠️ Should work | Falls back to `PCI_IRQ_LEGACY` automatically |
 | **< 5.0** | ❌ Untested | Not recommended |
 
+### Installation
 
+**1. Load Required Kernel Modules:**
 
-**1. Clone & Build:**
+```bash
+sudo modprobe videobuf2-v4l2
+sudo modprobe videobuf2-dma-sg
+sudo modprobe videobuf2-dma-contig
+sudo modprobe videobuf2-vmalloc
+```
+
+> [!NOTE]
+> On **CachyOS**, these must be loaded **after every reboot** before loading the driver.
+> Other distributions may load them automatically. To make this persistent:
+> ```bash
+> echo -e "videobuf2-v4l2\nvideobuf2-dma-sg\nvideobuf2-dma-contig\nvideobuf2-vmalloc" | sudo tee /etc/modules-load.d/avermedia.conf
+> ```
+
+**2. Clone & Build:**
 
 ```bash
 git clone https://github.com/realEverlite/Avermedia-GC573-Linux.git
@@ -68,37 +112,73 @@ cd Avermedia-GC573-Linux
 ./build.sh LLVM=1
 ```
 
-**2. Load the Module:**
+Or manually:
+```bash
+cd driver
+make clean && make LLVM=1 CC=clang
+```
+
+**3. Load the Module:**
 
 ```bash
 sudo insmod driver/cx511h.ko
+# With input format override:
+sudo insmod driver/cx511h.ko force_input_mode=3
 ```
 
-**3. Verify via Logs:**
+**4. Verify via Logs:**
 
 ```bash
 sudo dmesg | grep -i "cx511h"
 ```
 
-Look for: `[cx511h-debug] FORCING 1080p mode now`
+Look for:
+- `[cx511h-debug] FORCING 1080p mode now` — EDID override active
+- `[cx511h-color] MANUAL OVERRIDE: Mode X` — Input format override active
+- `[cx511h-dma] stream_on: AFTER enable_video_streaming — survived!` — Streaming works
 
 ---
 
 ## ⚠️ Known Blockers
 
-- **Black Frame in OBS / V4L2:** While the signal is "Locked" at 60 FPS, the actual pixel data is not yet reaching the V4L2 user-space buffers.
-- **DMA Buffer Handover:** Investigation needed in `board_v4l2.c` regarding the `vb2_buffer` filling process.
+- **Black Frame in OBS / V4L2:** DMA delivers valid YUYV data (correct frame sizes), but pixel content is `Y=16 U=128 V=128` (black). The FPGA's Color Space Converter (CSC) is suspected to discard pixel data. All `force_input_mode` values (0–4) still produce black frames.
+- **VB2 Module Dependencies:** On CachyOS, `videobuf2-*` modules must be loaded manually before the driver (see installation steps above).
+
+---
+
+## 🔧 Debugging
+
+```bash
+# Check colorspace detection:
+sudo dmesg | grep cx511h-color
+
+# Check DMA addresses:
+sudo dmesg | grep cx511h-dma
+
+# Capture test frame:
+v4l2-ctl -d /dev/video0 \
+  --set-fmt-video=width=1920,height=1080,pixelformat=YUYV \
+  --stream-mmap --stream-count=5 \
+  --stream-to=/tmp/testframe.raw
+
+# Check if frame is black (10 80 = black YUYV):
+hexdump -C /tmp/testframe.raw | head -5
+
+# Check / change input mode at runtime:
+cat /sys/module/cx511h/parameters/force_input_mode
+echo 3 | sudo tee /sys/module/cx511h/parameters/force_input_mode
+```
 
 ---
 
 ## 🤝 Seeking Contributors
 
-**The bridge is built — now we just need the pixels to cross it!**
+**The DMA bridge is built — now we just need the pixels to cross it!**
 
 We need help with:
 
-- **V4L2 Videobuf2 (VB2):** Mapping hardware DMA memory to V4L2 buffers.
-- **DMA Debugging:** Tracing why the proprietary blob doesn't fill the allocated buffers.
+- **FPGA CSC Configuration:** Understanding the correct `vip_cfg` parameters for the Xilinx FPGA's Color Space Converter.
+- **AverMediaLib_64.a Reverse Engineering:** The proprietary blob handles the FPGA register configuration. Understanding its internal logic would help fix the colorspace issue.
 - **Kernel / V4L2 / PCIe / DMA expertise** is highly welcome.
 
 If you're interested, open an issue or submit a PR!
