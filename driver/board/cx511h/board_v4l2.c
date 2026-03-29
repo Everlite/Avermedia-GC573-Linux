@@ -222,6 +222,10 @@ static void cx511h_v4l2_stream_on(v4l2_model_callback_parameter_t *cb_info)
     printk(KERN_ERR "[cx511h-dma] >>> VIDIOC_STREAMON callback fired! cxt=%p\n",
            board_v4l2_cxt);
 
+    /* Trigger the actual hardware configuration logic (includes CSC force and FPGA setup) */
+    if (board_v4l2_cxt && board_v4l2_cxt->fg_handle) {
+        cx511h_stream_on(board_v4l2_cxt->fg_handle);
+    }
 }
 
 static void cx511h_v4l2_stream_off(v4l2_model_callback_parameter_t *cb_info)
@@ -504,6 +508,19 @@ static void cx511h_stream_on(framegrabber_handle_t handle)
     msleep(50);
 
     aver_xilinx_config_video_process(board_v4l2_cxt->aver_xilinx_handle,&vip_cfg);
+
+    /* === CSC OVERRIDE: Forcing ITE6805 registers as per Windows driver analysis ===
+     * 0x6b = 0x02 (Input Color Space: YUV422)
+     * 0x6c = 0x01 (CSC Mode: Enable)
+     * 0x6e = 0x00 (CSC Select: BT.601) */
+    printk(KERN_ERR "[cx511h-color] FORCING ITE6805 CSC registers now...\n");
+    hdmirxwr(ite6805_handle, 0x6b, 0x02); // YUV422 Input
+    hdmirxwr(ite6805_handle, 0x6c, 0x00); // CSC BYPASS (Test 5)
+    hdmirxwr(ite6805_handle, 0x6e, 0x01); // BT.709
+    hdmirxwr(ite6805_handle, 0x98, 0x02); // AVI Colorimetry: YUV
+    hdmirxwr(ite6805_handle, 0xc0, 0x00); // TTL Output: YUV Mode
+    hdmirxwr(ite6805_handle, 0xc1, 0x00); // TTL Config
+    printk(KERN_ERR "[cx511h-color] ITE6805 CSC (Test 5: TTL YUV) written: 0x6b=0x02, 0x6c=0x00, 0x6e=0x01, 0x98=0x02, 0xc0=0x00, 0xc1=0x00\n");
 
     /* SAFETY 3: Settle delay after config — give the FPGA time to latch
      * the new scaler/CSC/DMA settings before we start the stream.
