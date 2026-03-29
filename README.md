@@ -13,9 +13,9 @@ This repository contains a **community-maintained, AI-assisted**, and heavily pa
 | **Module Loading** | [OK] STABLE — No longer crashes the kernel upon loading |
 | **Signal Detection** | [OK] FUNCTIONAL — Hardware syncs via forced 1080p EDID handshake |
 | **IRQ / Interrupts** | [OK] WORKING — MSI interrupt allocation with INTx fallback |
-| **System Stability** | [OK] STABLE — Hard lockups resolved via MSI and STREAMON safety guards |
-| **DMA Transfer** | [OK] WORKING — Valid YUV 4:2:2 data flowing to buffers (10 80 10 80) |
-| **Capture Content** | [BETA] — Green tint resolved by forcing YUYV. Now troubleshooting HDMI handshake / black screen states. |
+| **System Stability** | [OK] STABLE — I2C read-locks during streaming resolved |
+| **DMA Transfer** | [OK] FUNCTIONAL — Stable data flow confirmed via ffplay/xxd |
+| **Capture Content** | [BETA] — Raw YUV 4:2:2 flowing. Window opens and shows flickering signal. |
 
 ---
 
@@ -40,24 +40,24 @@ Fixed issues where players like `ffplay` reported "unknown range/csp" or washed-
 - **Explicit Metadata**: The driver now explicitly reports **BT.709**, **Limited Range (16-235)**, and correctly encoded YCbCr flags to the OS.
 - **AVI InfoFrame Sync**: Register `0x2a` is now synchronized with the V4L2 state to ensure the HDMI receiver and OS agree on the signal type.
 
-### 5. HDMI Handshake & Video Unmute
-- **Hardware Monitoring**: Real-time logging of HDMI Link Status (0x11), TMDS Clock (0x28), and Video Mute (0x23).
-- **Unmute Sequence**: Implemented the official Windows driver 3-stage sequence (`0xb0 -> 0xa0 -> 0x02`) to "wake up" the video output from the HDMI receiver.
+### 5. HDMI Handshake & Stability Fixes
+- **Video Unmute Sequence**: Implemented the official Windows driver 3-stage sequence (`0xb0 -> 0xa0 -> 0x02`) to "wake up" the video output buffers on the HDMI receiver.
+- **I2C Safety (Critical)**: Discovered that reading ITE68051 registers (I2C) while DMA is active causes instant system freezes. The driver now uses a **Write-Only** initialization path during streaming to maintain kernel stability.
+- **TTL Pixel Mode**: Identified and implemented true TTL bus configuration (Registers `0xc0-0xc4`) for Single-Pixel/SDR output.
 
-### Tested CSC Register Combinations (ITE68051 Sync)
+### Tested Register Combinations (ITE68051 Final Status)
 
-| Test | 0x6b | 0x6c | 0x6e | 0x23 | 0xc0 | 0x2a | Result |
-|------|------|------|------|------|------|------|--------|
-| 1-3  | Mixed | - | - | - | - | - | Green/Black |
-| 4    | 0x02 | 0x01 | 0x01 | - | 0x01 | - | Green |
-| 5    | 0x02 | 0x00 | 0x01 | 0x02 | 0x00 | - | Green |
-| D    | 0x02 | 0x02 | 0x01 | -    | 0x00 | 0x3a | **LOCKED YUV** |
-| Unmute | 0x02 | 0x02 | 0x01 | 0xb0-a0-02 | 0x00 | 0x3a | **Implemented** |
+| Test | 0x6b | 0x6c | 0x6e | 0x23 | 0xc0 | 0xc1 | 0x2a | Result |
+|------|------|------|------|------|------|------|------|--------|
+| D    | 0x02 | 0x02 | 0x01 | -    | 0x00 | 0x00 | 0x3a | **LOCKED YUV** |
+| Unmute | 0x02 | 0x02 | 0x01 | 0xb0-a0-02 | 0x00 | 0x00 | 0x3a | **Success** |
+| TTL | 0x02 | 0x02 | 0x01 | 0xb0-a0-02 | 0x02 | 0x00 | 0x3a | **FLICKERING DATA** |
+| Phase| 0x02 | 0x02 | 0x01 | 0xb0-a0-02 | 0x03 | 0x20 | 0x3a | **FREEZE / BLACK** |
 
-**Conclusion:** The data path is stable. Remaining work: TTL control (0x51/0x52) and Video Output Enable (0x20).
+**Conclusion:** The configuration `0xc0=0x02` and `0xc1=0x00` is the current stable baseline for data flow.
 
 
-### 4. Input Format Override (Module Parameter)
+### 6. Input Format Override (Module Parameter)
 Runtime-configurable module parameter (`force_input_mode`) to manually set the HDMI input colorspace:
 
 | Value | Mode | Description |
@@ -139,35 +139,61 @@ sudo dmesg | grep -iE "cx511h-hdmi|cx511h-v4l2|cx511h-color"
 
 ---
 
+---
+
 ## Known Issues & Stability Notes
 
 ### 1. Driver Unloading (Device Busy)
 The driver often fails to unload cleanly.
 - **Symptom**: `sudo rmmod cx511h` returns `Device or resource busy`.
 - **Cause**: V4L2 device file references or DMA memory buffers are not fully released in some states.
-- **Workaround**: Close all capture apps (OBS, ffplay) and use `sudo fuser -k /dev/video0`.
-- **WARNING**: Do **NOT** use `rmmod -f` (forced removal). This frequently triggers a total **Kernel Freeze/System Lockup**, requiring a hard reset.
+- **WARNING**: Do **NOT** use `rmmod -f` (forced removal). This triggers a **Kernel Freeze**, requiring a hard reset.
 
-### 2. Black Screen Handshake
-Despite successful sync, the hardware sometimes stays in a "MUTED" state or outputs black (10 80).
+### 2. I2C Bus Collision (Streaming Freeze)
+Accessing the I2C bus (reading registers) while the HDMI pixel stream is active triggers system-wide freezes on many systems.
+- **Solution**: Avoid `hdmirxrd()` calls in `stream_on`/`stream_off`. The driver is currently configured for write-only control during these phases to prevent lockups.
 
-**Current Status:**
-- ✅ Unmute Sequence implemented (Reg 0x23: 0xb0 -> 0xa0 -> 0x02)
-- ✅ Hardware Telemetry added (Registers 0x11, 0x23, 0x28)
-- ⚠️ PS5 specific: PS5 must have **HDCP disabled** in the console settings to allow capture.
-
-**Next Steps:**
-- Register 0x51/0x52 (TTL Output Control): Investigate if internal bus enables are missing.
-- Register 0x20 (Video Output Enable): Checking for multi-stage enable sequence.
+### 3. Flickering / Sync Issues
+While the DMA path is active (`ffplay` window opens), the signal may still flicker or show green distortions. This is a synchronization issue between the receiver TTL phase and the FPGA internal clock.
+- **PS5 HDCP**: Ensure HDCP is disabled in PS5 settings.
 
 ---
 
-##  Reverse Engineering Methods
+### 7. Critical Register Discovery (March 29, 2026)
+
+**Registers to AVOID (NOT TTL Output Control):**
+
+| Register | Actual Purpose | Why NOT to touch |
+|----------|---------------|------------------|
+| **0x51/0x52** | DFE Channel Tuning (RX Calibration) | Not TTL! Causes instability |
+| **0x53/0x54** | DFE Calibration Path | Same as above |
+
+**Correct TTL Registers:**
+
+| Register | Purpose | Value for 1080p60 |
+|----------|---------|------------------|
+| **0xc0** | TTL Base Mode | 0x02 (Single/SDR) |
+| **0xc1** | Lane/DDR Config | 0x00 (No DDR) |
+| **0xbd** | Pixel Mode Enum | 0x00 |
+| **0xbe** | Counter Reset | 0x00 |
+| **0xc4** | DDR Flag | 0x00 |
+
+### 8. v4l2-ctl Incompatibility Warning
+- ❌ **Do NOT use `v4l2-ctl --stream-mmap` for testing**
+- **Reason:** Triggers unexpected I2C status reads during stream_off sequence, which causes a total **System Freeze** (Kernel Lockup) due to bus contention during DMA.
+- **Alternative:** Use `ffplay` for safe testing:
+  ```bash
+  ffplay -f v4l2 -input_format yuyv422 -video_size 1920x1080 -framerate 60 /dev/video0
+  ```
+
+---
+
+## Reverse Engineering Methods
 - **Ghidra** for Windows driver analysis (`AVXGC573_x64.sys`)
 - **ITE68051 register mapping** extracted from official driver sessions
 - **V4L2 callback chain** traced to identify initialization gaps
 
 ---
 
-##  Disclaimer
+## Disclaimer
 Unofficial community fork. Maintained by [Everlite](https://github.com/Everlite). Special thanks to original work by [derrod](https://github.com/derrod).

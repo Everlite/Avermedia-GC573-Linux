@@ -249,6 +249,42 @@ static void cx511h_stream_on(framegrabber_handle_t handle)
     
     handle_t ite6805_handle=board_v4l2_cxt->i2c_chip_handle[CL511H_I2C_CHIP_ITE6805_0]; 
 
+    if (!ite6805_handle) {
+        printk(KERN_ERR "[cx511h-ttl] ERROR: ite6805_handle is NULL in stream_on!\n");
+        return;
+    }
+
+    printk(KERN_ERR "[cx511h-ttl] === STREAM ON START ===\n");
+
+    /* TRUE TTL PIXEL MODE (Single/SDR Sync) 
+     * Aligning HDMI receiver TTL bus with the forced FPGA/V4L2 YUYV path. 
+     * MUST BE DONE AT THE VERY START! */
+    printk(KERN_ERR "[cx511h-ttl] Configuring TTL Pixel Mode (Single/SDR)...\n");
+
+    // 1. Reset TTL Interface
+    hdmirxwr(ite6805_handle, 0xc0, 0x00);
+    msleep(10);
+
+    // 2. Base Mode (Single Pixel / SDR - Bits [2:1] = 10)
+    hdmirxwr(ite6805_handle, 0xc0, 0x02);
+    msleep(10);
+
+    // 3. Lane/DDR Config (Standard SDR)
+    hdmirxwr(ite6805_handle, 0xc1, 0x00);
+    msleep(10);
+    printk(KERN_ERR "[cx511h-ttl] Reverted to: 0xc0=0x02, 0xc1=0x00\n");
+
+    // 4. Pixel Mode Enumeration (Auto detection flags)
+    hdmirxwr(ite6805_handle, 0xbd, 0x00);
+    hdmirxwr(ite6805_handle, 0xbe, 0x00);
+    msleep(10);
+
+    // 5. DDR Flag (Disabled for SDR)
+    hdmirxwr(ite6805_handle, 0xc4, 0x00);
+    msleep(10);
+    
+    printk(KERN_ERR "[cx511h-ttl] TTL Pixel Mode (Single/SDR) sequence complete.\n");
+
     //ite6805_get_hdcp_state(ite6805_handle, &hdcp_state);
     //ite6805_set_hdcp_state(ite6805_handle, hdcp_state);
 
@@ -475,18 +511,8 @@ static void cx511h_stream_on(framegrabber_handle_t handle)
         hdmirxwr(ite6805_handle, 0x23, 0xa0);  // Prepare / Settle stage
         msleep(10);
         hdmirxwr(ite6805_handle, 0x23, 0x02);  // Enable Video stage
-
-        // Re-read status after sequence
-        u8 hdmi_status = hdmirxrd(ite6805_handle, 0x11);
-        u8 video_mute  = hdmirxrd(ite6805_handle, 0x23);
-        u8 tmds_status = hdmirxrd(ite6805_handle, 0x28);
-
-        printk(KERN_ERR "[cx511h-hdmi] Post-Unmute HDMI Status (0x11): 0x%02x (%s)\n", 
-               hdmi_status, (hdmi_status & 0x01) ? "LOCKED" : "UNLOCKED");
-        printk(KERN_ERR "[cx511h-hdmi] Post-Unmute Video Mute (0x23): 0x%02x (%s)\n", 
-               video_mute, (video_mute & 0x10) ? "MUTED" : "UNMUTED");
-        printk(KERN_ERR "[cx511h-hdmi] Post-Unmute TMDS Status (0x28): 0x%02x (%s)\n", 
-               tmds_status, (tmds_status & 0x80) ? "STABLE" : "UNSTABLE");
+        
+        printk(KERN_ERR "[cx511h-hdmi] Video UNMUTE sequence complete.\n");
     }
 
     printk(KERN_ERR "[cx511h-dma] stream_on: BEFORE aver_xilinx_config_video_process\n");
@@ -511,22 +537,13 @@ static void cx511h_stream_on(framegrabber_handle_t handle)
 
     aver_xilinx_config_video_process(board_v4l2_cxt->aver_xilinx_handle,&vip_cfg);
 
-    /* === CSC OVERRIDE: Forcing ITE6805 registers as per Windows driver analysis ===
-     * 0x6b = 0x02 (Input Color Space: YUV422)
-     * 0x6c = 0x01 (CSC Mode: Enable)
-     * 0x6e = 0x00 (CSC Select: BT.601) */
-    /* TEST D/E: FORCED YUV DATA PATH + COLOR METADATA 
-     * Aligning HDMI receiver with the forced FPGA/V4L2 YUYV path. */
-    printk(KERN_ERR "[cx511h-v4l2] FORCING Color Space: BT.709, Limited Range, YUV422 Encoding\n");
-    printk(KERN_ERR "[cx511h-color] FORCING ITE6805 CSC registers (Test D/E: YUV SYNC) now...\n");
-
+    // 6. Final CSC Sync (BT.709 Pass-through)
+    printk(KERN_ERR "[cx511h-color] Syncing ITE6805 CSC registers...\n");
     hdmirxwr(ite6805_handle, 0x6b, 0x02);  // Input: YUV422
     hdmirxwr(ite6805_handle, 0x6c, 0x02);  // CSC: BT.709
     hdmirxwr(ite6805_handle, 0x6e, 0x01);  // Output: YUV422
-    hdmirxwr(ite6805_handle, 0xc0, 0x00);  // TTL: YUV Mode
     hdmirxwr(ite6805_handle, 0x2a, 0x3a);  // AVI InfoFrame: YUV (BT.709)
 
-    printk(KERN_ERR "[cx511h-color] ITE6805 CSC (Test D/E) written: 0x6b=0x02, 0x6c=0x02, 0x6e=0x01, 0xc0=0x00, 0x2a=0x3a\n");
 
     /* SAFETY 3: Settle delay after config — give the FPGA time to latch
      * the new scaler/CSC/DMA settings before we start the stream.
@@ -545,12 +562,10 @@ static void cx511h_stream_on(framegrabber_handle_t handle)
 
 static void cx511h_stream_off(framegrabber_handle_t handle)
 {
-	board_v4l2_context_t *board_v4l2_cxt=framegrabber_get_data(handle);
-	//handle_t ite6805_handle=board_v4l2_cxt->i2c_chip_handle[CL511H_I2C_CHIP_ITE6805_0]; 
-	
-	//debug_msg(">>>>>>>>>>>%s...\n",__func__);
-	//ite6805_set_freerun_screen(ite6805_handle,TRUE);
-	
+    board_v4l2_context_t *board_v4l2_cxt=framegrabber_get_data(handle);
+    
+    printk(KERN_ERR "[cx511h-ttl] Stream OFF - Cleaning up...\n");
+
     aver_xilinx_enable_video_streaming(board_v4l2_cxt->aver_xilinx_handle,FALSE);
 }
 
