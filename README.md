@@ -4,22 +4,22 @@ This repository contains a **community-maintained, AI-assisted**, and heavily pa
 
 ---
 
-## 🚀 Status: ⚠️ EXPERIMENTAL / BETA
+##  Status: [EXPERIMENTAL] / BETA
 
 **Kernel Compatibility:** Successfully builds and runs on **Kernel 6.19.10+** (CachyOS / Arch / Gentoo).
 
 | Feature | Status |
 |---|---|
-| **Module Loading** | ✅ STABLE — No longer crashes the kernel upon loading |
-| **Signal Detection** | ✅ FUNCTIONAL — Hardware syncs via forced 1080p EDID handshake |
-| **IRQ / Interrupts** | ✅ WORKING — MSI interrupt allocation with INTx fallback |
-| **System Stability** | ✅ STABLE — Hard lockups resolved via MSI and STREAMON safety guards |
-| **DMA Transfer** | ✅ WORKING — Valid data flowing to buffers (4,147,200 bytes/frame) |
-| **Capture Content** | 🔧 WIP — Transitioned from Black Screen to **Green Flickering Signal**. Raw data is reaching user-space, but Color Space/TTL alignment is still under investigation. |
+| **Module Loading** | [OK] STABLE — No longer crashes the kernel upon loading |
+| **Signal Detection** | [OK] FUNCTIONAL — Hardware syncs via forced 1080p EDID handshake |
+| **IRQ / Interrupts** | [OK] WORKING — MSI interrupt allocation with INTx fallback |
+| **System Stability** | [OK] STABLE — Hard lockups resolved via MSI and STREAMON safety guards |
+| **DMA Transfer** | [OK] WORKING — Valid data flowing to buffers (4,147,200 bytes/frame) |
+| **Capture Content** | [WIP] — Transitioned from Black Screen to **Green Flickering Signal**. Raw data is reaching user-space, but Color Space/TTL alignment is still under investigation. |
 
 ---
 
-## ✨ Key Features & Recent Progress
+##  Key Features & Recent Progress
 
 ### 1. Robust Streaming Initialization
 - **V4L2 Callback Bridge:** Discovered and fixed a critical issue where the hardware initialization logic was disconnected from the active V4L2 `STREAMON` path. The driver now correctly triggers FPGA and HDMI-Receiver configuration when a capture starts.
@@ -60,7 +60,7 @@ Runtime-configurable module parameter (`force_input_mode`) to manually set the H
 
 ---
 
-## 🛠️ How to Build & Install
+##  How to Build & Install
 
 ### Prerequisites
 
@@ -78,9 +78,9 @@ Runtime-configurable module parameter (`force_input_mode`) to manually set the H
 
 | Kernel Version | Status | Notes |
 |---|---|---|
-| **6.18 – 6.19+** | ✅ Tested | Primary development target (CachyOS) |
-| **6.8 – 6.17** | ✅ Supported | `PCI_IRQ_INTX` compat defines included |
-| **5.x – 6.7** | ⚠️ Should work | Falls back to `PCI_IRQ_LEGACY` |
+| **6.18 – 6.19+** | [OK] Tested | Primary development target (CachyOS) |
+| **6.8 – 6.17** | [OK] Supported | `PCI_IRQ_INTX` compat defines included |
+| **5.x – 6.7** | [EXPERIMENTAL] Should work | Falls back to `PCI_IRQ_LEGACY` |
 
 ### Installation
 
@@ -99,7 +99,7 @@ sudo insmod cx511h.ko force_input_mode=1
 
 ---
 
-## 🔧 Debugging & Contributing
+##  Debugging & Contributing
 
 ### Current Blocker: "Green Screen / Flickering"
 We have successfully built the "DMA bridge" — data is now definitely arriving in user-space buffers. However, the exact alignment of color bits or the TTL output configuration compared to what the FPGA expects is still not perfect.
@@ -113,12 +113,12 @@ If you have access to a Windows machine with a working GC573, please help us by 
 
 ---
 
-## 🔍 Reverse Engineering Methods
+##  Reverse Engineering Methods
 - **Ghidra** for Windows driver analysis (`AVXGC573_x64.sys`)
 - **ITE68051 register mapping** extracted from official driver sessions
 - **V4L2 callback chain** traced to identify initialization gaps
 
 ---
 
-## ⚖️ Disclaimer
-Unofficial community fork. Maintained by [realEverlite](https://github.com/realEverlite). Special thanks to original work by [derrod](https://github.com/derrod).
+##  Disclaimer
+Unofficial community fork. Maintained by [Everlite](https://github.com/Everlite). Special thanks to original work by [derrod](https://github.com/derrod).
