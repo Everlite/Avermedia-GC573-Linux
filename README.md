@@ -14,8 +14,8 @@ This repository contains a **community-maintained, AI-assisted**, and heavily pa
 | **Signal Detection** | [OK] FUNCTIONAL — Hardware syncs via forced 1080p EDID handshake |
 | **IRQ / Interrupts** | [OK] WORKING — MSI interrupt allocation with INTx fallback |
 | **System Stability** | [OK] STABLE — Hard lockups resolved via MSI and STREAMON safety guards |
-| **DMA Transfer** | [OK] WORKING — Valid data flowing to buffers (4,147,200 bytes/frame) |
-| **Capture Content** | [WIP] — Transitioned from Black Screen to **Green Flickering Signal**. Raw data is reaching user-space, but Color Space/TTL alignment is still under investigation. |
+| **DMA Transfer** | [OK] WORKING — Valid YUV 4:2:2 data flowing to buffers (10 80 10 80) |
+| **Capture Content** | [BETA] — Green tint resolved by forcing YUYV. Now troubleshooting HDMI handshake / black screen states. |
 
 ---
 
@@ -29,22 +29,32 @@ This repository contains a **community-maintained, AI-assisted**, and heavily pa
 - **EDID Override:** Patched multiple locations to force the card to identify as a **1080p-max device**. This prevents signal handshake failures with modern consoles.
 - **Timing Correction:** Fixed a **Hz vs. kHz mismatch** in the `pixel_clock` calculation, ensuring stable 1080p60 targeting.
 
-### 3. ITE68051 Manual Register Overrides (Experimental)
-The driver now includes the ability to manually override internal registers of the ITE68051 HDMI receiver to troubleshoot the Color Space Mismatch:
-- **CSC (Color Space Converter):** Force Input Format (0x6b), Enable/Bypass CSC (0x6c), and Select Color Standard (0x6e - BT.709/BT.601).
-- **TTL Output Interface:** Manually configure the TTL bus mode (0xc0/0xc1) and AVI InfoFrame Colorimetry (0x98).
+### 3. YUV Data Path Forcing (Color Correction)
+We have confirmed through buffer analysis (`xxd`) that the hardware delivers **YUV 4:2:2** data (`10 80`). The driver now forces a consistent YUV path across all layers:
+- **V4L2 Layer**: Restricted to `YUYV` only to prevent color interpretation errors.
+- **FPGA Layer**: Forced `AVER_XILINX_FMT_YUYV` in the video process pipeline.
+- **ITE68051 Layer**: Synchronized inputs and TTL output to YUV mode.
 
-### Tested CSC Register Combinations (ITE68051)
+### 4. V4L2 Color Space Metadata
+Fixed issues where players like `ffplay` reported "unknown range/csp" or washed-out colors:
+- **Explicit Metadata**: The driver now explicitly reports **BT.709**, **Limited Range (16-235)**, and correctly encoded YCbCr flags to the OS.
+- **AVI InfoFrame Sync**: Register `0x2a` is now synchronized with the V4L2 state to ensure the HDMI receiver and OS agree on the signal type.
 
-| Test | 0x6b | 0x6c | 0x6e | 0x98 | 0xc0 | 0xc1 | Result |
+### 5. HDMI Handshake & Video Unmute
+- **Hardware Monitoring**: Real-time logging of HDMI Link Status (0x11), TMDS Clock (0x28), and Video Mute (0x23).
+- **Unmute Sequence**: Implemented the official Windows driver 3-stage sequence (`0xb0 -> 0xa0 -> 0x02`) to "wake up" the video output from the HDMI receiver.
+
+### Tested CSC Register Combinations (ITE68051 Sync)
+
+| Test | 0x6b | 0x6c | 0x6e | 0x23 | 0xc0 | 0x2a | Result |
 |------|------|------|------|------|------|------|--------|
-| 1 | 0x02 | 0x00 | 0x01 | - | - | - | Green |
-| 2 | 0x00 | 0x01 | 0x01 | - | - | - | Green |
-| 3 | 0x03 | 0x01 | 0x01 | - | - | - | Green |
-| 4 | 0x02 | 0x01 | 0x01 | 0x00 | 0x01 | 0x00 | Green |
-| 5 | 0x02 | 0x00 | 0x01 | 0x02 | 0x00 | 0x00 | Green |
+| 1-3  | Mixed | - | - | - | - | - | Green/Black |
+| 4    | 0x02 | 0x01 | 0x01 | - | 0x01 | - | Green |
+| 5    | 0x02 | 0x00 | 0x01 | 0x02 | 0x00 | - | Green |
+| D    | 0x02 | 0x02 | 0x01 | -    | 0x00 | 0x3a | **LOCKED YUV** |
+| Unmute | 0x02 | 0x02 | 0x01 | 0xb0-a0-02 | 0x00 | 0x3a | **Implemented** |
 
-**Conclusion:** Data is flowing (green = YUV/RGB mismatch). Next: Investigate FPGA input format expectations or additional ITE68051 registers (0xb0, 0xb1).
+**Conclusion:** The data path is stable. Remaining work: TTL control (0x51/0x52) and Video Output Enable (0x20).
 
 
 ### 4. Input Format Override (Module Parameter)
@@ -99,17 +109,56 @@ sudo insmod cx511h.ko force_input_mode=1
 
 ---
 
-##  Debugging & Contributing
+## Debugging & Contributing
 
-### Current Blocker: "Green Screen / Flickering"
-We have successfully built the "DMA bridge" — data is now definitely arriving in user-space buffers. However, the exact alignment of color bits or the TTL output configuration compared to what the FPGA expects is still not perfect.
+### Quick Debug Commands
+```bash
+# Check if device is blocked by another process
+sudo lsof /dev/video0
 
-**How you can help:**
-If you have access to a Windows machine with a working GC573, please help us by gathering **MMIO/PCIe register logs** using **RWEverything**. Specifically, we need logs of the writes performed during the moments a video preview starts in the official AVerMedia software.
+# Kill any blocking processes
+sudo fuser -k /dev/video0
 
-- **Check logs:** `sudo dmesg | grep cx511h`
-- **Verify data flow:** `v4l2-ctl --stream-mmap --stream-count=5 --stream-to=/tmp/test.raw`
-- **Register target:** ITE68051 (I2C Slave 0x58/0x90).
+# Test with ffplay (1080p60 YUYV)
+ffplay -f v4l2 -input_format yuyv422 -video_size 1920x1080 -framerate 60 /dev/video0
+
+# Analyze raw buffer content
+v4l2-ctl --stream-mmap --stream-count=1 --stream-to=/tmp/test.raw
+xxd /tmp/test.raw | head -30
+
+# Check handshake and color logs
+sudo dmesg | grep -iE "cx511h-hdmi|cx511h-v4l2|cx511h-color"
+```
+
+### Expected Buffer Patterns (YUV 4:2:2)
+| State | Hex Pattern | Meaning |
+|---|---|---|
+| **Black Screen** | `10 80 10 80...` | Valid YUV stream, but Y=16 (black). Handshake ok. |
+| **Color Signal** | `85 7a 90 85...` | Varying luma/chroma. Active video flowing. |
+| **Green Tint** | `80 10 80 10...` | UYVY/YUYV swap. Byte alignment issue. |
+
+---
+
+## Known Issues & Stability Notes
+
+### 1. Driver Unloading (Device Busy)
+The driver often fails to unload cleanly.
+- **Symptom**: `sudo rmmod cx511h` returns `Device or resource busy`.
+- **Cause**: V4L2 device file references or DMA memory buffers are not fully released in some states.
+- **Workaround**: Close all capture apps (OBS, ffplay) and use `sudo fuser -k /dev/video0`.
+- **WARNING**: Do **NOT** use `rmmod -f` (forced removal). This frequently triggers a total **Kernel Freeze/System Lockup**, requiring a hard reset.
+
+### 2. Black Screen Handshake
+Despite successful sync, the hardware sometimes stays in a "MUTED" state or outputs black (10 80).
+
+**Current Status:**
+- ✅ Unmute Sequence implemented (Reg 0x23: 0xb0 -> 0xa0 -> 0x02)
+- ✅ Hardware Telemetry added (Registers 0x11, 0x23, 0x28)
+- ⚠️ PS5 specific: PS5 must have **HDCP disabled** in the console settings to allow capture.
+
+**Next Steps:**
+- Register 0x51/0x52 (TTL Output Control): Investigate if internal bus enables are missing.
+- Register 0x20 (Video Output Enable): Checking for multi-stage enable sequence.
 
 ---
 

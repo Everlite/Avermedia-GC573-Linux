@@ -249,7 +249,7 @@ int v4l2_model_ioctl_enum_fmt_vid_cap(struct file *file, void *fh, struct v4l2_f
 	v4l2_model_context_t *v4l2m_context = video_drvdata(file);
 	U32_T index = f->index;
 
-    //printk("%s...\n",__func__);
+    // printk(KERN_ERR "[cx511h-v4l2] enum_fmt called for index %u\n", f->index);
 	if(f->type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
 	{
 		printk("%s.\n",__func__);
@@ -315,10 +315,14 @@ int v4l2_model_ioctl_g_fmt_vid_cap(struct file *file, void *fh,struct v4l2_forma
 		//f->fmt.pix.bytesperline = bytesperline;
 		f->fmt.pix.bytesperline = (f->fmt.pix.width * pixfmt->depth) >> 3;
 		f->fmt.pix.sizeimage =	f->fmt.pix.height * f->fmt.pix.bytesperline;
-		if (pixfmt->is_yuv)
+		if (pixfmt->is_yuv) {
 			f->fmt.pix.colorspace = V4L2_COLORSPACE_REC709;
-		else
+			f->fmt.pix.ycbcr_enc = V4L2_YCBCR_ENC_709;
+			f->fmt.pix.quantization = V4L2_QUANTIZATION_LIM_RANGE;
+			f->fmt.pix.xfer_func = V4L2_XFER_FUNC_709;
+		} else {
 			f->fmt.pix.colorspace = V4L2_COLORSPACE_SRGB;
+		}
 
         
         if (interlace_mode)  
@@ -394,10 +398,14 @@ int v4l2_model_ioctl_try_fmt_vid_cap(struct file *file, void *fh, struct v4l2_fo
 	f->fmt.pix.bytesperline = (f->fmt.pix.width * fmt->depth) >> 3;
 	f->fmt.pix.sizeimage =f->fmt.pix.height * f->fmt.pix.bytesperline;
         
-	if (fmt!=NULL && fmt->is_yuv)
-		f->fmt.pix.colorspace = V4L2_COLORSPACE_REC709;//V4L2_COLORSPACE_SMPTE170M;
-	else
+	if (fmt!=NULL && fmt->is_yuv) {
+		f->fmt.pix.colorspace = V4L2_COLORSPACE_REC709;
+		f->fmt.pix.ycbcr_enc = V4L2_YCBCR_ENC_709;
+		f->fmt.pix.quantization = V4L2_QUANTIZATION_LIM_RANGE;
+		f->fmt.pix.xfer_func = V4L2_XFER_FUNC_709;
+	} else {
 		f->fmt.pix.colorspace = V4L2_COLORSPACE_SRGB;
+	}
 
 	f->fmt.pix.priv = 0;
         

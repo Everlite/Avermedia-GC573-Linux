@@ -133,7 +133,7 @@ static framegrabber_setup_input_info_t cl511h_input_info[] =
 static framegrabber_property_t  cl511h_property={
 		.name="CL511H",
 		.input_setup_info=cl511h_input_info,
-		.support_out_pixfmt_mask=FRAMEGRABBER_PIXFMT_BITMSK,//FRAMEGRABBER_PIXFMT_YUYV_BIT ,  //tt 0615
+		.support_out_pixfmt_mask=FRAMEGRABBER_PIXFMT_BITMSK, // Re-enable all formats for debugging OBS hang
 		//.max_supported_line_width=3840,
 		//.max_supported_line_width=4096,
         .max_frame_size=4096 *2160,
@@ -462,29 +462,31 @@ static void cx511h_stream_on(framegrabber_handle_t handle)
 		vip_cfg.video_bypass = 0;
 	}
 	
-    switch(pixfmt->pixfmt_out)
+    /* FORCE YUV 4:2:2 for now to match DMA buffer analysis! */
+    vip_cfg.pixel_format = AVER_XILINX_FMT_YUYV;
+    printk(KERN_ERR "[cx511h-v4l2] FORCING YUYV format in FPGA (FourCC: %s, ID: %u)\n",
+           pixfmt->name, pixfmt->fourcc);
+
+    /* DEBUG 4: Video Unmute Sequence (from Windows Driver Analysis) */
     {
-        case AVER_XILINX_FMT_YUYV:
-        case AVER_XILINX_FMT_UYVY:
-        case AVER_XILINX_FMT_YVYU:
-        case AVER_XILINX_FMT_VYUY:
-            vip_cfg.pixel_format=AVER_XILINX_FMT_YUYV;
-            mesg("%s...vip_cfg.pixel_format_output=AVER_XILINX_FMT_YUYV\n",__func__);
-            break;
-        case AVER_XILINX_FMT_RGBP: //RGB565
-        case AVER_XILINX_FMT_RGBR: //RGB565X
-        case AVER_XILINX_FMT_RGBO:
-        case AVER_XILINX_FMT_RGBQ:
-        case AVER_XILINX_FMT_RGB3: //RGB24 4:4:4
-        case AVER_XILINX_FMT_BGR3: 
-        case AVER_XILINX_FMT_RGB4:
-        case AVER_XILINX_FMT_BGR4:
-            vip_cfg.pixel_format=AVER_XILINX_FMT_RGB3;
-            mesg("%s...vip_cfg.pixel_format=AVER_XILINX_FMT_RGB3\n",__func__);
-            break;
-        default:
-            vip_cfg.pixel_format=AVER_XILINX_CS_YUV422;
-            break;
+        printk(KERN_ERR "[cx511h-hdmi] Starting Video UNMUTE sequence...\n");
+        hdmirxwr(ite6805_handle, 0x23, 0xb0);  // Unmute / Power Up stage
+        msleep(10);
+        hdmirxwr(ite6805_handle, 0x23, 0xa0);  // Prepare / Settle stage
+        msleep(10);
+        hdmirxwr(ite6805_handle, 0x23, 0x02);  // Enable Video stage
+
+        // Re-read status after sequence
+        u8 hdmi_status = hdmirxrd(ite6805_handle, 0x11);
+        u8 video_mute  = hdmirxrd(ite6805_handle, 0x23);
+        u8 tmds_status = hdmirxrd(ite6805_handle, 0x28);
+
+        printk(KERN_ERR "[cx511h-hdmi] Post-Unmute HDMI Status (0x11): 0x%02x (%s)\n", 
+               hdmi_status, (hdmi_status & 0x01) ? "LOCKED" : "UNLOCKED");
+        printk(KERN_ERR "[cx511h-hdmi] Post-Unmute Video Mute (0x23): 0x%02x (%s)\n", 
+               video_mute, (video_mute & 0x10) ? "MUTED" : "UNMUTED");
+        printk(KERN_ERR "[cx511h-hdmi] Post-Unmute TMDS Status (0x28): 0x%02x (%s)\n", 
+               tmds_status, (tmds_status & 0x80) ? "STABLE" : "UNSTABLE");
     }
 
     printk(KERN_ERR "[cx511h-dma] stream_on: BEFORE aver_xilinx_config_video_process\n");
@@ -513,14 +515,18 @@ static void cx511h_stream_on(framegrabber_handle_t handle)
      * 0x6b = 0x02 (Input Color Space: YUV422)
      * 0x6c = 0x01 (CSC Mode: Enable)
      * 0x6e = 0x00 (CSC Select: BT.601) */
-    printk(KERN_ERR "[cx511h-color] FORCING ITE6805 CSC registers now...\n");
-    hdmirxwr(ite6805_handle, 0x6b, 0x02); // YUV422 Input
-    hdmirxwr(ite6805_handle, 0x6c, 0x00); // CSC BYPASS (Test 5)
-    hdmirxwr(ite6805_handle, 0x6e, 0x01); // BT.709
-    hdmirxwr(ite6805_handle, 0x98, 0x02); // AVI Colorimetry: YUV
-    hdmirxwr(ite6805_handle, 0xc0, 0x00); // TTL Output: YUV Mode
-    hdmirxwr(ite6805_handle, 0xc1, 0x00); // TTL Config
-    printk(KERN_ERR "[cx511h-color] ITE6805 CSC (Test 5: TTL YUV) written: 0x6b=0x02, 0x6c=0x00, 0x6e=0x01, 0x98=0x02, 0xc0=0x00, 0xc1=0x00\n");
+    /* TEST D/E: FORCED YUV DATA PATH + COLOR METADATA 
+     * Aligning HDMI receiver with the forced FPGA/V4L2 YUYV path. */
+    printk(KERN_ERR "[cx511h-v4l2] FORCING Color Space: BT.709, Limited Range, YUV422 Encoding\n");
+    printk(KERN_ERR "[cx511h-color] FORCING ITE6805 CSC registers (Test D/E: YUV SYNC) now...\n");
+
+    hdmirxwr(ite6805_handle, 0x6b, 0x02);  // Input: YUV422
+    hdmirxwr(ite6805_handle, 0x6c, 0x02);  // CSC: BT.709
+    hdmirxwr(ite6805_handle, 0x6e, 0x01);  // Output: YUV422
+    hdmirxwr(ite6805_handle, 0xc0, 0x00);  // TTL: YUV Mode
+    hdmirxwr(ite6805_handle, 0x2a, 0x3a);  // AVI InfoFrame: YUV (BT.709)
+
+    printk(KERN_ERR "[cx511h-color] ITE6805 CSC (Test D/E) written: 0x6b=0x02, 0x6c=0x02, 0x6e=0x01, 0xc0=0x00, 0x2a=0x3a\n");
 
     /* SAFETY 3: Settle delay after config — give the FPGA time to latch
      * the new scaler/CSC/DMA settings before we start the stream.
