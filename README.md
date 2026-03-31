@@ -179,14 +179,14 @@ This driver is based on community reverse engineering efforts to enable Linux su
 
 | Register | Type | Value | Purpose | Priority |
 |:---:|:---:|:---:|:---|:---:|
-| **MMIO 0x10** | FPGA | `0x02` | IRQ ACK after EACH buffer | 🔥 **CRITICAL** |
-| **MMIO 0x304** | FPGA | Bit set | Doorbell re-queue (next buffer ready) | 🔥 **CRITICAL** |
-| **I2C 0x20** | ITE68051 | `0x40` | Video Output Enable (Bit 6) | 🔥 **CRITICAL** |
-| **I2C 0x86** | ITE68051 | `0x01` | Global Enable | 🔥 **HIGH** |
-| **I2C 0x90** | ITE68051 | `0x8f` | IRQ Enable | 🔥 **HIGH** |
-| **I2C 0xA0-A2** | ITE68051 | `0x80` | DMA Channel Enable | 🔥 **HIGH** |
-| **I2C 0xA4** | ITE68051 | `0x08` | DMA Enable | 🔥 **HIGH** |
-| **I2C 0xB0** | ITE68051 | `0x01` | Buffer Enable | 🔥 **HIGH** |
+| **MMIO 0x10** | FPGA | `0x02` | IRQ ACK after EACH buffer |  **CRITICAL** |
+| **MMIO 0x304** | FPGA | Bit set | Doorbell re-queue (next buffer ready) |  **CRITICAL** |
+| **I2C 0x20** | ITE68051 | `0x40` | Video Output Enable (Bit 6) |  **CRITICAL** |
+| **I2C 0x86** | ITE68051 | `0x01` | Global Enable |  **HIGH** |
+| **I2C 0x90** | ITE68051 | `0x8f` | IRQ Enable |  **HIGH** |
+| **I2C 0xA0-A2** | ITE68051 | `0x80` | DMA Channel Enable |  **HIGH** |
+| **I2C 0xA4** | ITE68051 | `0x08` | DMA Enable |  **HIGH** |
+| **I2C 0xB0** | ITE68051 | `0x01` | Buffer Enable |  **HIGH** |
 
 ### UPCOMING Testing Plan
 All missing registers have been identified. Testing will focus on implementation of the re-queue (MMIO 0x304) and interrupt acknowledgment (MMIO 0x10) mechanisms to achieve continuous data flow.
@@ -210,14 +210,14 @@ All missing registers have been identified. Testing will focus on implementation
 
 ---
 
-## 🛠 Reverse Engineering Methods
+##  Reverse Engineering Methods
 - Community-driven register probing and analysis.
 - V4L2 callback chain tracing.
 - Iterative testing with actual hardware.
 
 ---
 
-## ⚖️ Disclaimer
+##  Disclaimer
 This is an unofficial community project for educational and interoperability purposes only. AVerMedia does not endorse or support this driver. **Use at your own risk.**
 
 ---
