@@ -4,7 +4,7 @@ This repository contains a **community-maintained, AI-assisted**, and heavily pa
 
 ---
 
-## 🚀 Status: [EXPERIMENTAL] / BETA
+## Status: [EXPERIMENTAL] / ALPHA
 
 **Kernel Compatibility:** Successfully builds and runs on **Kernel 6.19.10+** (CachyOS / Arch / Gentoo).
 
@@ -19,7 +19,7 @@ This repository contains a **community-maintained, AI-assisted**, and heavily pa
 
 ---
 
-## 🛠 Key Features & Recent Progress
+## Key Features & Recent Progress
 
 ### 1. Robust Streaming Initialization
 - **V4L2 Callback Bridge:** Discovered and fixed a critical issue where the hardware initialization logic was disconnected from the active V4L2 `STREAMON` path. The driver now correctly triggers FPGA and HDMI-Receiver configuration when a capture starts.
@@ -70,7 +70,7 @@ Runtime-configurable module parameter (`force_input_mode`) to manually set the H
 
 ---
 
-## 📦 How to Build & Install
+## How to Build & Install
 
 ### Prerequisites
 
@@ -109,7 +109,7 @@ sudo insmod cx511h.ko force_input_mode=1
 
 ---
 
-## 🔍 Debugging & Contributing
+## Debugging & Contributing
 
 ### Quick Debug Commands
 ```bash
@@ -139,7 +139,7 @@ sudo dmesg | grep -iE "cx511h-hdmi|cx511h-v4l2|cx511h-color"
 
 ---
 
-## ⚠️ Known Issues & Stability Notes
+## Known Issues & Stability Notes
 
 ### 1. Driver Unloading (Device Busy)
 The driver often fails to unload cleanly.
@@ -179,7 +179,7 @@ While the DMA path is active (`ffplay` window opens), the signal may still flick
 
 ---
 
-## 🧬 Reverse Engineering Progress (March 31, 2026)
+## Roadmap & Reverse Engineering Progress (March 31, 2026)
 
 ### Community Analysis
 This driver is based on community reverse engineering efforts to enable Linux support for hardware without official vendor drivers.
@@ -203,25 +203,25 @@ Community analysis has identified several registers that are written by the vend
 
 | Register | Type | Value | Purpose | Priority |
 |:---:|:---:|:---:|:---|:---:|
-| **MMIO 0x10** | FPGA | `0x02` | IRQ ACK after EACH buffer | 🔥 **CRITICAL** |
-| **MMIO 0x304** | FPGA | Bit set | Doorbell re-queue (next buffer ready) | 🔥 **CRITICAL** |
-| **I2C 0x20** | ITE68051 | `0x40` | Video Output Enable (Bit 6) | 🔥 **CRITICAL** |
-| **I2C 0x86** | ITE68051 | `0x01` | Global Enable | 🔥 **HIGH** |
-| **I2C 0x90** | ITE68051 | `0x8f` | IRQ Enable | 🔥 **HIGH** |
-| **I2C 0xA0-A2** | ITE68051 | `0x80` | DMA Channel Enable | 🔥 **HIGH** |
-| **I2C 0xA4** | ITE68051 | `0x08` | DMA Enable | 🔥 **HIGH** |
-| **I2C 0xB0** | ITE68051 | `0x01` | Buffer Enable | 🔥 **HIGH** |
+| **MMIO 0x10** | FPGA | `0x02` | IRQ ACK after EACH buffer | CRITICAL |
+| **MMIO 0x304** | FPGA | Bit set | Doorbell re-queue (next buffer ready) | CRITICAL |
+| **I2C 0x20** | ITE68051 | `0x40` | Video Output Enable (Bit 6) | CRITICAL |
+| **I2C 0x86** | ITE68051 | `0x01` | Global Enable | HIGH |
+| **I2C 0x90** | ITE68051 | `0x8f` | IRQ Enable | HIGH |
+| **I2C 0xA0-A2** | ITE68051 | `0x80` | DMA Channel Enable | HIGH |
+| **I2C 0xA4** | ITE68051 | `0x08` | DMA Enable | HIGH |
+| **I2C 0xB0** | ITE68051 | `0x01` | Buffer Enable | HIGH |
 
 ### Current Hypothesis
 The Linux driver:
-1.  ✅ Creates initial descriptors at stream-on.
-2.  ❌ Does **NOT** re-queue descriptors after buffer complete.
-3.  ❌ Does **NOT** ACK IRQs properly (MMIO 0x10).
-4.  ❌ Does **NOT** ring doorbell for subsequent buffers.
+1.  Creates initial descriptors at stream-on.
+2.  Does **NOT** re-queue descriptors after buffer complete.
+3.  Does **NOT** ACK IRQs properly (MMIO 0x10).
+4.  Does **NOT** ring doorbell for subsequent buffers.
 
 **Result:** FPGA processes 1-2 initial buffers → no new descriptors → black screen.
 
-### Weekend Testing Plan
+### UPCOMING Testing Plan
 All missing registers have been identified. Testing will focus on:
 - `MMIO 0x10 = 0x02` – IRQ ACK after each buffer.
 - `MMIO 0x304` – Doorbell re-queue mechanism.
@@ -232,15 +232,15 @@ All missing registers have been identified. Testing will focus on:
 
 | Component | Status |
 |:---|:---:|
-| **Register Analysis** | ✅ COMPLETE |
-| **IRQ/DMA Path** | ✅ RECONSTRUCTED |
-| **Missing Registers** | ✅ IDENTIFIED |
-| **Implementation** | ⏳ PENDING |
-| **Testing** | ⏳ PENDING |
+| **Register Analysis** | COMPLETE |
+| **IRQ/DMA Path** | RECONSTRUCTED |
+| **Missing Registers** | IDENTIFIED |
+| **Implementation** | PENDING |
+| **Testing** | PENDING |
 
 ---
 
-## 🛠 Reverse Engineering Methods
+## Reverse Engineering Methods
 - Hardware register probing and testing.
 - Community collaboration and knowledge sharing.
 - V4L2 callback chain traced to identify initialization gaps.
@@ -248,7 +248,7 @@ All missing registers have been identified. Testing will focus on:
 
 ---
 
-## ⚖️ Disclaimer
+## Disclaimer
 This is an unofficial community project. AVerMedia does not endorse or support this driver.
 
 **Legal Disclaimer:**
