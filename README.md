@@ -1,3 +1,8 @@
+[![Kernel](https://img.shields.io/badge/kernel-6.19%2B-brightgreen.svg)](https://kernel.org)
+[![Status](https://img.shields.io/badge/status-ALPHA-orange.svg)](README.md#status)
+[![Issues](https://img.shields.io/github/issues/Everlite/Avermedia-GC573-Linux.svg)](https://github.com/Everlite/Avermedia-GC573-Linux/issues)
+[![License](https://img.shields.io/github/license/Everlite/Avermedia-GC573-Linux.svg)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/Everlite/Avermedia-GC573-Linux.svg)](https://github.com/Everlite/Avermedia-GC573-Linux/stargazers)
 # AVerMedia Live Gamer 4K (GC573) — Linux Driver (Kernel 6.19+ Development)
 
 This repository contains a **community-maintained, AI-assisted**, and heavily patched version of the AVerMedia GC573 Linux driver. It has been modernized for the latest kernels and stabilized for advanced experimental testing.
