@@ -1,8 +1,8 @@
 # AVerMedia Live Gamer 4K (GC573) — Linux Driver (Kernel 6.19+ Development)
-[![Kernel](https://img.shields.io/badge/kernel-6.19%2B-brightgreen.svg)](https://github.com/Everlite/Avermedia-GC573-Linux#kernel-compatibility)
-[![Status](https://img.shields.io/badge/status-ALPHA-orange.svg)](https://github.com/Everlite/Avermedia-GC573-Linux#status)
-[![AI-Assisted](https://img.shields.io/badge/AI-assisted-blue.svg)](https://github.com/Everlite/Avermedia-GC573-Linux#development-approach)
-[![License](https://img.shields.io/github/license/Everlite/Avermedia-GC573-Linux.svg)](LICENSE)
+[![Status](https://img.shields.io/badge/status-experimental%20alpha-orange.svg)](https://github.com/Everlite/Avermedia-GC573-Linux#status)
+[![Kernel](https://img.shields.io/badge/kernel-6.19%2B%20tested-2e7d32.svg)](https://github.com/Everlite/Avermedia-GC573-Linux#kernel-compatibility)
+[![AI-Assisted](https://img.shields.io/badge/AI-assisted-blue.svg)](https://github.com/Everlite/Avermedia-GC573-Linux#reverse-engineering-methods)
+[![License](https://img.shields.io/github/license/Everlite/Avermedia-GC573-Linux.svg)](LICENSE.md)
 [![Issues](https://img.shields.io/github/issues/Everlite/Avermedia-GC573-Linux.svg)](https://github.com/Everlite/Avermedia-GC573-Linux/issues)
 
 This repository contains a **community-maintained, AI-assisted**, and heavily patched version of the AVerMedia GC573 Linux driver. It has been modernized for the latest kernels and stabilized for advanced experimental testing.
