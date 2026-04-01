@@ -4,7 +4,7 @@ This repository contains a **community-maintained, AI-assisted**, and heavily pa
 
 ---
 
-## 🚀 Status: [EXPERIMENTAL] / ALPHA
+##  Status: [EXPERIMENTAL] / ALPHA
 
 **Kernel Compatibility:** Successfully builds and runs on **Kernel 6.19.10+** (CachyOS / Arch / Gentoo).
 
@@ -30,7 +30,7 @@ This repository contains a **community-maintained, AI-assisted**, and heavily pa
 
 ---
 
-## 🛠 Key Features & Recent Progress
+##  Key Features & Recent Progress
 
 ### 1. Robust Streaming Initialization
 - **V4L2 Callback Bridge:** Discovered and fixed a critical issue where the hardware initialization logic was disconnected from the active V4L2 `STREAMON` path. The driver now correctly triggers FPGA and HDMI-Receiver configuration when a capture starts.
@@ -81,7 +81,7 @@ Runtime-configurable module parameter (`force_input_mode`) to manually set the H
 
 ---
 
-## 📦 How to Build & Install
+##  How to Build & Install
 
 ### Prerequisites
 
@@ -114,7 +114,7 @@ sudo insmod cx511h.ko force_input_mode=1
 
 ---
 
-## 🔍 Debugging & Contributing
+##  Debugging & Contributing
 
 ### Quick Debug Commands
 ```bash
@@ -163,7 +163,7 @@ Accessing the I2C bus (reading registers) while the HDMI pixel stream is active 
 
 ---
 
-## 🧬 Reverse Engineering Progress (March 31, 2026)
+##  Reverse Engineering Progress (March 31, 2026)
 
 ### Community Analysis
 This driver is based on community reverse engineering efforts to enable Linux support for hardware without official vendor drivers.
