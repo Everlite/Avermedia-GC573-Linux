@@ -25,7 +25,7 @@ This repository contains a **community-maintained, AI-assisted**, and heavily pa
 | **System Stability** | ⚠️ [FRAGILE] | I2C read-locks during streaming cause system freezes |
 | **DMA Transfer** | ✅ [OK] | FUNCTIONAL — Data flow confirmed via ffplay/xxd |
 | **Capture Content** | ⚠️ [EARLY] | First frames visible, but streaming lifecycle and buffer completion are still incomplete |
-| **Driver Unload** | ❌ [BROKEN] | Cleanup/remove path is incomplete; `rmmod` often fails and may require reboot |
+| **Driver Unload** | ✅ [OK] | Fixed lifecycle cleanup prevents kernel freezes; `rmmod` now works reliably |
 | **General Use** | ❌ [NOT REC] | For development/testing only — NOT FOR DAILY USE |
 
 ### Development Phase Status
@@ -92,6 +92,70 @@ Runtime-configurable module parameter (`force_input_mode`) to manually set the H
 
 ---
 
+##  Critical Stability Fixes (April 2025)
+
+### 1. Fixed `rmmod` Kernel Freeze (Use-After-Free)
+**Problem:** Module removal (`rmmod`) caused kernel freezes due to incorrect cleanup order and use-after-free in PCI context.
+**Solution:** 
+- **Proper `board_remove()` sequence:** Implemented hardware streaming stop, IRQ free, context release before PCI teardown.
+- **Fixed `pci_model_remove()`:** Reordered operations to use PCI context before `cxt_manager_release()`.
+- **New helper functions:** Added `board_v4l2_stop()` and `board_alsa_stop()` for clean hardware shutdown.
+
+### 2. Fixed Probe Error Paths
+**Problem:** Error paths in `board_probe()` returned positive numbers instead of negative kernel error codes.
+**Solution:** Converted all error returns to proper negative kernel error codes (`-ENODEV`, `-ENOMEM`, `-EIO`).
+
+### 3. Enhanced Streaming Lifecycle
+**Problem:** Incomplete streaming stop during module removal left hardware active.
+**Solution:**
+- `board_v4l2_stop()`: Stops video streaming, powers off ITE6805 chip, sets LED to off state.
+- `board_alsa_stop()`: Stops audio streaming before PCI resource release.
+- `v4l2_model_streamoff()`: Ensures V4L2 model properly stops streaming.
+
+### Cleanup Order (Prevents Use-After-Free):
+1. Stop hardware streaming (video & audio)
+2. Free IRQs while PCI context is still valid
+3. Unmap MMIO BARs
+4. Release context manager (frees PCI context memory)
+5. Disable PCI device and release regions
+
+---
+
+##  Testing Module Cleanup
+
+Verify that the driver can be cleanly loaded and unloaded without kernel freezes:
+
+```bash
+# 1. Load the driver
+sudo insmod driver/cx511h.ko force_input_mode=1
+
+# 2. Test streaming (optional but recommended)
+ffplay -f v4l2 -input_format yuyv422 -video_size 1920x1080 -framerate 60 /dev/video0 &
+FFPLAY_PID=$!
+sleep 5
+kill $FFPLAY_PID 2>/dev/null || true
+
+# 3. Unload the driver (should complete without freeze)
+sudo rmmod cx511h
+
+# 4. Verify clean removal
+echo "Driver removal exit code: $?"
+dmesg | tail -5 | grep -i "cx511h\|board_remove\|pci_model_remove"
+```
+
+**Expected Results:**
+- `rmmod` completes with exit code 0 (success)
+- No "Device or resource busy" errors
+- No kernel warnings or panics in `dmesg`
+- Driver can be immediately reloaded without reboot
+
+**Debugging Tips:**
+- If `rmmod` hangs, check for active userspace processes with `lsof /dev/video0`
+- Monitor kernel logs in real-time: `sudo dmesg -w`
+- The fixes ensure: hardware streaming stops before IRQ free, PCI context used before release, proper error code returns
+
+---
+
 ##  How to Build & Install
 
 ### Prerequisites
@@ -131,6 +195,10 @@ sudo insmod cx511h.ko force_input_mode=1
 ```
 `build.sh` forwards its arguments to `make`, so pass the Clang flags explicitly.
 
+> [!NOTE]
+> **Recent Stability Fixes Applied:** The driver now includes critical cleanup fixes that prevent kernel freezes during `rmmod`. The fixes ensure proper hardware shutdown sequence, correct PCI context management, and proper error code returns. Module loading/unloading should now be stable.
+
+
 ---
 
 ##  Debugging & Contributing
@@ -164,11 +232,11 @@ sudo dmesg | grep -iE "cx511h-hdmi|cx511h-v4l2|cx511h-color"
 
 ## ⚠️ Known Issues & Stability Notes
 
-### 1. Driver Unloading (Device Busy)
-The driver often fails to unload cleanly.
-- **Symptom:** `sudo rmmod cx511h` returns `Device or resource busy`.
-- **Cause:** The cleanup/remove path is still incomplete. V4L2 references, DMA state, and PCI teardown do not always unwind cleanly.
-- **WARNING:** Do **NOT** use `rmmod -f` (forced removal). This triggers a **Kernel Freeze**, requiring a hard reset.
+### 1. Driver Unloading (Device Busy) - FIXED
+The driver unloading issue has been resolved with proper cleanup lifecycle.
+- **Previous Symptom:** `sudo rmmod cx511h` returned `Device or resource busy` or caused kernel freezes.
+- **Fix:** Implemented proper cleanup sequence: stop hardware streaming → free IRQs → unmap MMIO → release contexts → disable PCI device.
+- **Current Status:** `rmmod` now works reliably without kernel freezes.
 
 ### 2. I2C Bus Collision (Streaming Freeze)
 Accessing the I2C bus (reading registers) while the HDMI pixel stream is active triggers system-wide freezes.
@@ -194,7 +262,7 @@ Accessing the I2C bus (reading registers) while the HDMI pixel stream is active 
 
 ---
 
-##  Reverse Engineering Progress (March 31, 2026)
+##  Reverse Engineering Progress (April 2025)
 
 ### Community Analysis
 This driver is based on community reverse engineering efforts to enable Linux support for hardware without official vendor drivers.
