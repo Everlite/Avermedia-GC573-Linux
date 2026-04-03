@@ -5,7 +5,10 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE.md)
 [![Issues](https://img.shields.io/github/issues/Everlite/Avermedia-GC573-Linux.svg)](https://github.com/Everlite/Avermedia-GC573-Linux/issues)
 
-This repository contains a **community-maintained, AI-assisted**, and heavily patched version of the AVerMedia GC573 Linux driver. It has been modernized for the latest kernels and stabilized for advanced experimental testing.
+This repository contains a **community-maintained, AI-assisted**, and heavily patched version of the AVerMedia GC573 Linux driver. It has been modernized for recent kernels and is currently aimed at reverse engineering, hardware bring-up, and experimental capture testing.
+
+> [!NOTE]
+> This tree currently links against the precompiled vendor archive `AverMediaLib_64.a` for low-level hardware logic.
 
 ---
 
@@ -15,13 +18,14 @@ This repository contains a **community-maintained, AI-assisted**, and heavily pa
 
 | Feature | Status | Description |
 |:---|:---:|:---|
+| **Build / Toolchain** | ⚠️ [CLANG] | Tested build path is `LLVM=1 CC=clang`; plain GCC builds may fail on Clang-built kernels |
 | **Module Loading** | ✅ [OK] | STABLE — No longer crashes the kernel upon loading |
 | **Signal Detection** | ✅ [OK] | FUNCTIONAL — Hardware syncs via forced 1080p EDID handshake |
 | **IRQ / Interrupts** | ✅ [OK] | WORKING — MSI interrupt allocation with INTx fallback |
 | **System Stability** | ⚠️ [FRAGILE] | I2C read-locks during streaming cause system freezes |
 | **DMA Transfer** | ✅ [OK] | FUNCTIONAL — Data flow confirmed via ffplay/xxd |
-| **Capture Content** | ⚠️ [EARLY] | First frames visible, continuous streaming incomplete |
-| **Driver Unload** | ❌ [BROKEN] | `rmmod` often fails, may require reboot |
+| **Capture Content** | ⚠️ [EARLY] | First frames visible, but streaming lifecycle and buffer completion are still incomplete |
+| **Driver Unload** | ❌ [BROKEN] | Cleanup/remove path is incomplete; `rmmod` often fails and may require reboot |
 | **General Use** | ❌ [NOT REC] | For development/testing only — NOT FOR DAILY USE |
 
 ### Development Phase Status
@@ -40,6 +44,7 @@ This repository contains a **community-maintained, AI-assisted**, and heavily pa
 ### 1. Robust Streaming Initialization
 - **V4L2 Callback Bridge:** Discovered and fixed a critical issue where the hardware initialization logic was disconnected from the active V4L2 `STREAMON` path. The driver now correctly triggers FPGA and HDMI-Receiver configuration when a capture starts.
 - **MSI Interrupts:** Migrated from legacy INTx to proper **MSI (Message Signaled Interrupts)**, eliminating the "interrupt storm" system freezes.
+- **Lifecycle Caveat:** The `STREAMON` path is now connected, but continuous streaming, re-queue/IRQ completion, and teardown are still under active work.
 
 ### 2. Triple-EDID & 1080p Force
 - **EDID Override:** Patched multiple locations to force the card to identify as a **1080p-max device**. This prevents signal handshake failures with modern consoles.
@@ -47,7 +52,8 @@ This repository contains a **community-maintained, AI-assisted**, and heavily pa
 
 ### 3. YUV Data Path Forcing (Color Correction)
 We have confirmed through buffer analysis (`xxd`) that the hardware delivers **YUV 4:2:2** data (`10 80`). The driver now forces a consistent YUV path across all layers:
-- **V4L2 Layer**: Restricted to `YUYV` only to prevent color interpretation errors.
+- **Hardware Path**: The active capture path is forced to `YUYV` to prevent color interpretation errors.
+- **Userspace Format Negotiation**: Still being tightened. Some V4L2 paths may still advertise formats beyond the currently forced hardware path.
 - **FPGA Layer**: Forced `AVER_XILINX_FMT_YUYV` in the video process pipeline.
 - **ITE68051 Layer**: Synchronized inputs and TTL output to YUV mode.
 
@@ -91,14 +97,16 @@ Runtime-configurable module parameter (`force_input_mode`) to manually set the H
 ### Prerequisites
 
 > [!IMPORTANT]
-> **Kernel Parameters:** You **must** add these to your boot command line (GRUB / systemd-boot):
+> **Kernel Parameters:** The currently tested setup uses these boot parameters (GRUB / systemd-boot):
 > ```bash
 > ibt=off iommu=pt
 > ```
-> - `ibt=off` — Disables Intel Indirect Branch Tracking (required for proprietary blob compatibility).
+> - `ibt=off` — May still be needed on some systems because this tree links against a precompiled vendor blob.
 > - `iommu=pt` — Sets IOMMU passthrough mode (required for DMA access).
 
-- **Build Tools:** `base-devel`, `cmake`, `llvm`, `clang`
+- **Kernel Headers:** Matching headers for the currently running kernel
+- **Build Tools:** `base-devel`, `llvm`, `clang`
+- **Compiler Note:** Use `LLVM=1 CC=clang`. A plain `make` with GCC may fail on Clang-built kernels (for example CachyOS).
 
 ***
 
@@ -117,9 +125,18 @@ sudo rmmod cx511h || true
 sudo insmod cx511h.ko force_input_mode=1
 ```
 
+**Helper Script:**
+```bash
+./build.sh LLVM=1 CC=clang
+```
+`build.sh` forwards its arguments to `make`, so pass the Clang flags explicitly.
+
 ---
 
 ##  Debugging & Contributing
+
+### Validation Status
+Validation is currently hardware-driven. There is no automated CI or test suite in this repository yet.
 
 ### Quick Debug Commands
 ```bash
@@ -131,10 +148,6 @@ sudo fuser -k /dev/video0
 
 # Test with ffplay (1080p60 YUYV)
 ffplay -f v4l2 -input_format yuyv422 -video_size 1920x1080 -framerate 60 /dev/video0
-
-# Analyze raw buffer content
-v4l2-ctl --stream-mmap --stream-count=1 --stream-to=/tmp/test.raw
-xxd /tmp/test.raw | head -30
 
 # Check handshake and color logs
 sudo dmesg | grep -iE "cx511h-hdmi|cx511h-v4l2|cx511h-color"
@@ -154,7 +167,7 @@ sudo dmesg | grep -iE "cx511h-hdmi|cx511h-v4l2|cx511h-color"
 ### 1. Driver Unloading (Device Busy)
 The driver often fails to unload cleanly.
 - **Symptom:** `sudo rmmod cx511h` returns `Device or resource busy`.
-- **Cause:** V4L2 device file references or DMA memory buffers are not fully released.
+- **Cause:** The cleanup/remove path is still incomplete. V4L2 references, DMA state, and PCI teardown do not always unwind cleanly.
 - **WARNING:** Do **NOT** use `rmmod -f` (forced removal). This triggers a **Kernel Freeze**, requiring a hard reset.
 
 ### 2. I2C Bus Collision (Streaming Freeze)
@@ -166,6 +179,19 @@ Accessing the I2C bus (reading registers) while the HDMI pixel stream is active 
 - **Reason:** Triggers unexpected I2C status reads during stream_off sequence, which causes a total **System Freeze** due to bus contention.
 - **Alternative:** Use `ffplay` for safe testing.
 
+### 4. Format Negotiation Mismatch
+- The active hardware capture path is currently forced to `YUYV`.
+- Some userspace-visible V4L2 format negotiation paths may still expose additional formats while the hardware path remains fixed.
+- Treat non-`YUYV` capture modes as experimental until the negotiation path is fully aligned with the forced data path.
+
+### 5. Streaming Lifecycle Still In Progress
+- `STREAMON` is wired into the real hardware init path, but continuous buffer re-queue/IRQ completion is still under reverse engineering.
+- Start/stop, OBS, GStreamer, and clean teardown should still be considered unstable.
+
+### 6. Toolchain Sensitivity
+- The repository builds on the tested kernel with `LLVM=1 CC=clang`.
+- A plain GCC build may fail immediately on Clang-built kernels because the kernel build system passes Clang-oriented flags through to external modules.
+
 ---
 
 ##  Reverse Engineering Progress (March 31, 2026)
@@ -175,8 +201,9 @@ This driver is based on community reverse engineering efforts to enable Linux su
 
 > [!CAUTION]
 > **Legal Notice:**
-> - This project does **NOT** distribute any proprietary binaries.
-> - No copyrighted code from vendor drivers is included.
+> - This project currently includes the precompiled vendor archive `AverMediaLib_64.a`.
+> - The handwritten glue code and reverse-engineering notes are community-maintained.
+> - Review redistribution/licensing status carefully before republishing binaries or forks.
 > - **Purpose:** Interoperability and Linux hardware support.
 > - Non-commercial, community-driven project.
 
