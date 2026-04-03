@@ -340,27 +340,46 @@ static void pci_model_remove(struct pci_dev *pci_dev)
 {
     struct device *dev=&pci_dev->dev;
     cxt_mgr_handle_t cxt_mgr=get_cxt_manager(dev);
-    pci_model_cxt_t *pci_cxt;
+    pci_model_cxt_t *pci_cxt = NULL;
+    int i;
     mesg_debug("%s\n",__func__);
     
-    if(pci_model_drv_cxt)
-        if(pci_model_drv_cxt->remove_func)
-            pci_model_drv_cxt->remove_func(dev);
+    // --- FIX --- Call board remove for software cleanup first
+    if(pci_model_drv_cxt && pci_model_drv_cxt->remove_func)
+        pci_model_drv_cxt->remove_func(dev);
+    
     if(cxt_mgr)
     {
-        int i;
-        pci_cxt=cxt_manager_get_context(cxt_mgr,PCI_CXT_ID,0);
-        
-        cxt_manager_release(cxt_mgr);
-        for(i=0;i<pci_cxt->bar_count;i++)
+        // --- FIX --- Get PCI context BEFORE releasing manager
+        pci_cxt = cxt_manager_get_context(cxt_mgr, PCI_CXT_ID, 0);
+        if (pci_cxt)
         {
-            iounmap(pci_cxt->bar_info[i].mmio);
+            // --- FIX --- Free IRQ while context is still valid
+            if (pci_cxt->msi_enabled)
+            {
+                free_irq(pci_irq_vector(pci_dev, 0), pci_cxt);
+                pci_cxt->msi_enabled = false;
+            }
+            else
+            {
+                free_irq(pci_dev->irq, pci_cxt);
+            }
+            // --- FIX --- Always free IRQ vectors if they were allocated
+            pci_free_irq_vectors(pci_dev);
+            
+            // --- FIX --- Unmap BARs while context is still valid
+            for(i = 0; i < pci_cxt->bar_count; i++)
+            {
+                if (pci_cxt->bar_info[i].mmio)
+                    iounmap(pci_cxt->bar_info[i].mmio);
+            }
         }
-        free_irq(pci_irq_vector(pci_dev, 0), pci_cxt);
-        pci_free_irq_vectors(pci_dev);
-        pci_cxt->msi_enabled = false;
+        
+        // --- FIX --- Now release context manager (frees pci_cxt memory)
+        cxt_manager_release(cxt_mgr);
     }
     
+    // --- FIX --- PCI cleanup after all context is cleaned up
     pci_release_regions(pci_dev);
     pci_clear_master(pci_dev);
     pci_disable_device(pci_dev);

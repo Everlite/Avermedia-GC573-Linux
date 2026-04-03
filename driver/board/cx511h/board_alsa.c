@@ -199,3 +199,34 @@ void board_alsa_recv_data(void *board_alas_cxt,unsigned char *buffer,U32_T size)
 //        }
 	alsa_model_feed_data(board_alsa->alsa_handle,buffer,size);
 }
+
+void board_alsa_stop(cxt_mgr_handle_t cxt_mgr)
+{
+    board_alsa_cxt_t *board_alsa;
+    enum
+    {
+        BOARD_ALSA_OK = 0,
+        BOARD_ALSA_ERROR_CXT_MGR,
+        BOARD_ALSA_ERROR_GET_CXT,
+    } err = BOARD_ALSA_OK;
+    
+    if (!cxt_mgr)
+    {
+        debug_msg("board_alsa_stop: ERROR no cxt_mgr\n");
+        err = BOARD_ALSA_ERROR_CXT_MGR;
+        return;
+    }
+    
+    board_alsa = cxt_manager_get_context(cxt_mgr, BOARD_ALSA_CXT_ID, 0);
+    if (!board_alsa)
+    {
+        debug_msg("board_alsa_stop: cannot get board_alsa context\n");
+        err = BOARD_ALSA_ERROR_GET_CXT;
+        return;
+    }
+    
+    /* Stop hardware audio streaming */
+    aver_xilinx_stop_audio_streaming(board_alsa->aver_xilinx_handle);
+    
+    debug_msg("board_alsa_stop done\n");
+}

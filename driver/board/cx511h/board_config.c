@@ -13,6 +13,7 @@
 //#include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/delay.h>
+#include <linux/errno.h>
 #include "board.h"
 #include "cxt_mgr.h"
 #include "pci_model.h"
@@ -278,24 +279,57 @@ int board_probe(struct device *dev,unsigned long driver_info)
     }while(0);
     if(err!=NO_ERROR)
     {
-        debug_msg("%s err\n",__func__,err);
+        debug_msg("%s err %d\n",__func__,err);
         mesg(">>>board_probe fail \n");
         switch(err)
         {
+            case ERROR_BOARD_I2C_INIT:
+            case ERROR_BOARD_GPIO_INIT:
+                cxt_manager_unref_context(aver_xilinx_handle);
+                // fall through
             case ERROR_AVER_XILINX:
-                cxt_manager_unref_context(i2c_mgr);
-            case ERROR_I2C_MGR:
+                cxt_manager_unref_context(task_handle);
+                // fall through
+            case ERROR_TASK_HANDLE:
+                cxt_manager_unref_context(mem_handle);
+                // fall through
+            case ERROR_MEM_HANDLE:
                 cxt_manager_unref_context(gpio_mgr);
-            case ERROR_GPIO_MGR:    
-                 cxt_manager_unref_context(trace_handle);
+                // fall through
+            case ERROR_GPIO_MGR:
+                cxt_manager_unref_context(i2c_mgr);
+                // fall through
+            case ERROR_I2C_MGR:
             case ERROR_TRACE_HANDLE:
-                
             case NO_PCI_HANDLE:
                 break;
             default:
                 break;
         }
-        return err;
+        /* Convert to negative kernel error code */
+        switch(err)
+        {
+            case NO_PCI_HANDLE:
+                return -ENODEV;
+            case ERROR_TRACE_HANDLE:
+                return -ENOMEM;
+            case ERROR_I2C_MGR:
+                return -ENODEV;
+            case ERROR_GPIO_MGR:
+                return -ENODEV;
+            case ERROR_TASK_HANDLE:
+                return -ENOMEM;
+            case ERROR_MEM_HANDLE:
+                return -ENOMEM;
+            case ERROR_AVER_XILINX:
+                return -ENODEV;
+            case ERROR_BOARD_I2C_INIT:
+                return -ENODEV;
+            case ERROR_BOARD_GPIO_INIT:
+                return -EIO;
+            default:
+                return -ENODEV;
+        }
     }
     
     
@@ -354,7 +388,36 @@ void board_resume(struct device *dev)
 
 void board_remove(struct device *dev)
 {
+    cxt_mgr_handle_t cxt_mgr;
+
     debug_msg("%s\n",__func__);
+
+    if (!dev)
+    {
+        debug_msg("Error: device pointer is NULL\n");
+        return;
+    }
+
+    cxt_mgr = get_cxt_manager(dev);
+    if (!cxt_mgr)
+    {
+        debug_msg("Error: cannot get context manager\n");
+        return;
+    }
+
+    // --- FIX --- Proper cleanup sequence
+
+    // 1. Stop hardware streaming (video and audio)
+    board_v4l2_stop(cxt_mgr);
+    board_alsa_stop(cxt_mgr);
+
+    // 2. Disable IRQs, iounmap, PCI cleanup will be done by pci_model_remove
+    //    after cxt_manager_release()
+
+    // 3. cxt_manager_release() will be called by pci_model_remove after this
+    //    function returns
+
+    debug_msg("board_remove: cleanup complete\n");
 }
 
 

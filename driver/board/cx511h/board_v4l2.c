@@ -1211,3 +1211,32 @@ void board_v4l2_resume(cxt_mgr_handle_t cxt_mgr)
 
     aver_xilinx_hdmi_hotplug(board_v4l2_cxt->aver_xilinx_handle);
 }
+
+void board_v4l2_stop(cxt_mgr_handle_t cxt_mgr)
+{
+    board_v4l2_context_t *board_v4l2_cxt;
+    handle_t ite6805_handle;
+
+    board_v4l2_cxt = cxt_manager_get_context(cxt_mgr,BOARD_V4L2_CXT_ID,0);
+    if (!board_v4l2_cxt)
+    {
+        debug_msg("Error: cannot get board_v4l2_cxt");
+        return;
+    }
+
+    /* Stop hardware video streaming */
+    cx511h_stream_off(board_v4l2_cxt->fg_handle);
+    
+    /* Ensure V4L2 model stops streaming */
+    v4l2_model_streamoff(board_v4l2_cxt->v4l2_handle);
+    
+    /* Power off ITE6805 chip */
+    ite6805_handle = board_v4l2_cxt->i2c_chip_handle[CL511H_I2C_CHIP_ITE6805_0];
+    if (ite6805_handle)
+        ite6805_power_off(ite6805_handle);
+    
+    /* Set LED color to off (black) to indicate driver unloading */
+    cx511h_set_led_color(board_v4l2_cxt->aver_xilinx_handle, 0, 0, 0);
+    
+    debug_msg("board_v4l2_stop done\n");
+}
