@@ -28,7 +28,14 @@ static void framegrabber_release(void *);
 
 static const framegrabber_pixfmt_t support_pixfmts[] = {
 	
-	[FRAMEGRABBER_PIXFMT_YUYV]={ //YUYV index=0
+	[FRAMEGRABBER_PIXFMT_UYVY]={ //UYVY index=0
+		.name     = "4:2:2, packed, UYVY",
+		.fourcc   = V4L2_PIX_FMT_UYVY,
+		.depth    = 16,
+		.is_yuv   = true,
+		.pixfmt_out = UYVY,
+	},
+	[FRAMEGRABBER_PIXFMT_YUYV]={ //YUYV
 		.name     = "4:2:2, packed, YUYV",
 		.fourcc   = V4L2_PIX_FMT_YUYV,
 		.depth    = 16,
@@ -36,29 +43,24 @@ static const framegrabber_pixfmt_t support_pixfmts[] = {
 		.pixfmt_out = YUYV,
 	},
 	#if 0
-	[FRAMEGRABBER_PIXFMT_UYVY]={ //UYVY
-		.name     = "4:2:2, packed, UYVY",
-		.fourcc   = V4L2_PIX_FMT_UYVY,
-		.depth    = 16,
-		.is_yuv   = true,
-		.pixfmt_out = UYVY,
-	},
 	[FRAMEGRABBER_PIXFMT_YVYU]={ //YVYU
-		.name     = "4:2:2, packed, YVYU",
-		.fourcc   = V4L2_PIX_FMT_YVYU,
-		.depth    = 16,
-		.is_yuv   = true,
-		.pixfmt_out = YVYU,
-	},
+			.name     = "4:2:2, packed, YVYU",
+			.fourcc   = V4L2_PIX_FMT_YVYU,
+			.depth    = 16,
+			.is_yuv   = true,
+			.pixfmt_out = YVYU,
+		},
 	
-	[FRAMEGRABBER_PIXFMT_VYUY]={ //VYUY
-		.name     = "4:2:2, packed, VYUY",
-		.fourcc   = V4L2_PIX_FMT_VYUY,
-		.depth    = 16,
-		.is_yuv   = true,
-		.pixfmt_out = VYUY,
-	},
+		[FRAMEGRABBER_PIXFMT_VYUY]={ //VYUY
+			.name     = "4:2:2, packed, VYUY",
+			.fourcc   = V4L2_PIX_FMT_VYUY,
+			.depth    = 16,
+			.is_yuv   = true,
+			.pixfmt_out = VYUY,
+		},
+	#endif
 
+	#if 0
 	[FRAMEGRABBER_PIXFMT_RGB565]={ //RGBP
 		.name     = "RGB565 (LE)",
 		.fourcc   = V4L2_PIX_FMT_RGB565, /* gggbbbbb rrrrrggg */

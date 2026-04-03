@@ -1,5 +1,7 @@
 MODULE_NAME := cx511h
 
+
+
 # $(src) is set by kbuild to the absolute source directory of this module.
 # $(shell pwd) / $(CURDIR) resolve to the *kernel build directory* during
 # kbuild and must NOT be used for include paths or obj references.
@@ -65,6 +67,8 @@ KBUILD_CFLAGS += -fno-stack-protector
 
 obj-m += $(MODULE_NAME).o
 
+# Note: cx511h depends on videobuf2 modules (common, memops, v4l2, vmalloc, dma-contig, dma-sg)
+# and sound modules (snd, snd-pcm). Ensure they are loaded before insmod.
 KDIR := /lib/modules/$(shell uname -r)/build
 
 all:

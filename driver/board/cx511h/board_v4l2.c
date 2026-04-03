@@ -13,6 +13,8 @@
 //#include <linux/kernel.h>
 #include <linux/delay.h>
 #include <linux/moduleparam.h>
+#include <linux/io.h>
+#include <linux/videodev2.h>
 #include "board.h"
 #include "cxt_mgr.h"
 #include "framegrabber.h"
@@ -43,6 +45,16 @@ static int force_input_mode = 0;
 module_param(force_input_mode, int, 0644);
 MODULE_PARM_DESC(force_input_mode,
     "Force HDMI input format: 0=auto, 1=YUV422, 2=YUV444, 3=RGB-Full, 4=RGB-Limited");
+
+/* Module parameter: debug FPGA pixel format override.
+ * -1 = Use automatic mapping (default)
+ * 0-11 = Force specific AVER_XILINX_FMT_* value (see aver_xilinx.h)
+ * Usage: sudo insmod cx511h.ko debug_pixel_format=1
+ */
+static int debug_pixel_format = -1;
+module_param(debug_pixel_format, int, 0644);
+MODULE_PARM_DESC(debug_pixel_format,
+    "Debug: Force FPGA pixel format: -1=auto, 0=YUYV, 1=UYVY, 2=YVYU, 3=VYUY, 4=RGBP, 5=RGBR, 6=RGBO, 7=RGBQ, 8=RGB3, 9=BGR3, 10=RGB4, 11=BGR4");
 
 /*
  * Set LED color via FPGA GPIO pins.
@@ -498,10 +510,25 @@ static void cx511h_stream_on(framegrabber_handle_t handle)
 		vip_cfg.video_bypass = 0;
 	}
 	
-    /* FORCE YUV 4:2:2 for now to match DMA buffer analysis! */
-    vip_cfg.pixel_format = AVER_XILINX_FMT_YUYV;
-    printk(KERN_ERR "[cx511h-v4l2] FORCING YUYV format in FPGA (FourCC: %s, ID: %u)\n",
-           pixfmt->name, pixfmt->fourcc);
+    // --- PHASE2-FINAL --- Map V4L2 pixel format to FPGA pixel format (fix green screen)
+    // Hardware outputs UYVY (BT.656 native), all YUV422 formats must map to FPGA UYVY
+    
+    // DEBUG OVERRIDE: If debug_pixel_format >= 0, force specific FPGA format
+    if (debug_pixel_format >= 0) {
+        vip_cfg.pixel_format = debug_pixel_format;
+        printk(KERN_ERR "[cx511h-v4l2] DEBUG OVERRIDE: FPGA pixel format forced to %d (0x%02x)\n",
+               debug_pixel_format, debug_pixel_format);
+    } else if (pixfmt->is_yuv) {
+        // All YUV422 formats (YUYV, UYVY, YVYU, VYUY) map to FPGA UYVY (BT.656 native)
+        vip_cfg.pixel_format = AVER_XILINX_FMT_UYVY;
+        printk(KERN_ERR "[cx511h-v4l2] GREEN SCREEN FIX: YUV422 %s → FPGA UYVY (BT.656 native)\n",
+               pixfmt->name);
+    } else {
+        // Default mapping for non-YUV formats (RGB24, etc.)
+        vip_cfg.pixel_format = pixfmt->pixfmt_out;
+        printk(KERN_ERR "[cx511h-v4l2] FPGA pixel format: %s → AVER_XILINX_FMT_%d (FourCC: 0x%08x)\n",
+               pixfmt->name, pixfmt->pixfmt_out, pixfmt->fourcc);
+    }
 
     /* DEBUG 4: Video Unmute Sequence (from Windows Driver Analysis) */
     {
@@ -513,6 +540,41 @@ static void cx511h_stream_on(framegrabber_handle_t handle)
         hdmirxwr(ite6805_handle, 0x23, 0x02);  // Enable Video stage
         
         printk(KERN_ERR "[cx511h-hdmi] Video UNMUTE sequence complete.\n");
+    }
+
+    // --- PHASE2 --- I2C Enable Sequence for Continuous Streaming
+    {
+        printk(KERN_ERR "[cx511h-phase2] Enabling ITE68051 streaming registers...\n");
+        // Video Output Enable (Bit 6)
+        hdmirxwr(ite6805_handle, 0x20, 0x40);
+        msleep(5);
+        // Global Enable
+        hdmirxwr(ite6805_handle, 0x86, 0x01);
+        msleep(5);
+        // IRQ Enable
+        hdmirxwr(ite6805_handle, 0x90, 0x8f);
+        msleep(5);
+        // DMA Channel Enable (Channels 0-2)
+        hdmirxwr(ite6805_handle, 0xA0, 0x80);
+        hdmirxwr(ite6805_handle, 0xA1, 0x80);
+        hdmirxwr(ite6805_handle, 0xA2, 0x80);
+        msleep(5);
+        // DMA Enable
+        hdmirxwr(ite6805_handle, 0xA4, 0x08);
+        msleep(5);
+        // Buffer Enable
+        hdmirxwr(ite6805_handle, 0xB0, 0x01);
+        msleep(5);
+        printk(KERN_ERR "[cx511h-phase2] ITE68051 streaming registers enabled.\n");
+    }
+
+    // --- PHASE2-FIX --- RX DeSkew Error Mitigation (reduce "RX DeSkew Error Interrupt")
+    {
+        printk(KERN_ERR "[cx511h-phase2] Applying RX DeSkew Error Mitigation...\n");
+        hdmirxwr(ite6805_handle, 0x4A, 0x0F);  // Increase tolerance
+        hdmirxwr(ite6805_handle, 0x4B, 0x0F);  // Increase tolerance
+        msleep(5);
+        printk(KERN_ERR "[cx511h-phase2] RX DeSkew registers set to 0x0F\n");
     }
 
     printk(KERN_ERR "[cx511h-dma] stream_on: BEFORE aver_xilinx_config_video_process\n");
@@ -556,6 +618,18 @@ static void cx511h_stream_on(framegrabber_handle_t handle)
 
     aver_xilinx_enable_video_streaming(board_v4l2_cxt->aver_xilinx_handle, TRUE);
     printk(KERN_ERR "[cx511h-dma] stream_on: AFTER enable_video_streaming — survived!\n");
+    
+    // --- PHASE2 --- Initial doorbell after starting streaming
+    {
+        cxt_mgr_handle_t cxt_mgr = get_cxt_manager_from_context(board_v4l2_cxt);
+        if (cxt_mgr) {
+            handle_t pci_handle = pci_model_get_handle(cxt_mgr);
+            if (pci_handle) {
+                pci_model_mmio_write(pci_handle, 0, 0x304, 0x01);
+                printk(KERN_ERR "[cx511h-phase2] Initial doorbell sent after stream start\n");
+            }
+        }
+    }
 
     //ite6805_set_freerun_screen(ite6805_handle,FALSE);    
 }
@@ -747,10 +821,29 @@ static int cx511h_reg_write(framegrabber_handle_t handle, unsigned int offset, u
 static void cx511h_video_buffer_done(void *data)
 {
     board_v4l2_context_t *board_v4l2_cxt=data;
+    cxt_mgr_handle_t cxt_mgr;
+    handle_t pci_handle;
+    
     //mesg("%s board_v4l2_cxt %p\n",__func__,board_v4l2_cxt);
     if(board_v4l2_cxt)
     {
         v4l2_model_buffer_done(board_v4l2_cxt->v4l2_handle);
+        
+        // --- PHASE2 --- Doorbell and IRQ ACK for continuous streaming
+        cxt_mgr = get_cxt_manager_from_context(board_v4l2_cxt);
+        if (cxt_mgr) {
+            pci_handle = pci_model_get_handle(cxt_mgr);
+            if (pci_handle) {
+                // Doorbell: notify hardware next buffer is ready
+                pci_model_mmio_write(pci_handle, 0, 0x304, 0x01);
+                
+                // IRQ ACK: acknowledge interrupt after buffer done
+                pci_model_mmio_write(pci_handle, 0, 0x10, 0x02);
+                wmb(); // write memory barrier
+                
+                //printk(KERN_ERR "[cx511h-phase2] Doorbell and IRQ ACK sent\n");
+            }
+        }
     }
 }
 
@@ -1038,6 +1131,7 @@ void board_v4l2_init(cxt_mgr_handle_t cxt_mgr, int board_id)
     i2c_model_handle_t  i2c_mgr=NULL;
     handle_t aver_xilinx_handle=NULL;
     task_handle_t task_handle=NULL;
+    handle_t pci_handle=NULL;
     int i;
     
     enum
@@ -1062,6 +1156,12 @@ void board_v4l2_init(cxt_mgr_handle_t cxt_mgr, int board_id)
             break;
         }
         printk("board_v4l2_init: cxt_mgr ok\n");
+        
+        // --- PHASE2 --- Get PCI handle for IRQ registration
+        pci_handle = pci_model_get_handle(cxt_mgr);
+        if (!pci_handle) {
+            printk("board_v4l2_init: WARNING no PCI handle, IRQ ACK may not work\n");
+        }
 
         framegrabber_handle = framegrabber_init(cxt_mgr, &cl511h_property, &cx511h_ops);
         if (framegrabber_handle == NULL)

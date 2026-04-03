@@ -664,6 +664,35 @@ deps_board/cx511h/board_v4l2.o := \
     $(wildcard include/config/ALPHA) \
     $(wildcard include/config/PPC64) \
     $(wildcard include/config/SYSFS) \
+  /usr/lib/modules/6.19.10-1-cachyos/build/include/linux/io.h \
+    $(wildcard include/config/HAS_IOPORT_MAP) \
+    $(wildcard include/config/PCI) \
+    $(wildcard include/config/STRICT_DEVMEM) \
+  /usr/lib/modules/6.19.10-1-cachyos/build/include/linux/sizes.h \
+  /usr/lib/modules/6.19.10-1-cachyos/build/arch/x86/include/asm/io.h \
+    $(wildcard include/config/MTRR) \
+    $(wildcard include/config/X86_PAT) \
+  /usr/lib/modules/6.19.10-1-cachyos/build/arch/x86/include/generated/asm/early_ioremap.h \
+  /usr/lib/modules/6.19.10-1-cachyos/build/include/asm-generic/early_ioremap.h \
+    $(wildcard include/config/GENERIC_EARLY_IOREMAP) \
+  /usr/lib/modules/6.19.10-1-cachyos/build/arch/x86/include/asm/shared/io.h \
+  /usr/lib/modules/6.19.10-1-cachyos/build/include/asm-generic/io.h \
+    $(wildcard include/config/GENERIC_IOMAP) \
+    $(wildcard include/config/TRACE_MMIO_ACCESS) \
+    $(wildcard include/config/HAS_IOPORT) \
+    $(wildcard include/config/GENERIC_IOREMAP) \
+  /usr/lib/modules/6.19.10-1-cachyos/build/include/asm-generic/iomap.h \
+  /usr/lib/modules/6.19.10-1-cachyos/build/include/asm-generic/pci_iomap.h \
+    $(wildcard include/config/NO_GENERIC_PCI_IOPORT_MAP) \
+    $(wildcard include/config/GENERIC_PCI_IOMAP) \
+  /usr/lib/modules/6.19.10-1-cachyos/build/include/linux/logic_pio.h \
+    $(wildcard include/config/INDIRECT_PIO) \
+  /usr/lib/modules/6.19.10-1-cachyos/build/include/linux/fwnode.h \
+  /usr/lib/modules/6.19.10-1-cachyos/build/include/linux/videodev2.h \
+  /usr/lib/modules/6.19.10-1-cachyos/build/include/uapi/linux/videodev2.h \
+    $(wildcard include/config/VIDEO_ADV_DEBUG) \
+  /usr/lib/modules/6.19.10-1-cachyos/build/include/uapi/linux/v4l2-common.h \
+  /usr/lib/modules/6.19.10-1-cachyos/build/include/uapi/linux/v4l2-controls.h \
   board.h \
   cxt_mgr.h \
   queue.h \
