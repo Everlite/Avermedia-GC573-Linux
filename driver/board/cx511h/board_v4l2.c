@@ -15,6 +15,7 @@
 #include <linux/moduleparam.h>
 #include <linux/io.h>
 #include <linux/videodev2.h>
+#include <linux/string.h>
 #include "board.h"
 #include "cxt_mgr.h"
 #include "framegrabber.h"
@@ -83,6 +84,7 @@ typedef struct
         i2c_model_handle_t i2c_model_handle;
         task_model_handle_t task_model_handle;
         handle_t aver_xilinx_handle;
+        handle_t pci_handle;
         handle_t i2c_chip_handle[CL511H_I2C_CHIP_COUNT];
         ite6805_frameinfo_t cur_fe_frameinfo;
         enum ite6805_audio_sample cur_fe_audioinfo;
@@ -206,6 +208,8 @@ static void *board_v4l2_alloc()
 {
 	board_v4l2_context_t *cxt;
 	cxt=mem_model_alloc_buffer(sizeof(*cxt));
+	if (cxt)
+		memset(cxt, 0, sizeof(*cxt));
 
 	return cxt;
 }
@@ -606,6 +610,99 @@ static void cx511h_stream_on(framegrabber_handle_t handle)
     hdmirxwr(ite6805_handle, 0x6e, 0x01);  // Output: YUV422
     hdmirxwr(ite6805_handle, 0x2a, 0x3a);  // AVI InfoFrame: YUV (BT.709)
 
+    // --- CSC-FIX --- FPGA CSC Configuration (MMIO 0x1040) - Dynamic based on input format
+    // Based on Windows driver analysis:
+    // - bit0 = 1 (VIDEO_422_MODE) - always set for YUV422 output
+    // - bit1 = 1 if RGB->YUV conversion needed (input is RGB)
+    // - bit3 = 0 (YUV->RGB disable) - always 0 for YUV output
+    // - bits[10:8] = CSC matrix: 
+    //   0 = RGB Full -> YUV BT.709 (RGBF_to_BT709)
+    //   1 = RGB Limited -> YUV BT.709 (RGBL_to_BT709)
+    //   4 = YUV BT.601 -> YUV BT.709 (BT601_to_BT709)
+    //   5 = YUV BT.709 -> YUV BT.601 (BT709_to_BT601)
+    // - bit5 = 0 (single-pixel mode) - always 0
+    {
+        u32 csc_value = 0;
+        u8 csc_matrix = 0;
+        
+        // Always set VIDEO_422_MODE (bit0)
+        csc_value |= 0x1;
+        
+        // Determine CSC matrix based on input format
+        if (vip_cfg.in_colorspacemode == 0) {
+            // Input is YUV
+            csc_value &= ~(0x1 << 1); // Clear RGB->YUV bit
+            if (vip_cfg.in_packetcsc_bt == COLORMETRY_ITU601) {
+                // YUV BT.601 -> YUV BT.709
+                csc_matrix = 4; // BT601_to_BT709
+            } else {
+                // YUV BT.709 -> YUV BT.709 (passthrough)
+                csc_matrix = 0; // No conversion needed
+            }
+        } else if (vip_cfg.in_colorspacemode == 1) {
+            // Input is RGB Limited
+            csc_value |= (0x1 << 1); // Set RGB->YUV bit
+            if (vip_cfg.in_packetcsc_bt == COLORMETRY_ITU601) {
+                csc_matrix = 3; // RGBL_to_BT601
+            } else {
+                csc_matrix = 1; // RGBL_to_BT709
+            }
+        } else if (vip_cfg.in_colorspacemode == 2) {
+            // Input is RGB Full
+            csc_value |= (0x1 << 1); // Set RGB->YUV bit
+            if (vip_cfg.in_packetcsc_bt == COLORMETRY_ITU601) {
+                csc_matrix = 2; // RGBF_to_BT601
+            } else {
+                csc_matrix = 0; // RGBF_to_BT709
+            }
+        }
+        
+        // Set CSC matrix bits [10:8]
+        csc_value |= (csc_matrix << 8);
+        
+        cxt_mgr_handle_t cxt_mgr = get_cxt_manager_from_context(board_v4l2_cxt);
+        handle_t pci_handle = NULL;
+        
+        printk(KERN_ERR "[cx511h-csc] Debug: board_v4l2_cxt=%p\n", board_v4l2_cxt);
+        if (cxt_mgr) {
+            printk(KERN_ERR "[cx511h-csc] Debug: cxt_mgr=%p\n", cxt_mgr);
+            pci_handle = pci_model_get_handle(cxt_mgr);
+            if (pci_handle) {
+                printk(KERN_ERR "[cx511h-csc] Debug: pci_handle from pci_model_get_handle=%p\n", pci_handle);
+            } else {
+                printk(KERN_ERR "[cx511h-csc] Debug: pci_model_get_handle returned NULL\n");
+            }
+        } else {
+            printk(KERN_ERR "[cx511h-csc] Debug: cxt_mgr is NULL\n");
+        }
+        
+        // Fallback: use stored pci_handle from board context
+        if (!pci_handle && board_v4l2_cxt->pci_handle) {
+            pci_handle = board_v4l2_cxt->pci_handle;
+            printk(KERN_ERR "[cx511h-csc] Debug: using stored pci_handle=%p\n", pci_handle);
+        }
+        
+        // If still NULL, try to get PCI handle via cxt_manager_get_context
+        if (!pci_handle && cxt_mgr) {
+            pci_handle = cxt_manager_get_context(cxt_mgr, PCI_CXT_ID, 0);
+            if (pci_handle) {
+                printk(KERN_ERR "[cx511h-csc] Debug: pci_handle from cxt_manager_get_context=%p\n", pci_handle);
+            }
+        }
+        
+        // Write CSC register if we have a valid handle
+        if (pci_handle) {
+            pci_model_mmio_write(pci_handle, 0, 0x1040, csc_value);
+            printk(KERN_ERR "[cx511h-csc] FPGA CSC configured: 0x1040 = 0x%03x ", csc_value);
+            printk(KERN_ERR "(in_cs=%u, csc_bt=%u, matrix=%u, %s->YUV)\n",
+                   vip_cfg.in_colorspacemode, vip_cfg.in_packetcsc_bt, csc_matrix,
+                   (vip_cfg.in_colorspacemode == 0) ? "YUV" : 
+                   (vip_cfg.in_colorspacemode == 1) ? "RGB_L" : "RGB_F");
+        } else {
+            printk(KERN_ERR "[cx511h-csc] ERROR: No valid PCI handle, CSC register not written!\n");
+        }
+    }
+
 
     /* SAFETY 3: Settle delay after config — give the FPGA time to latch
      * the new scaler/CSC/DMA settings before we start the stream.
@@ -622,12 +719,41 @@ static void cx511h_stream_on(framegrabber_handle_t handle)
     // --- PHASE2 --- Initial doorbell after starting streaming
     {
         cxt_mgr_handle_t cxt_mgr = get_cxt_manager_from_context(board_v4l2_cxt);
+        handle_t pci_handle = NULL;
+        
+        printk(KERN_ERR "[cx511h-phase2] Debug: board_v4l2_cxt=%p\n", board_v4l2_cxt);
         if (cxt_mgr) {
-            handle_t pci_handle = pci_model_get_handle(cxt_mgr);
+            printk(KERN_ERR "[cx511h-phase2] Debug: cxt_mgr=%p\n", cxt_mgr);
+            pci_handle = pci_model_get_handle(cxt_mgr);
             if (pci_handle) {
-                pci_model_mmio_write(pci_handle, 0, 0x304, 0x01);
-                printk(KERN_ERR "[cx511h-phase2] Initial doorbell sent after stream start\n");
+                printk(KERN_ERR "[cx511h-phase2] Debug: pci_handle from pci_model_get_handle=%p\n", pci_handle);
+            } else {
+                printk(KERN_ERR "[cx511h-phase2] Debug: pci_model_get_handle returned NULL\n");
             }
+        } else {
+            printk(KERN_ERR "[cx511h-phase2] Debug: cxt_mgr is NULL\n");
+        }
+        
+        // Fallback: use stored pci_handle from board context
+        if (!pci_handle && board_v4l2_cxt->pci_handle) {
+            pci_handle = board_v4l2_cxt->pci_handle;
+            printk(KERN_ERR "[cx511h-phase2] Debug: using stored pci_handle=%p\n", pci_handle);
+        }
+        
+        // If still NULL, try to get PCI handle via cxt_manager_get_context
+        if (!pci_handle && cxt_mgr) {
+            pci_handle = cxt_manager_get_context(cxt_mgr, PCI_CXT_ID, 0);
+            if (pci_handle) {
+                printk(KERN_ERR "[cx511h-phase2] Debug: pci_handle from cxt_manager_get_context=%p\n", pci_handle);
+            }
+        }
+        
+        // Write doorbell register if we have a valid handle
+        if (pci_handle) {
+            pci_model_mmio_write(pci_handle, 0, 0x304, 0x01);
+            printk(KERN_ERR "[cx511h-phase2] Initial doorbell sent after stream start\n");
+        } else {
+            printk(KERN_ERR "[cx511h-phase2] ERROR: No valid PCI handle, doorbell not sent!\n");
         }
     }
 
@@ -830,19 +956,48 @@ static void cx511h_video_buffer_done(void *data)
         v4l2_model_buffer_done(board_v4l2_cxt->v4l2_handle);
         
         // --- PHASE2 --- Doorbell and IRQ ACK for continuous streaming
+        printk(KERN_ERR "[cx511h-phase2] Debug: board_v4l2_cxt=%p\n", board_v4l2_cxt);
         cxt_mgr = get_cxt_manager_from_context(board_v4l2_cxt);
+        pci_handle = NULL;
+        
         if (cxt_mgr) {
+            printk(KERN_ERR "[cx511h-phase2] Debug: cxt_mgr=%p\n", cxt_mgr);
             pci_handle = pci_model_get_handle(cxt_mgr);
             if (pci_handle) {
-                // Doorbell: notify hardware next buffer is ready
-                pci_model_mmio_write(pci_handle, 0, 0x304, 0x01);
-                
-                // IRQ ACK: acknowledge interrupt after buffer done
-                pci_model_mmio_write(pci_handle, 0, 0x10, 0x02);
-                wmb(); // write memory barrier
-                
-                //printk(KERN_ERR "[cx511h-phase2] Doorbell and IRQ ACK sent\n");
+                printk(KERN_ERR "[cx511h-phase2] Debug: pci_handle from pci_model_get_handle=%p\n", pci_handle);
+            } else {
+                printk(KERN_ERR "[cx511h-phase2] Debug: pci_model_get_handle returned NULL\n");
             }
+        } else {
+            printk(KERN_ERR "[cx511h-phase2] Debug: cxt_mgr is NULL\n");
+        }
+        
+        // Fallback: use stored pci_handle from board context
+        if (!pci_handle && board_v4l2_cxt->pci_handle) {
+            pci_handle = board_v4l2_cxt->pci_handle;
+            printk(KERN_ERR "[cx511h-phase2] Debug: using stored pci_handle=%p\n", pci_handle);
+        }
+        
+        // If still NULL, try to get PCI handle via cxt_manager_get_context
+        if (!pci_handle && cxt_mgr) {
+            pci_handle = cxt_manager_get_context(cxt_mgr, PCI_CXT_ID, 0);
+            if (pci_handle) {
+                printk(KERN_ERR "[cx511h-phase2] Debug: pci_handle from cxt_manager_get_context=%p\n", pci_handle);
+            }
+        }
+        
+        // Write doorbell and IRQ ACK if we have a valid handle
+        if (pci_handle) {
+            // Doorbell: notify hardware next buffer is ready
+            pci_model_mmio_write(pci_handle, 0, 0x304, 0x01);
+            
+            // IRQ ACK: acknowledge interrupt after buffer done
+            pci_model_mmio_write(pci_handle, 0, 0x10, 0x02);
+            wmb(); // write memory barrier
+            
+            printk(KERN_ERR "[cx511h-phase2] Doorbell and IRQ ACK sent\n");
+        } else {
+            printk(KERN_ERR "[cx511h-phase2] ERROR: No valid PCI handle, doorbell and IRQ ACK not sent!\n");
         }
     }
 }
@@ -1178,6 +1333,8 @@ void board_v4l2_init(cxt_mgr_handle_t cxt_mgr, int board_id)
             break;
         }
         board_v4l2_cxt->fg_handle = framegrabber_handle;
+        board_v4l2_cxt->pci_handle = pci_handle;
+        printk(KERN_ERR "[cx511h-phase2] Debug: stored pci_handle=%p to board context\n", pci_handle);
         framegrabber_set_data(framegrabber_handle,board_v4l2_cxt);
         
         printk("board_v4l2_init: calling v4l2_model_init...\n");
