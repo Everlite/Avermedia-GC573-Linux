@@ -35,7 +35,7 @@ This repository contains a **community-maintained, AI-assisted**, and heavily pa
 | Phase | Status | Description |
 |:---|:---:|:---|
 | **Phase 1** | ✅ DONE | Builds on modern kernels, module loads stable |
-| **Phase 2** | ✅ DONE | HDMI lock, first DMA data, format recognized |
+| **Phase 2** | 🟡 EXPERIMENTAL | Experimental Streaming (I2C Bypass mode active) |
 | **Phase 3** | 🟡 [MOSTLY DONE] | Continuous streaming, buffer lifecycle, IRQ completion |
 | **Phase 4** | ⏳ PENDING | Robust start/stop, suspend/resume, OBS/GStreamer support |
 
