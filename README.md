@@ -383,7 +383,7 @@ xxd frame_raw.bin | head -4
 
 ## Legal/Compliance
 
-**EU Directive 2009/24/EC Art. 6 (Interoperability):** This project constitutes lawful reverse engineering for achieving interoperability with the AVerMedia GC573 hardware.
+**Legal Note:** This project is intended for achieving interoperability with the AVerMedia GC573 hardware on Linux platforms. Reverse engineering efforts are conducted in accordance with EU Directive 2009/24/EC Art. 6. All trademarks and proprietary blobs belong to their respective owners.
 
 > [!CAUTION]
 > This project includes the precompiled vendor archive `AverMediaLib_64.a`.
@@ -393,8 +393,8 @@ xxd frame_raw.bin | head -4
 ---
 
 ## Disclaimer
-Unofficial community project for educational and interoperability purposes.
-AVerMedia does not endorse or support this driver. **Use at your own risk.**
+
+**Disclaimer:** This is a community project. I am not a lawyer. Use this software at your own risk. AVerMedia does not endorse or support this driver.
 
 ---
 
