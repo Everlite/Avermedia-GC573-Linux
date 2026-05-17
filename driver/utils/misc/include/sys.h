@@ -14,6 +14,7 @@
 #define SYS_H
 
 #include "typedef.h"
+#include <linux/types.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -49,7 +50,7 @@ enum sys_fop_flag_bitmask_e {
 void sys_msleep(unsigned ms);
 void sys_udelay(unsigned us);
 void sys_mdelay(unsigned ms);
-int sys_sprintf(char *buf, const char *fmt, ...);
+int sys_sprintf(char *buf, size_t size, const char *fmt, ...);
 int sys_sscanf(const char *buf, const char *fmt, ...);
 unsigned long long sys_gettimestamp(void); // nano sec
 void *sys_get_drvdata(device_handle_t device_handle);

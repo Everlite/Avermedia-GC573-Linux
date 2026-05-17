@@ -19,6 +19,8 @@
 #include <linux/list.h>
 #include <linux/workqueue.h>
 #include <linux/interrupt.h>
+#include <linux/types.h>
+#include <linux/slab.h>
 #include "cxt_mgr.h"
 #include "mem_model.h"
 #include "task_model.h"
@@ -194,6 +196,9 @@ task_model_handle_t task_model_init(cxt_mgr_handle_t cxt_mgr)
         {
         
             case ERROR_CREATE_WQ:
+                /* FIX: unref mem_mgr before falling through */
+                cxt_manager_unref_context(mem_mgr);
+                mem_mgr = NULL;
                 cxt_manager_unref_context(task_model_cxt);
                 task_model_cxt=NULL;
             case ERROR_GET_MEM_MGR:
@@ -318,14 +323,19 @@ static void task_model_dpc_work_func(struct work_struct *work)
             //mesg(";");
         }else
         {
+            unsigned long flags;
+            /* FIX: hold DPC_lock across need_reschedue_DPC set and queue_empty
+             * check to prevent TOCTOU race where an IRQ adds a DPC item between
+             * the atomic_set and the queue_empty re-check */
+            spin_lock_irqsave(&task_model_cxt->DPC_lock, flags);
             atomic_set(&task_model_cxt->need_reschedue_DPC,1);
-            #if 1 //In order to avoid video stop while aging test
             if(!queue_empty(&task_model_cxt->DPC_queue)) {
-                printk("interrupt add que Detection\n");
                 atomic_set(&task_model_cxt->need_reschedue_DPC,0);
+                spin_unlock_irqrestore(&task_model_cxt->DPC_lock, flags);
                 queue_work(task_model_cxt->wq, &task_model_cxt->dpc_work);
+            } else {
+                spin_unlock_irqrestore(&task_model_cxt->DPC_lock, flags);
             }
-            #endif
         } 
 }
 

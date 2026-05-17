@@ -158,6 +158,14 @@ echo "✓ Dependencies loaded."
 # Load our module
 echo "Loading cx511h module..."
 cd "$(dirname "$0")/driver"
+
+# Warn if the kernel module file doesn't exist yet
+if [ ! -f cx511h.ko ]; then
+    echo "ERROR: cx511h.ko not found in $(pwd)." >&2
+    echo "       Run ./build.sh from the project root first to compile the module." >&2
+    exit 1
+fi
+
 if insmod cx511h.ko; then
     echo "✓ cx511h module loaded successfully."
 

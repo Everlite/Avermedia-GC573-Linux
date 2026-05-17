@@ -15,6 +15,9 @@
 #include <linux/workqueue.h>
 #include <linux/spinlock.h>
 #include <linux/slab.h>
+#include <linux/string.h>
+#include <linux/mutex.h>
+#include <linux/atomic.h>
 #include <sound/core.h>
 #include <sound/pcm.h>
 #include <sound/pcm_params.h>
@@ -329,6 +332,9 @@ void alsa_model_feed_data(alsa_model_handle_t handle, U8_T *buf, SIZE_T length)
     /* bytes to copy_frames */
     remain_frames = length / stride;
     copy_frames = remain_frames;
+    /* FIX: clamp copy_frames to buffer_size to prevent overflow */
+    if (copy_frames > runtime->buffer_size)
+        copy_frames = runtime->buffer_size;
     //printk("alsa stride:%d remain:%d copy:%d \n", stride, remain_frames, copy_frames);
     /*    
         if(oldptr)

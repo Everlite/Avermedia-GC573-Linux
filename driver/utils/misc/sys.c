@@ -10,8 +10,11 @@
 #include <linux/preempt.h>
 #include <linux/semaphore.h>
 #include <linux/slab.h>
+#include <linux/stdarg.h>
+#include <linux/string.h>
 #include <linux/timekeeping.h>
 #include <linux/timer.h>
+#include <linux/types.h>
 #include <linux/uaccess.h>
 #include <linux/version.h>
 
@@ -58,11 +61,13 @@ void sys_msleep(unsigned ms) {
 void sys_mdelay(unsigned ms) { mdelay(ms); }
 void sys_udelay(unsigned us) { udelay(us); }
 
-int sys_sprintf(char *buf, const char *fmt, ...) {
+/* FIX: replace vsprintf with vsnprintf to prevent buffer overflow.
+ * Added size parameter — callers must pass the buffer size. */
+int sys_sprintf(char *buf, size_t size, const char *fmt, ...) {
   va_list args;
   int i;
   va_start(args, fmt);
-  i = vsprintf(buf, fmt, args);
+  i = vsnprintf(buf, size, fmt, args);
   va_end(args);
   return i;
 }
@@ -193,11 +198,21 @@ int sys_atomic_get(sys_atomic_t atomic) {
 
 /* --- Dateizugriff Fix für Kernel 6.8 (Deaktiviert, da VFS_READ nicht mehr
  * exportiert) --- */
-void *sys_fopen(const char *filename, enum sys_fop_flag_e flag) { return NULL; }
 
-void sys_fclose(void *fp) {}
+/* Stub: not implemented */
+void *sys_fopen(const char *filename, enum sys_fop_flag_e flag) {
+  printk(KERN_WARNING "sys_fopen: stub called (not implemented)\n");
+  return NULL;
+}
 
+/* Stub: not implemented */
+void sys_fclose(void *fp) {
+  printk(KERN_WARNING "sys_fclose: stub called (not implemented)\n");
+}
+
+/* Stub: not implemented */
 SIZE_T sys_fread(void *fp, void *buf, SIZE_T size, SIZE_T count,
                  SIZE_T offset) {
+  printk(KERN_WARNING "sys_fread: stub called (not implemented)\n");
   return 0;
 }

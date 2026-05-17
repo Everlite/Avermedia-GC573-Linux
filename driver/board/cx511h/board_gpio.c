@@ -10,6 +10,8 @@
  * =================================================================
  */
  
+#include <linux/kernel.h>
+#include <linux/errno.h>
 #include "cxt_mgr.h"
 #include "gpio_model.h"
 #include "board_gpio.h"
@@ -108,14 +110,6 @@ int board_gpio_init(cxt_mgr_handle_t cxt_mgr)
                     pin_desc++;
 		}
             }
-//            for(i=0;i<BOARD_GPIO_NUM;i++)
-//            {
-//		board_gpio_cxt->gpio_pin_handle[i]=gpio_model_request_pin_handle(gpio_mgr,pin_name[i]);
-//		if(board_gpio_cxt->gpio_pin_handle[i]==GPIO_MODEL_BAD_PIN_HANDLE)
-//		{
-//                    printk(" request %s failed\n",pin_name[i]);
-//		}
-//            }
 	}
 
 	return 0;
@@ -133,7 +127,8 @@ void board_set_gpio(cxt_mgr_handle_t cxt_mgr,board_gpio_e no,gpio_model_pin_valu
         gpio_mgr=cxt_manager_get_context(cxt_mgr,GPIO_CXT_ID,0);
         if(!gpio_mgr)
             break;
-        if(no< 0 || no >BOARD_GPIO_NUM)
+        /* FIX: use >= for upper bound and add NULL check for pin_name[no] */
+        if(no < 0 || no >= BOARD_GPIO_NUM || !pin_name[no])
             break;
         pin_handle=gpio_model_request_pin_handle(gpio_mgr,pin_name[no]);
         if(!pin_handle)
@@ -158,7 +153,8 @@ gpio_model_pin_value_t board_get_gpio(cxt_mgr_handle_t cxt_mgr,board_gpio_e no)
         gpio_mgr=cxt_manager_get_context(cxt_mgr,GPIO_CXT_ID,0);
         if(!gpio_mgr)
             break;
-        if(no< 0 || no >BOARD_GPIO_NUM)
+        /* FIX: use >= for upper bound and add NULL check for pin_name[no] */
+        if(no < 0 || no >= BOARD_GPIO_NUM || !pin_name[no])
             break;
         pin_handle=gpio_model_request_pin_handle(gpio_mgr,pin_name[no]);
         if(!pin_handle)

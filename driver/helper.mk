@@ -15,7 +15,7 @@ COMMA:=,
 #return dir if dir exits
 define check_dir
 $(shell test -d $(1) && echo $(1))
-endef 
+endef
 
 
 define basic_check
@@ -24,16 +24,16 @@ $(info no board $(BOARD) exists)
 endif
 endef
 
-define list_files_from_file 
+define list_files_from_file
 $(addprefix $(dir $(1)),$(shell cat $(1)))
 endef
 
 
-define dirs 
+define dirs
 $(subst $(dir $(1)/),,$(sort $(dir $(wildcard $(1)/*/))))
 endef
 
-define rdirs 
+define rdirs
 $(subst $(dir $(1)/),,$(sort $(dir $(wildcard $(1)/*/  $(1)/*/*/))))
 endef
 
@@ -45,13 +45,16 @@ define add_cflags
 $(foreach obj,$($(1)),$(eval CFLAGS_$(notdir $(obj)) += $($(2))))
 endef
 
+MODINFO := $(shell command -v modinfo 2>/dev/null || echo /sbin/modinfo)
+DEPMOD := $(shell command -v depmod 2>/dev/null || echo /sbin/depmod)
+
 define get_depend_modules
-$(subst $(COMMA),$(SPACE),$(strip $(subst depends:,,$(shell /sbin/modinfo $1 | grep depends))))
+$(subst $(COMMA),$(SPACE),$(strip $(subst depends:,,$(shell $(MODINFO) $1 | grep depends))))
 endef
 
-# gen_insmod_script 
-# param 1:script_name 
-# param 2:varible name of module 
+# gen_insmod_script
+# param 1:script_name
+# param 2:varible name of module
 # param 3:outputdir
 define gen_insmod_script
 always +=$(3)$(1)
@@ -71,12 +74,12 @@ $(foreach mod,$($(2)),$(1)_insmod_$(basename $(notdir $(mod))):$(addprefix $(1)_
 $(obj)/$(3)$(1): $(1)_script_header $(1)_modprobe $(foreach mod,$($(2)),$(1)_insmod_$(basename $(notdir $(mod))))
 	@chmod +x $(obj)/$(3)$(1)
 	@echo $(obj)/$(3)$(1) done
-		
+
 endef
 
 # gen_install_script
-# param 1:script_name 
-# param 2:varible name of module 
+# param 1:script_name
+# param 2:varible name of module
 # param 3:outputdir
 # param 4:module install dir
 define gen_install_script
@@ -96,14 +99,14 @@ $(obj)/$(3)$(1):
 	$(foreach mod, $($(2)), \
 		$(shell echo 'install -m 644 $(notdir $(mod)) $$MODULE_INSTALL_DIR' >> $(obj)/$(3)$(1))\
 		)
-	$(shell echo "/sbin/depmod -a" >> $(obj)/$(3)$(1) )
+	$(shell echo "$(DEPMOD) -a" >> $(obj)/$(3)$(1) )
 	$(shell chmod +x $(obj)/$(3)$(1))
 
 endef
 
 # gen_build_script
-# param 1:script_name 
-# param 2:varible name of module 
+# param 1:script_name
+# param 2:varible name of module
 # param 3:outputdir
 define gen_build_script
 always +=$(3)$(1)
@@ -115,4 +118,3 @@ $(obj)/$(3)$(1):
 	$(shell chmod +x $(obj)/$(3)$(1))
 
 endef
-

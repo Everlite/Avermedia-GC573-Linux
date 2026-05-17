@@ -10,7 +10,7 @@
  * =================================================================
  */
  
-//#include <linux/kernel.h>
+#include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/delay.h>
 #include <linux/errno.h>
@@ -21,12 +21,12 @@
 #include "mem_model.h"
 #include "gpio_model.h"
 #include "task_model.h"
-#include "trace.h"
 #include "debug.h"
 #include "aver_xilinx.h"
 #include "board_i2c.h"
 #include "board_gpio.h"
 #include "board_alsa.h"
+#include "alsa_model.h"
 #include "ite6805.h"
 #include "board_v4l2.h"
 
@@ -285,6 +285,9 @@ int board_probe(struct device *dev,unsigned long driver_info)
         {
             case ERROR_BOARD_I2C_INIT:
             case ERROR_BOARD_GPIO_INIT:
+                /* FIX: unreference ite6805_handle_1 if it was successfully attached */
+                if (ite6805_handle_1)
+                    cxt_manager_unref_context(ite6805_handle_1);
                 cxt_manager_unref_context(aver_xilinx_handle);
                 // fall through
             case ERROR_AVER_XILINX:
@@ -383,7 +386,9 @@ void board_resume(struct device *dev)
 
     aver_xilinx_init_registers(aver_xilinx_handle, &aver_xilinx_cfg);
 
-    board_v4l2_resume(cxt_mgr);
+    /* FIX: only call board_v4l2_resume if aver_xilinx_handle is valid */
+    if (aver_xilinx_handle)
+        board_v4l2_resume(cxt_mgr);
 }
 
 void board_remove(struct device *dev)
@@ -408,8 +413,11 @@ void board_remove(struct device *dev)
     // --- FIX --- Proper cleanup sequence
 
     // 1. Stop hardware streaming (video and audio)
-    board_v4l2_stop(cxt_mgr);
-    board_alsa_stop(cxt_mgr);
+    /* FIX: add NULL checks for handles retrieved from cxt_manager_get_context */
+    if (cxt_manager_get_context(cxt_mgr, AVER_XILINX_CXT_ID, 0))
+        board_v4l2_stop(cxt_mgr);
+    if (cxt_manager_get_context(cxt_mgr, ALSA_CXT_ID, 0))
+        board_alsa_stop(cxt_mgr);
 
     // 2. Disable IRQs, iounmap, PCI cleanup will be done by pci_model_remove
     //    after cxt_manager_release()

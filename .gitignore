@@ -3,7 +3,12 @@
 *.o
 *.symvers
 *.order
+*.cmd
+*.tmp
+*.mod
 Module.symvers
+.modules.order
+.module-common.o
 .tmp_versions/
 
 # Ghidra/Reverse-Engineering Dateien (sensibel)
@@ -12,3 +17,4 @@ AVXGC573_Register_Function_Analysis.md
 linuxextract.c
 *_ghidra_*
 *.ghidra
+todo.md

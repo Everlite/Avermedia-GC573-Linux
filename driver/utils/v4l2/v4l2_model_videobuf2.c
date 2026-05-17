@@ -170,6 +170,7 @@ v4l2_model_qops_queue_setup(struct vb2_queue *q, const struct v4l2_format *fmt,
   return 0;
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6,0,0)
 static void v4l2_model_qops_wait_prepare(struct vb2_queue *q) {
   return vb2_ops_wait_prepare(q);
 }
@@ -177,6 +178,7 @@ static void v4l2_model_qops_wait_prepare(struct vb2_queue *q) {
 static void v4l2_model_qops_wait_finish(struct vb2_queue *q) {
   return vb2_ops_wait_finish(q);
 }
+#endif
 
 // invoked when each new buffer after it has been allocated
 
@@ -463,9 +465,10 @@ static void v4l2_model_qops_buf_queue(struct vb2_buffer *vb) {
 const struct vb2_ops v4l2_model_qops = {
     .queue_setup = v4l2_model_qops_queue_setup,
 
-    /* do nothing */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6,0,0)
     .wait_prepare = v4l2_model_qops_wait_prepare,
-    .wait_finish = v4l2_model_qops_wait_finish,
+    .wait_finish  = v4l2_model_qops_wait_finish,
+#endif
     .buf_init = v4l2_model_qops_buf_init,
 
     .buf_prepare = v4l2_model_qops_buf_prepare,

@@ -11,6 +11,9 @@
  */
  
 //#include <linux/device.h>
+#include <linux/bug.h>
+#include <linux/kernel.h>
+#include <linux/device.h>
 #include "cxt_mgr.h"
 #include "mem_model.h"
 #include "debug.h"
@@ -32,6 +35,8 @@ static void cxt_item_ref(cxt_item_t *cxt_item)
 
 static void cxt_item_unref(cxt_item_t *cxt_item)
 {
+    /* FIX: catch refcount underflow before decrementing */
+    BUG_ON(cxt_item->ref_count <= 0);
     cxt_item->ref_count--;
     if (cxt_item->ref_count == 0)
     {
@@ -121,8 +126,6 @@ void *cxt_manager_add_cxt(cxt_mgr_handle_t handle, U32_T id, cxt_alloc_func_t *a
             cxt->allocate = alloc_func;
             cxt->release = release_func;
             cxt->context = cxt->allocate();
-            cxt->context->manager = handle;
-            cxt->dev = cxt_mgr->dev;
             if (!cxt->context)
             {
                 mem_model_free_buffer(cxt);
@@ -130,6 +133,8 @@ void *cxt_manager_add_cxt(cxt_mgr_handle_t handle, U32_T id, cxt_alloc_func_t *a
             }
             else
             {
+                cxt->context->manager = handle;
+                cxt->dev = cxt_mgr->dev;
                 queue_add_tail(&cxt->queue, &cxt_mgr->cxt_queue);
                 cxt_item_ref(cxt);
             }

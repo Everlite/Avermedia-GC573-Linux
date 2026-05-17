@@ -111,22 +111,47 @@ else
     echo "Module does not appear to be actively used by critical processes."
 fi
 
-# Try to remove the module
+# Try to remove the module properly
+# Strategy: normal rmmod first (triggers board_exit -> pci_driver_exit -> pci_model_remove -> board_remove)
+# If that fails, unbind the PCI device which triggers the exact same kernel cleanup path
+# rmmod -f is the LAST resort (bypasses cleanup, can leave dangling state)
 echo "Attempting to remove cx511h module..."
+set +e  # Temporarily disable exit-on-error
+
+# Method 1: Normal rmmod (cleanest - triggers full driver exit chain)
 if rmmod cx511h 2>/dev/null; then
-    echo "✓ Module removed successfully."
+    echo "✓ Module removed via normal rmmod."
 else
-    # If rmmod fails, check why
-    echo "rmmod failed. Checking reference count..."
+    echo "Normal rmmod failed. Checking what holds the module..."
     REF_COUNT=$(cat /sys/module/cx511h/refcnt 2>/dev/null || echo "unknown")
     echo "Module reference count: $REF_COUNT"
 
-    # Try force remove if reference count is low
-    if [ "$REF_COUNT" = "0" ] || [ "$REF_COUNT" = "unknown" ]; then
-        echo "Trying force remove..."
-        rmmod -f cx511h 2>/dev/null || echo "Force remove also failed."
+    # Method 2: PCI unbind (triggers pci_model_remove -> board_remove -> full cleanup)
+    echo "Trying PCI unbind (clean unload path)..."
+    PCI_DEV=$(ls /sys/bus/pci/drivers/cx511h/ 2>/dev/null | grep -E '0000:' | head -1)
+    if [ -n "$PCI_DEV" ] && [ -e "/sys/bus/pci/drivers/cx511h/$PCI_DEV" ]; then
+        echo "Unbinding PCI device $PCI_DEV..."
+        echo -n "$PCI_DEV" > /sys/bus/pci/drivers/cx511h/unbind 2>/dev/null && echo "✓ PCI device unbound."
+        sleep 2
+        if modprobe -r cx511h 2>/dev/null; then
+            echo "✓ Module removed via modprobe -r after unbind."
+        fi
+    else
+        echo "⚠ Could not find cx511h PCI device in sysfs."
+    fi
+
+    # Method 3: Force remove (last resort - skips some cleanup)
+    if lsmod | grep -q cx511h; then
+        echo "Module still loaded. Trying force remove (last resort)..."
+        if rmmod -f cx511h 2>/dev/null; then
+            echo "✓ Module force-removed."
+        else
+            echo "✗ Force remove also failed."
+            echo "  WORKAROUND: Reboot, or keep module loaded (stable if not streaming)."
+        fi
     fi
 fi
+set -e  # Re-enable exit-on-error
 
 # Restart audio services to restore system audio
 echo "Restoring audio services..."

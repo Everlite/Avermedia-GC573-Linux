@@ -16,6 +16,9 @@
 #include <linux/jiffies.h>
 #include <linux/timer.h>
 #include <linux/version.h>
+#include <linux/slab.h>
+#include <linux/string.h>
+#include <linux/types.h>
 
 #include <sound/core.h>
 #include <sound/pcm.h>
@@ -29,40 +32,6 @@
 
 /* sagitta_module instance */
 static struct sagitta_module *instance;
-struct timer_list filldata_timer;
-
-#define TEST_SND_SIZE 7
-
-u64 nsecs_to_jiffies64(u64 n)
-{
-#if (NSEC_PER_SEC % HZ) == 0
-        /* Common case, HZ = 100, 128, 200, 250, 256, 500, 512, 1000 etc. */
-        return div_u64(n, NSEC_PER_SEC / HZ);
-#elif (HZ % 512) == 0
-        /* overflow after 292 years if HZ = 1024 */
-        return div_u64(n * HZ / 512, NSEC_PER_SEC / 512);
-#else
-        /*
-         * Generic case - optimized for cases where HZ is a multiple of 3.
-         * overflow after 64.99 years, exact for HZ = 60, 72, 90, 120 etc.
-         */
-        return div_u64(n * 9, (9ull * NSEC_PER_SEC + HZ / 2) / HZ);
-#endif
-}
-
-unsigned char buffer[1024] = { [0 ... 1023] = 13 };
-
-
-static void filldata(unsigned long data)
-{
-//    struct sagitta_virt_dev *svdev = (struct sagitta_virt_dev *) data;
-//    struct sagitta_snd_dev *ssdev =
-//        (struct sagitta_snd_dev *) sagitta_virtdev_getdata(svdev);
-	struct sagitta_snd_dev *ssdev =(struct sagitta_snd_dev *)data;
-
-    ssdev->buf_deliver(ssdev, buffer, 1024);
-    mod_timer(&filldata_timer, msecs_to_jiffies(100));
-}
 
 #if 0
 static int sagitta_snd_test_stream(void *this)
@@ -284,17 +253,10 @@ static void sagitta_audio_trigger(struct work_struct *work)
 
     if(atomic_read(&ssdev->stream_started))
     {
-
         printk("%s start\n", __func__);
-#if 0
-        add_timer(&filldata_timer);
-#endif
     }
     else {
         printk("%s stop\n", __func__);
-#if 0
-        del_timer_sync(&filldata_timer);
-#endif
     }
 }
 
@@ -458,10 +420,6 @@ static void alsa_probe(struct sagitta_module *module, struct sagitta_dev *sdev)
     //sagitta_virtdev_setdata(svdev, ssdev);
     //container->ssdev = ssdev;
 
-    init_timer(&filldata_timer);
-    filldata_timer.expires = msecs_to_jiffies(100);
-    filldata_timer.function = filldata;
-    filldata_timer.data = (unsigned long) ssdev;
     alsa_mod->context=ssdev;
 
 #if 0

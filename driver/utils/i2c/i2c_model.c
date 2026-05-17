@@ -2,6 +2,9 @@
 #include <linux/slab.h>
 #include <linux/i2c.h>
 #include <linux/preempt.h>
+#include <linux/errno.h>
+#include <linux/string.h>
+#include <linux/mutex.h>
 #include "cxt_mgr.h"
 #include "mem_model.h"
 #include "i2c_model.h"
@@ -85,30 +88,41 @@ static void i2c_model_release(void *context)
 			}
 
 			for_each_queue_entry_safe(bus,next_bus,&model->i2c_bus_queue,queue)
-			{
-				queue_del(&bus->queue);
-				if(bus->ref_cxt)
 				{
-					cxt_manager_unref_context(bus->ref_cxt);
+					queue_del(&bus->queue);
+					if(bus->ref_cxt)
+					{
+						cxt_manager_unref_context(bus->ref_cxt);
+					}
+
+					printk("i2c_del_adapter %p %s\n",&bus->i2c_adap,bus->bus_name);
+					i2c_del_adapter(&bus->i2c_adap);
+
+					mem_model_free_buffer(bus);
+					/* FIX: set bus to NULL after free to prevent dangling pointer */
+					bus = NULL;
 				}
 
-				printk("i2c_del_adapter %p %s\n",&bus->i2c_adap,bus->bus_name);
-				i2c_del_adapter(&bus->i2c_adap);
 
-				mem_model_free_buffer(bus);
-			}
-
-
-		mem_model_free_buffer(model);
-	}
+			mem_model_free_buffer(model);
+			/* FIX: set model to NULL after free to prevent double-free */
+			model = NULL;
+		}
 }
 static int i2c_model_bus_i2c_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[], int num)
 {
     i2c_model_bus_t *bus=container_of(adap,i2c_model_bus_t,i2c_adap);
-    i2c_model_msg_t i2c_model_msg[num];
+    i2c_model_msg_t *i2c_model_msg;
     int ret=-1; 
     int i;
-    
+
+    /* FIX: upper limit check and dynamic allocation to prevent kernel stack
+     * overflow from VLA (variable-length array) */
+    if (num <= 0 || num > 128)
+        return -EINVAL;
+    i2c_model_msg = kcalloc(num, sizeof(i2c_model_msg_t), GFP_KERNEL);
+    if (!i2c_model_msg)
+        return -ENOMEM;
     
     for(i=0;i<num;i++)
     {
@@ -132,6 +146,7 @@ static int i2c_model_bus_i2c_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[
             mutex_unlock(&bus->lock);
     }
     
+    kfree(i2c_model_msg);
     return ret;
 }
 
@@ -149,9 +164,17 @@ static struct i2c_algorithm i2c_model_bus_algo={
 int i2c_model_transfer(i2c_model_bus_handle_t bus_handle,i2c_model_msg_t i2c_model_msg[],int num)
 {
     i2c_model_bus_t *bus=bus_handle;
-
-    struct i2c_msg msgs[num];
+    struct i2c_msg *msgs;
+    int ret;
     int i;
+
+    /* FIX: upper limit check and dynamic allocation to prevent kernel stack
+     * overflow from VLA (variable-length array) */
+    if (num <= 0 || num > 128)
+        return -EINVAL;
+    msgs = kcalloc(num, sizeof(struct i2c_msg), GFP_KERNEL);
+    if (!msgs)
+        return -ENOMEM;
     
     for(i=0;i<num;i++)
     {
@@ -167,7 +190,9 @@ int i2c_model_transfer(i2c_model_bus_handle_t bus_handle,i2c_model_msg_t i2c_mod
         
     }
 
-    return i2c_transfer(&bus->i2c_adap,msgs,num);
+    ret = i2c_transfer(&bus->i2c_adap,msgs,num);
+    kfree(msgs);
+    return ret;
     
     
 }

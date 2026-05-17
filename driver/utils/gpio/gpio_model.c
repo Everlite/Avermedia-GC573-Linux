@@ -13,6 +13,8 @@
 #include <linux/kernel.h>
 #include <linux/mutex.h>
 #include <linux/slab.h>
+#include <linux/string.h>
+#include <linux/list.h>
 #include "cxt_mgr.h"
 #include "gpio_model.h"
 
@@ -244,7 +246,8 @@ static void gpio_model_release(void *context)
 		if(!list_empty(&model->gpio_ic_list))
 		{
 			gpio_ic_t *pos,*tmp;
-			list_for_each_entry_safe(pos,tmp,&model->pin_handle_list,list)
+			/* FIX: iterate over gpio_ic_list, not pin_handle_list */
+			list_for_each_entry_safe(pos,tmp,&model->gpio_ic_list,list)
 			{
 				gpio_model_free_ic(pos);
 			}

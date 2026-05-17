@@ -11,8 +11,10 @@
  */
  
 #include <linux/kernel.h>
-#include "linux/pci.h"
-#include "linux/interrupt.h"
+#include <linux/types.h>
+#include <linux/errno.h>
+#include <linux/pci.h>
+#include <linux/interrupt.h>
 
 /* Compat: PCI_IRQ_INTX was introduced in kernel 6.8 as a rename of
  * PCI_IRQ_LEGACY. Provide a fallback for older kernels. */
@@ -287,13 +289,13 @@ static int pci_model_probe(struct pci_dev *pci_dev,const struct pci_device_id *p
                 bar_info->phys_addr=phys_addr;
                 bar_info->size=size;
                 bar_info->mmio=mmio;
+                /* FIX: only increment bar_count on successful ioremap */
+                pci_cxt->bar_count++;
                 mesg_debug("%s ioremap %08x size %x to %p\n",__func__,phys_addr,size,mmio);
             }else
             {
                 mesg_err("%s ioremap %08x size %x error\n",__func__,phys_addr,size);
             }
-            
-            pci_cxt->bar_count++;
         }
         
         sub_system = pci_get_subsystem(pci_dev);
@@ -313,9 +315,18 @@ static int pci_model_probe(struct pci_dev *pci_dev,const struct pci_device_id *p
     if(err!=NO_ERROR)
     {
         mesg_err("%s error %d\n",__func__,err);
-        printk("pci_model_probe fail\n");
+        printk(KERN_ERR "pci_model_probe fail\n");
         switch(err)
         {      
+            case ERROR_REQUEST_IRQ:
+                /* FIX: clean up IRQ vectors allocated before the failure */
+                pci_free_irq_vectors(pci_dev);
+                // fall through
+            case ERROR_SET_DMA_MASK:
+            case ERROR_ENABLE_MSI:
+                /* FIX: undo pci_set_master and pci_enable_device on these paths */
+                pci_clear_master(pci_dev);
+                pci_disable_device(pci_dev);
             case ERROR_REQUEST_REGIONS:
                 pci_clear_master(pci_dev);
                 pci_disable_device(pci_dev);
@@ -444,9 +455,15 @@ static int pci_model_resume(struct pci_dev *pci_dev)
                             pci_name(pci_dev), pci_cxt) < 0)
             {
                 pci_free_irq_vectors(pci_dev);
+                /* FIX: disable and clear PCI device before returning on failure */
+                pci_disable_device(pci_dev);
+                pci_clear_master(pci_dev);
                 return -1;
             }
         } else {
+            /* FIX: disable and clear PCI device before returning on failure */
+            pci_disable_device(pci_dev);
+            pci_clear_master(pci_dev);
             return -1;
         }
     }

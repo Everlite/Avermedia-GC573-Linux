@@ -16,6 +16,8 @@
 #include <linux/io.h>
 #include <linux/videodev2.h>
 #include <linux/string.h>
+#include <linux/slab.h>
+#include <linux/errno.h>
 #include "board.h"
 #include "cxt_mgr.h"
 #include "framegrabber.h"
@@ -30,8 +32,6 @@
 #include "ite6805.h"
 #include "board_alsa.h"
 #include "board_i2c.h"
-
-static int cnt_retry=0;
 
 /* Module parameter: force HDMI input format override.
  * 0 = Auto-detect from ITE6805 (default)
@@ -57,6 +57,16 @@ module_param(debug_pixel_format, int, 0644);
 MODULE_PARM_DESC(debug_pixel_format,
     "Debug: Force FPGA pixel format: -1=auto, 0=YUYV, 1=UYVY, 2=YVYU, 3=VYUY, 4=RGBP, 5=RGBR, 6=RGBO, 7=RGBQ, 8=RGB3, 9=BGR3, 10=RGB4, 11=BGR4");
 
+/* Module parameter: auto-test byte order on stream_on.
+ * When enabled, cycles through all 4 YUV422 byte orders (0=YUYV,1=UYVY,2=YVYU,3=VYUY)
+ * and dumps the first pixels of each to help identify the correct format.
+ * Usage: sudo insmod cx511h.ko auto_test_byteorder=1
+ */
+static int auto_test_byteorder = 0;
+module_param(auto_test_byteorder, int, 0644);
+MODULE_PARM_DESC(auto_test_byteorder,
+    "Auto-test: cycle through byte orders 0-3 on stream_on and dump first pixels");
+
 /*
  * Set LED color via FPGA GPIO pins.
  * r, g, b: 0=off, 1=on for each color channel.
@@ -67,6 +77,10 @@ static void cx511h_set_led_color(handle_t aver_xilinx_handle, int r, int g, int 
     int pin_r = board_get_led_pin_r();
     int pin_g = board_get_led_pin_g();
     int pin_b = board_get_led_pin_b();
+
+    /* FIX: guard against NULL handle to prevent NULL pointer dereference */
+    if (!aver_xilinx_handle)
+        return;
 
     if (pin_r >= 0 && pin_r <= 8)
         aver_xilinx_set_gpio_output(aver_xilinx_handle, pin_r, r ? 1 : 0);
@@ -92,6 +106,7 @@ typedef struct
         int cur_bchs_selection;
         task_handle_t check_signal_task_handle;
         int board_id;
+        int cnt_retry;
 }board_v4l2_context_t;
 
 static board_chip_desc_t cl511h_chip_desc[CL511H_I2C_CHIP_COUNT]=
@@ -225,8 +240,11 @@ static void board_v4l2_release(void *cxt)
                 task_model_release_task(board_v4l2_cxt->task_model_handle,board_v4l2_cxt->check_signal_task_handle);
                 board_v4l2_cxt->check_signal_task_handle=NULL;
             }
-            cxt_manager_unref_context(board_v4l2_cxt->task_model_handle);
-            cxt_manager_unref_context(board_v4l2_cxt->aver_xilinx_handle);
+            /* FIX: NULL-check each handle before unreffing */
+            if (board_v4l2_cxt->task_model_handle)
+                cxt_manager_unref_context(board_v4l2_cxt->task_model_handle);
+            if (board_v4l2_cxt->aver_xilinx_handle)
+                cxt_manager_unref_context(board_v4l2_cxt->aver_xilinx_handle);
             mem_model_free_buffer(board_v4l2_cxt);
 	}
 }
@@ -250,6 +268,111 @@ static void cx511h_v4l2_stream_off(v4l2_model_callback_parameter_t *cb_info)
     debug_msg("%s %p\n",__func__,board_v4l2_cxt);
     
 }
+/* Helper: resolve PCI handle with fallback chain (used by pixel debug).
+ * Returns NULL if no handle can be found. */
+static handle_t get_pci_handle_cached(board_v4l2_context_t *cxt)
+{
+    handle_t pci_handle = NULL;
+    cxt_mgr_handle_t cxt_mgr;
+
+    cxt_mgr = get_cxt_manager_from_context(cxt);
+    if (cxt_mgr)
+        pci_handle = pci_model_get_handle(cxt_mgr);
+    if (!pci_handle && cxt->pci_handle)
+        pci_handle = cxt->pci_handle;
+    if (!pci_handle && cxt_mgr)
+        pci_handle = cxt_manager_get_context(cxt_mgr, PCI_CXT_ID, 0);
+    return pci_handle;
+}
+
+/* Return human-readable name for a pixel_format value (0-3). */
+static const char *pixel_format_name(int fmt)
+{
+    switch (fmt) {
+    case 0: return "YUYV";
+    case 1: return "UYVY";
+    case 2: return "YVYU";
+    case 3: return "VYUY";
+    default: return "???";
+    }
+}
+
+/* Decode a packed UYVY/YUYV/YVYU/VYUY byte tuple into (Y, U, V) depending
+ * on the byte-order interpretation.  'order' is 0=YUYV,1=UYVY,2=YVYU,3=VYUY.
+ * Returns U=0,V=0 if the decode makes no sense (for the caller to decide). */
+static void decode_pixel(const u8 *b, int order, u8 *y, u8 *u, u8 *v)
+{
+    /* The 4 bytes are organized as two 16-bit macro-pixels. */
+    switch (order) {
+    case 0: /* YUYV */  *y=b[0]; *u=b[1]; *v=b[3]; break;
+    case 1: /* UYVY */  *u=b[0]; *y=b[1]; *v=b[2]; break;
+    case 2: /* YVYU */  *y=b[0]; *v=b[1]; *u=b[3]; break;
+    case 3: /* VYUY */  *v=b[0]; *y=b[1]; *u=b[2]; break;
+    default:            *y=0;   *u=0;   *v=0;   break;
+    }
+}
+
+/* Dump the first 64 bytes from the DMA buffer in hex groups of 4.
+ * Also decode pixel 0 and pixel 1 under the given byte-order interpretation.
+ * Returns TRUE if the first pixel appears non-grey according to the
+ * heuristic: Y between 0x20-0xE0 AND (U != 0x80 OR V != 0x80). */
+static int dump_first_pixels(handle_t pci_handle, u32 dma_phys_addr,
+                             int fmt, int *out_likely_correct)
+{
+    int i;
+    u8 buf[64];
+    const char *fname = pixel_format_name(fmt);
+
+    *out_likely_correct = 0;
+
+    /* Read 16 consecutive u32 values from the DMA buffer via MMIO.
+     * We poke at the physical address 4 bytes at a time.
+     * This works because the PCIe BAR mapping gives the kernel access
+     * to the FPGA-side bus address space. */
+    for (i = 0; i < 16; i++) {
+        u32 val = pci_model_mmio_read(pci_handle, 0, dma_phys_addr + (u32)(i * 4));
+        buf[i*4 + 0] = (u8)(val & 0xff);
+        buf[i*4 + 1] = (u8)((val >> 8) & 0xff);
+        buf[i*4 + 2] = (u8)((val >> 16) & 0xff);
+        buf[i*4 + 3] = (u8)((val >> 24) & 0xff);
+    }
+
+    /* Group 1: hex dump in groups of 4 bytes */
+    printk(KERN_ERR "[cx511h-pixfmt] Format %d (%s) - first 64 bytes (hex):\n",
+           fmt, fname);
+    for (i = 0; i < 64; i += 4) {
+        printk(KERN_ERR "[cx511h-pixfmt]   [%02d-%02d] %02x %02x %02x %02x\n",
+               i, i+3, buf[i], buf[i+1], buf[i+2], buf[i+3]);
+    }
+
+    /* Group 2: decode pixel 0 and pixel 1 */
+    {
+        u8 y0, u0, v0, y1, u1, v1;
+        decode_pixel(&buf[0], fmt, &y0, &u0, &v0);
+        decode_pixel(&buf[2], fmt, &y1, &u1, &v1);
+        printk(KERN_ERR "[cx511h-pixfmt] Format %d (%s) decoded:\n", fmt, fname);
+        printk(KERN_ERR "[cx511h-pixfmt]   Px0: Y=0x%02x U=0x%02x V=0x%02x\n",
+               y0, u0, v0);
+        printk(KERN_ERR "[cx511h-pixfmt]   Px1: Y=0x%02x U=0x%02x V=0x%02x\n",
+               y1, u1, v1);
+
+        /* Feature 3: known-color heuristic */
+        if (y0 >= 0x20 && y0 <= 0xE0 && (u0 != 0x80 || v0 != 0x80)) {
+            *out_likely_correct = 1;
+            printk(KERN_ERR "[cx511h-color] Format %d (%s) appears CORRECT "
+                   "(non-grey color detected: Y=0x%02x U=0x%02x V=0x%02x)\n",
+                   fmt, fname, y0, u0, v0);
+        } else {
+            printk(KERN_ERR "[cx511h-color] Format %d (%s) appears WRONG "
+                   "(Y=0x%02x U=0x%02x V=0x%02x -> %s)\n",
+                   fmt, fname, y0, u0, v0,
+                   (y0 < 0x20 || y0 > 0xE0) ? "Y out of range" : "grey");
+        }
+    }
+
+    return *out_likely_correct;
+}
+
 static void cx511h_stream_on(framegrabber_handle_t handle)
 {
     board_v4l2_context_t *board_v4l2_cxt=framegrabber_get_data(handle);
@@ -272,34 +395,53 @@ static void cx511h_stream_on(framegrabber_handle_t handle)
 
     printk(KERN_ERR "[cx511h-ttl] === STREAM ON START ===\n");
 
+    /* TTL PIXEL MODE (Single/SDR Sync) — SKIPPED to avoid I2C deadlock.
+     * The ITE6805 blob's hdmirxwr() hangs on register 0xc0 (I2C bus lock).
+     * These are power-on defaults for Single/SDR and don't need reconfiguration.
+     * Uncomment if byte-order testing requires TTL mode changes. */
+    printk(KERN_ERR "[cx511h-ttl] SKIPPING TTL config (I2C deadlock workaround)\n");
+    goto skip_ttl_config;
+
     /* TRUE TTL PIXEL MODE (Single/SDR Sync) 
      * Aligning HDMI receiver TTL bus with the forced FPGA/V4L2 YUYV path. 
      * MUST BE DONE AT THE VERY START! */
     printk(KERN_ERR "[cx511h-ttl] Configuring TTL Pixel Mode (Single/SDR)...\n");
 
     // 1. Reset TTL Interface
+    printk(KERN_ERR "[cx511h-ttl] Step 1/5: Reset TTL (0xc0=0x00)...\n");
     hdmirxwr(ite6805_handle, 0xc0, 0x00);
+    printk(KERN_ERR "[cx511h-ttl] Step 1/5: done\n");
     msleep(10);
 
     // 2. Base Mode (Single Pixel / SDR - Bits [2:1] = 10)
+    printk(KERN_ERR "[cx511h-ttl] Step 2/5: Base Mode (0xc0=0x02)...\n");
     hdmirxwr(ite6805_handle, 0xc0, 0x02);
+    printk(KERN_ERR "[cx511h-ttl] Step 2/5: done\n");
     msleep(10);
 
     // 3. Lane/DDR Config (Standard SDR)
+    printk(KERN_ERR "[cx511h-ttl] Step 3/5: Lane Config (0xc1=0x00)...\n");
     hdmirxwr(ite6805_handle, 0xc1, 0x00);
+    printk(KERN_ERR "[cx511h-ttl] Step 3/5: done, Reverted to 0xc0=0x02, 0xc1=0x00\n");
     msleep(10);
-    printk(KERN_ERR "[cx511h-ttl] Reverted to: 0xc0=0x02, 0xc1=0x00\n");
 
     // 4. Pixel Mode Enumeration (Auto detection flags)
+    printk(KERN_ERR "[cx511h-ttl] Step 4/5: Pixel Mode Enum (0xbd=0x00)...\n");
     hdmirxwr(ite6805_handle, 0xbd, 0x00);
+    printk(KERN_ERR "[cx511h-ttl] Step 4/5a: done, now 0xbe=0x00...\n");
     hdmirxwr(ite6805_handle, 0xbe, 0x00);
+    printk(KERN_ERR "[cx511h-ttl] Step 4/5b: done\n");
     msleep(10);
 
     // 5. DDR Flag (Disabled for SDR)
+    printk(KERN_ERR "[cx511h-ttl] Step 5/5: DDR Flag (0xc4=0x00)...\n");
     hdmirxwr(ite6805_handle, 0xc4, 0x00);
+    printk(KERN_ERR "[cx511h-ttl] Step 5/5: done\n");
     msleep(10);
     
     printk(KERN_ERR "[cx511h-ttl] TTL Pixel Mode (Single/SDR) sequence complete.\n");
+
+skip_ttl_config:
 
     //ite6805_get_hdcp_state(ite6805_handle, &hdcp_state);
     //ite6805_set_hdcp_state(ite6805_handle, hdcp_state);
@@ -478,9 +620,9 @@ static void cx511h_stream_on(framegrabber_handle_t handle)
 	
     //enable video bypass
     if (((vip_cfg.in_videoformat.vactive == 4096) && (vip_cfg.out_videoformat.width == 4096)
-       && (vip_cfg.out_videoformat.height == 2160) && (vip_cfg.out_videoformat.height == 2160)) || //4096x2160
+       && (vip_cfg.in_videoformat.hactive == 2160) && (vip_cfg.out_videoformat.height == 2160)) || //4096x2160
        ((vip_cfg.in_videoformat.vactive == 3840) && (vip_cfg.out_videoformat.width == 3840)
-       && (vip_cfg.out_videoformat.height == 2160) && (vip_cfg.out_videoformat.height == 2160)) || //3840x2160
+       && (vip_cfg.in_videoformat.hactive == 2160) && (vip_cfg.out_videoformat.height == 2160)) || //3840x2160
        ((vip_cfg.in_videoformat.vactive == 2560) && (vip_cfg.out_videoformat.width == 2560)  
        && (vip_cfg.in_videoformat.hactive == 1600) && (vip_cfg.out_videoformat.height == 1600)) || //2560x1600
        ((vip_cfg.in_videoformat.vactive == 2560) && (vip_cfg.out_videoformat.width == 2560) 
@@ -534,51 +676,23 @@ static void cx511h_stream_on(framegrabber_handle_t handle)
                pixfmt->name, pixfmt->pixfmt_out, pixfmt->fourcc);
     }
 
-    /* DEBUG 4: Video Unmute Sequence (from Windows Driver Analysis) */
+    /* DEBUG 4: Video Unmute Sequence (from Windows Driver Analysis)
+     * SKIPPED: hdmirxwr() I2C writes deadlock on ITE6805 during stream_on.
+     * Registers were already set in board_probe/init. */
     {
-        printk(KERN_ERR "[cx511h-hdmi] Starting Video UNMUTE sequence...\n");
-        hdmirxwr(ite6805_handle, 0x23, 0xb0);  // Unmute / Power Up stage
-        msleep(10);
-        hdmirxwr(ite6805_handle, 0x23, 0xa0);  // Prepare / Settle stage
-        msleep(10);
-        hdmirxwr(ite6805_handle, 0x23, 0x02);  // Enable Video stage
-        
-        printk(KERN_ERR "[cx511h-hdmi] Video UNMUTE sequence complete.\n");
+        printk(KERN_ERR "[cx511h-hdmi] SKIPPING Video UNMUTE (I2C deadlock workaround)\n");
     }
 
     // --- PHASE2 --- I2C Enable Sequence for Continuous Streaming
+    // SKIPPED: hdmirxwr() deadlocks. Registers set during init.
     {
-        printk(KERN_ERR "[cx511h-phase2] Enabling ITE68051 streaming registers...\n");
-        // Video Output Enable (Bit 6)
-        hdmirxwr(ite6805_handle, 0x20, 0x40);
-        msleep(5);
-        // Global Enable
-        hdmirxwr(ite6805_handle, 0x86, 0x01);
-        msleep(5);
-        // IRQ Enable
-        hdmirxwr(ite6805_handle, 0x90, 0x8f);
-        msleep(5);
-        // DMA Channel Enable (Channels 0-2)
-        hdmirxwr(ite6805_handle, 0xA0, 0x80);
-        hdmirxwr(ite6805_handle, 0xA1, 0x80);
-        hdmirxwr(ite6805_handle, 0xA2, 0x80);
-        msleep(5);
-        // DMA Enable
-        hdmirxwr(ite6805_handle, 0xA4, 0x08);
-        msleep(5);
-        // Buffer Enable
-        hdmirxwr(ite6805_handle, 0xB0, 0x01);
-        msleep(5);
-        printk(KERN_ERR "[cx511h-phase2] ITE68051 streaming registers enabled.\n");
+        printk(KERN_ERR "[cx511h-phase2] SKIPPING ITE68051 streaming regs (I2C deadlock workaround)\n");
     }
 
-    // --- PHASE2-FIX --- RX DeSkew Error Mitigation (reduce "RX DeSkew Error Interrupt")
+    // --- PHASE2-FIX --- RX DeSkew Error Mitigation
+    // SKIPPED: hdmirxwr() deadlocks.
     {
-        printk(KERN_ERR "[cx511h-phase2] Applying RX DeSkew Error Mitigation...\n");
-        hdmirxwr(ite6805_handle, 0x4A, 0x0F);  // Increase tolerance
-        hdmirxwr(ite6805_handle, 0x4B, 0x0F);  // Increase tolerance
-        msleep(5);
-        printk(KERN_ERR "[cx511h-phase2] RX DeSkew registers set to 0x0F\n");
+        printk(KERN_ERR "[cx511h-phase2] SKIPPING RX DeSkew (I2C deadlock workaround)\n");
     }
 
     printk(KERN_ERR "[cx511h-dma] stream_on: BEFORE aver_xilinx_config_video_process\n");
@@ -604,11 +718,9 @@ static void cx511h_stream_on(framegrabber_handle_t handle)
     aver_xilinx_config_video_process(board_v4l2_cxt->aver_xilinx_handle,&vip_cfg);
 
     // 6. Final CSC Sync (BT.709 Pass-through)
-    printk(KERN_ERR "[cx511h-color] Syncing ITE6805 CSC registers...\n");
-    hdmirxwr(ite6805_handle, 0x6b, 0x02);  // Input: YUV422
-    hdmirxwr(ite6805_handle, 0x6c, 0x02);  // CSC: BT.709
-    hdmirxwr(ite6805_handle, 0x6e, 0x01);  // Output: YUV422
-    hdmirxwr(ite6805_handle, 0x2a, 0x3a);  // AVI InfoFrame: YUV (BT.709)
+    // SKIPPED: hdmirxwr() deadlocks. Registers already set in init.
+    printk(KERN_ERR "[cx511h-color] SKIPPING ITE6805 CSC sync (I2C deadlock workaround)\n");
+    // hdmirxwr calls removed: 0x6b, 0x6c, 0x6e, 0x2a
 
     // --- CSC-FIX --- FPGA CSC Configuration (MMIO 0x1040) - Dynamic based on input format
     // Based on Windows driver analysis:
@@ -710,6 +822,102 @@ static void cx511h_stream_on(framegrabber_handle_t handle)
     printk(KERN_ERR "[cx511h-dma] stream_on: config done, settling 200ms...\n");
     msleep(200);
 
+    /* ==================================================================
+     * PIXEL FORMAT DEBUG: auto-test loop or single first-frame dump
+     * ==================================================================
+     * The FPGA is now configured but streaming is NOT yet enabled.
+     * The DMA descriptor list has been populated (buffer_prepare) so the
+     * first buffer address is already programmed into the FPGA.
+     * We can read raw pixel data from the DMA buffer via MMIO to
+     * determine the correct byte order.
+     * ================================================================== */
+    {
+        handle_t pci_handle = get_pci_handle_cached(board_v4l2_cxt);
+        u32 dma_base = 0;
+        int have_dma = 0;
+
+        /* Try to read the DMA buffer base address from MMIO 0x308.
+         * This register holds the physical address of the current
+         * descriptor buffer programmed by the FPGA blob. */
+        if (pci_handle) {
+            dma_base = pci_model_mmio_read(pci_handle, 0, 0x308);
+            printk(KERN_ERR "[cx511h-pixfmt] DMA buffer base from MMIO 0x308: 0x%08x\n",
+                   dma_base);
+            if (dma_base != 0 && dma_base != 0xFFFFFFFF) {
+                have_dma = 1;
+            } else {
+                printk(KERN_ERR "[cx511h-pixfmt] DMA base at 0x308 is invalid, "
+                       "pixel dump skipped\n");
+            }
+        } else {
+            printk(KERN_ERR "[cx511h-pixfmt] No PCI handle, pixel dump skipped\n");
+        }
+
+        /* === FEATURE 2: Auto-test byte order loop === */
+        if (auto_test_byteorder && have_dma) {
+            int test_fmt;
+            int results[4] = {0, 0, 0, 0};
+
+            printk(KERN_ERR "[cx511h-pixfmt] ===== AUTO-TEST BYTE ORDER START =====\n");
+            printk(KERN_ERR "[cx511h-pixfmt] Cycling through formats 0-3...\n");
+
+            for (test_fmt = 0; test_fmt <= 3; test_fmt++) {
+                int likely = 0;
+
+                printk(KERN_ERR "[cx511h-pixfmt] --- Testing format %d (%s) ---\n",
+                       test_fmt, pixel_format_name(test_fmt));
+
+                /* Re-program FPGA with this byte order */
+                vip_cfg.pixel_format = test_fmt;
+                aver_xilinx_config_video_process(
+                    board_v4l2_cxt->aver_xilinx_handle, &vip_cfg);
+
+                /* Wait for FPGA to settle with new config */
+                msleep(500);
+
+                /* Read the DMA buffer and dump pixels */
+                results[test_fmt] = dump_first_pixels(pci_handle, dma_base,
+                                                      test_fmt, &likely);
+            }
+
+            /* Print summary table */
+            printk(KERN_ERR "[cx511h-pixfmt] ===== AUTO-TEST SUMMARY =====\n");
+            for (test_fmt = 0; test_fmt <= 3; test_fmt++) {
+                printk(KERN_ERR "[cx511h-pixfmt]   Format %d (%s): %s\n",
+                       test_fmt, pixel_format_name(test_fmt),
+                       results[test_fmt] ? "LIKELY CORRECT" : "likely wrong");
+            }
+            printk(KERN_ERR "[cx511h-pixfmt] ===== AUTO-TEST COMPLETE =====\n");
+
+            /* Restore the original pixel_format setting for normal streaming.
+             * Re-run config with the original value. */
+            /* (vip_cfg still has the original fields; just pixel_format was
+             *  overwritten. Restore it from the earlier block.) */
+            if (debug_pixel_format >= 0)
+                vip_cfg.pixel_format = debug_pixel_format;
+            else if (pixfmt->is_yuv)
+                vip_cfg.pixel_format = AVER_XILINX_FMT_UYVY;
+            else
+                vip_cfg.pixel_format = pixfmt->pixfmt_out;
+            aver_xilinx_config_video_process(
+                board_v4l2_cxt->aver_xilinx_handle, &vip_cfg);
+            msleep(200);
+        }
+        /* === FEATURE 1: Single first-frame pixel dump (ONCE per stream_on) === */
+        else if (debug_pixel_format >= 0 && have_dma) {
+            static BOOL_T first_frame_dumped = FALSE;
+            int likely = 0;
+
+            if (!first_frame_dumped) {
+                first_frame_dumped = TRUE;
+                printk(KERN_ERR "[cx511h-pixfmt] ===== FIRST-FRAME PIXEL DUMP =====\n");
+                dump_first_pixels(pci_handle, dma_base, vip_cfg.pixel_format,
+                                 &likely);
+                printk(KERN_ERR "[cx511h-pixfmt] ===== FIRST-FRAME DUMP COMPLETE =====\n");
+            }
+        }
+    }
+
     /* Flush all printk messages to the log buffer so they survive a crash */
     printk(KERN_ERR "[cx511h-dma] stream_on: >>> ENABLING STREAMING NOW <<<\n");
 
@@ -771,24 +979,14 @@ static void cx511h_stream_off(framegrabber_handle_t handle)
 
 static int cx511h_flash_dump(framegrabber_handle_t handle,int start_block, int blocks, U8_T *flash_dump) //
 {
-	board_v4l2_context_t *board_v4l2_cxt=framegrabber_get_data(handle);
-	//char version[10];
-	int ret=0;
-		
-    //ret = aver_xilinx_flash_dump(board_v4l2_cxt->aver_xilinx_handle,start_block,blocks,flash_dump);
-    
-    return ret;
+	/* FIX: Not implemented */
+	return -ENOSYS;
 }
 
 static int cx511h_flash_update(framegrabber_handle_t handle,int start_block, int blocks, U8_T *flash_update)
 {
-	board_v4l2_context_t *board_v4l2_cxt=framegrabber_get_data(handle);
-	//char version[10];
-	int ret=0;
-	
-    //ret = aver_xilinx_flash_update(board_v4l2_cxt->aver_xilinx_handle,start_block,blocks,flash_update);
-    
-    return ret;
+	/* FIX: Not implemented */
+	return -ENOSYS;
 }
 
 static void cx511h_brightness_read(framegrabber_handle_t handle,int *brightness)
@@ -846,26 +1044,19 @@ static void cx511h_saturation_read(framegrabber_handle_t handle,int *saturation)
 	debug_msg("%s get saturation=%x\n",__func__,board_v4l2_cxt->cur_bchs_value);
 }
 
+/* BCHS (brightness/contrast/hue/saturation) not implemented */
 static void cx511h_bchs_write(framegrabber_handle_t handle)
 {
-//	board_v4l2_context_t *board_v4l2_cxt=framegrabber_get_data(handle);
-	//handle_t ite6805_handle=board_v4l2_cxt->i2c_chip_handle[CL511H_I2C_CHIP_ITE6805_0]; 
-   
 	int bchs_value = handle->fg_bchs_value;
 	int bchs_select = handle->fg_bchs_selection;	
-		
-	
-	//debug_msg("%s...bchs_select=%d\n",__func__,bchs_select);
-		
-	{
-		//framegrabber_s_input_bchs(board_v4l2_cxt->fg_handle,board_v4l2_cxt->cur_bchs_value,board_v4l2_cxt->cur_bchs_selection);
-		//ite6805_set_bchs(ite6805_handle,&bchs_value,&bchs_select); 
-        //aver_xilinx_set_bchs(board_v4l2_cxt->aver_xilinx_handle,bchs_value,bchs_select); 
-		if (bchs_select ==0) debug_msg("set brightness=%d\n",bchs_value);
-		if (bchs_select ==1) debug_msg("set contrast=%d\n",bchs_value);
-		if (bchs_select ==2) debug_msg("set hue=%d\n",bchs_value);
-		if (bchs_select ==3) debug_msg("set saturation=%d\n",bchs_value);
-	}
+
+	printk(KERN_WARNING "cx511h_bchs_write: BCHS not implemented (select=%d, value=%d)\n",
+	       bchs_select, bchs_value);
+
+	if (bchs_select ==0) debug_msg("set brightness=%d\n",bchs_value);
+	if (bchs_select ==1) debug_msg("set contrast=%d\n",bchs_value);
+	if (bchs_select ==2) debug_msg("set hue=%d\n",bchs_value);
+	if (bchs_select ==3) debug_msg("set saturation=%d\n",bchs_value);
 }
 
 static void cx511h_hdcp_state_read(framegrabber_handle_t handle,int *hdcp_state)
@@ -886,7 +1077,7 @@ static int cx511h_i2c_read(framegrabber_handle_t handle, unsigned char channel, 
 {
     board_v4l2_context_t *board_v4l2_cxt = framegrabber_get_data(handle);
     i2c_model_handle_t i2c_mgr = board_v4l2_cxt->i2c_model_handle;
-    cxt_mgr_handle_t cxt_mgr = cxt_mgr=get_cxt_manager_from_context(i2c_mgr);
+    cxt_mgr_handle_t cxt_mgr = get_cxt_manager_from_context(i2c_mgr);
 
     return board_i2c_read(cxt_mgr, channel, slave, sub, data, datalen);
 }
@@ -895,7 +1086,7 @@ static int cx511h_i2c_write(framegrabber_handle_t handle, unsigned char channel,
 {
     board_v4l2_context_t *board_v4l2_cxt = framegrabber_get_data(handle);
     i2c_model_handle_t i2c_mgr = board_v4l2_cxt->i2c_model_handle;
-    cxt_mgr_handle_t cxt_mgr = cxt_mgr=get_cxt_manager_from_context(i2c_mgr);
+    cxt_mgr_handle_t cxt_mgr = get_cxt_manager_from_context(i2c_mgr);
 
     return board_i2c_write(cxt_mgr, channel, slave, sub, data, datalen);
 }
@@ -920,7 +1111,6 @@ static int cx511h_reg_write(framegrabber_handle_t handle, unsigned int offset, u
     if (offset == 0 && data == 0)
     {
         //stop task
-        board_v4l2_context_t *board_v4l2_cxt=framegrabber_get_data(handle);
         handle_t ite6805_handle=board_v4l2_cxt->i2c_chip_handle[CL511H_I2C_CHIP_ITE6805_0];
 
         ite6805_power_off(ite6805_handle);
@@ -930,7 +1120,6 @@ static int cx511h_reg_write(framegrabber_handle_t handle, unsigned int offset, u
     else if (offset == 0 && data == 1)
     {
         //start task
-        board_v4l2_context_t *board_v4l2_cxt=framegrabber_get_data(handle);
         handle_t ite6805_handle=board_v4l2_cxt->i2c_chip_handle[CL511H_I2C_CHIP_ITE6805_0];
 
         ite6805_power_on(ite6805_handle);
@@ -949,55 +1138,44 @@ static void cx511h_video_buffer_done(void *data)
     board_v4l2_context_t *board_v4l2_cxt=data;
     cxt_mgr_handle_t cxt_mgr;
     handle_t pci_handle;
-    
+    static int frame_count = 0;
+
     //mesg("%s board_v4l2_cxt %p\n",__func__,board_v4l2_cxt);
     if(board_v4l2_cxt)
     {
         v4l2_model_buffer_done(board_v4l2_cxt->v4l2_handle);
-        
+
         // --- PHASE2 --- Doorbell and IRQ ACK for continuous streaming
-        printk(KERN_ERR "[cx511h-phase2] Debug: board_v4l2_cxt=%p\n", board_v4l2_cxt);
         cxt_mgr = get_cxt_manager_from_context(board_v4l2_cxt);
         pci_handle = NULL;
-        
+
         if (cxt_mgr) {
-            printk(KERN_ERR "[cx511h-phase2] Debug: cxt_mgr=%p\n", cxt_mgr);
             pci_handle = pci_model_get_handle(cxt_mgr);
-            if (pci_handle) {
-                printk(KERN_ERR "[cx511h-phase2] Debug: pci_handle from pci_model_get_handle=%p\n", pci_handle);
-            } else {
-                printk(KERN_ERR "[cx511h-phase2] Debug: pci_model_get_handle returned NULL\n");
-            }
-        } else {
-            printk(KERN_ERR "[cx511h-phase2] Debug: cxt_mgr is NULL\n");
         }
-        
+
         // Fallback: use stored pci_handle from board context
         if (!pci_handle && board_v4l2_cxt->pci_handle) {
             pci_handle = board_v4l2_cxt->pci_handle;
-            printk(KERN_ERR "[cx511h-phase2] Debug: using stored pci_handle=%p\n", pci_handle);
         }
-        
+
         // If still NULL, try to get PCI handle via cxt_manager_get_context
         if (!pci_handle && cxt_mgr) {
             pci_handle = cxt_manager_get_context(cxt_mgr, PCI_CXT_ID, 0);
-            if (pci_handle) {
-                printk(KERN_ERR "[cx511h-phase2] Debug: pci_handle from cxt_manager_get_context=%p\n", pci_handle);
-            }
         }
-        
+
         // Write doorbell and IRQ ACK if we have a valid handle
         if (pci_handle) {
             // Doorbell: notify hardware next buffer is ready
             pci_model_mmio_write(pci_handle, 0, 0x304, 0x01);
-            
+
             // IRQ ACK: acknowledge interrupt after buffer done
             pci_model_mmio_write(pci_handle, 0, 0x10, 0x02);
             wmb(); // write memory barrier
-            
-            printk(KERN_ERR "[cx511h-phase2] Doorbell and IRQ ACK sent\n");
+
+            if (frame_count++ % 3600 == 0)  // Log once per minute at 60fps
+                printk(KERN_DEBUG "[cx511h-phase2] frames processed: %d\n", frame_count);
         } else {
-            printk(KERN_ERR "[cx511h-phase2] ERROR: No valid PCI handle, doorbell and IRQ ACK not sent!\n");
+            printk(KERN_ERR "[cx511h-phase2] ERROR: No valid PCI handle, doorbell/IRQ ACK not sent!\n");
         }
     }
 }
@@ -1102,9 +1280,9 @@ static void check_signal_stable_task(void *data)
     
     debug_msg("%s framegrabber size %dx%d\n",__func__,width,height);
     debug_msg("%s fpga detected size %dx%d\n",__func__,detected_frameinfo.width,detected_frameinfo.height);
-    if((((detected_frameinfo.width<320 || detected_frameinfo.height<240)) || (width !=/*detected_frameinfo.width*/dual_pixel_set)|| (height !=detected_frameinfo.height)) && (cnt_retry<3))
+    if((((detected_frameinfo.width<320 || detected_frameinfo.height<240)) || (width !=/*detected_frameinfo.width*/dual_pixel_set)|| (height !=detected_frameinfo.height)) && (board_v4l2_cxt->cnt_retry<3))
     {
-		cnt_retry++;
+		board_v4l2_cxt->cnt_retry++;
 		//debug_msg("%s retry...in %dx%d  get %dx%d\n",__func__,width,height,dual_pixel_set,detected_frameinfo.height); //test
         task_model_run_task_after(board_v4l2_cxt->task_model_handle,board_v4l2_cxt->check_signal_task_handle,100000);
         return;
@@ -1128,7 +1306,7 @@ static void check_signal_stable_task(void *data)
     {
 		debug_msg("%s fix input %dx%d to fpga %dx%d\n",__func__,width,height,detected_frameinfo.width,detected_frameinfo.height);
         framegrabber_mask_s_status(board_v4l2_cxt->fg_handle,FRAMEGRABBER_STATUS_SIGNAL_LOCKED_BIT,FRAMEGRABBER_STATUS_SIGNAL_LOCKED_BIT);
-        cnt_retry=0;
+        board_v4l2_cxt->cnt_retry=0;
     }else
     {
         debug_msg("%s adjust input %dx%d to fpga %dx%d\n",__func__,width,height,detected_frameinfo.width,detected_frameinfo.height);
@@ -1306,26 +1484,26 @@ void board_v4l2_init(cxt_mgr_handle_t cxt_mgr, int board_id)
     {
         if (!cxt_mgr)
         {
-            printk("board_v4l2_init: ERROR no cxt_mgr\n");
+            printk(KERN_ERR "board_v4l2_init: ERROR no cxt_mgr\n");
             err = BOARD_V4L2_ERROR_CXT_MGR;
             break;
         }
-        printk("board_v4l2_init: cxt_mgr ok\n");
+        printk(KERN_ERR "board_v4l2_init: cxt_mgr ok\n");
         
         // --- PHASE2 --- Get PCI handle for IRQ registration
         pci_handle = pci_model_get_handle(cxt_mgr);
         if (!pci_handle) {
-            printk("board_v4l2_init: WARNING no PCI handle, IRQ ACK may not work\n");
+            printk(KERN_ERR "board_v4l2_init: WARNING no PCI handle, IRQ ACK may not work\n");
         }
 
         framegrabber_handle = framegrabber_init(cxt_mgr, &cl511h_property, &cx511h_ops);
         if (framegrabber_handle == NULL)
         {
-            printk("board_v4l2_init: ERROR framegrabber_init failed\n");
+            printk(KERN_ERR "board_v4l2_init: ERROR framegrabber_init failed\n");
             err = BOARD_V4L2_ERROR_FRAMEGRABBER_INIT;
             break;
         }
-        printk("board_v4l2_init: framegrabber_init ok\n");
+        printk(KERN_ERR "board_v4l2_init: framegrabber_init ok\n");
         board_v4l2_cxt = cxt_manager_add_cxt(cxt_mgr, BOARD_V4L2_CXT_ID, board_v4l2_alloc, board_v4l2_release);
         if (!board_v4l2_cxt)
         {
@@ -1337,15 +1515,15 @@ void board_v4l2_init(cxt_mgr_handle_t cxt_mgr, int board_id)
         printk(KERN_ERR "[cx511h-phase2] Debug: stored pci_handle=%p to board context\n", pci_handle);
         framegrabber_set_data(framegrabber_handle,board_v4l2_cxt);
         
-        printk("board_v4l2_init: calling v4l2_model_init...\n");
+        printk(KERN_ERR "board_v4l2_init: calling v4l2_model_init...\n");
         v4l2_handle = v4l2_model_init(cxt_mgr, &device_info,framegrabber_handle);
         if(v4l2_handle==NULL)
 	    {
-            printk("board_v4l2_init: ERROR v4l2_model_init returned NULL\n");
+            printk(KERN_ERR "board_v4l2_init: ERROR v4l2_model_init returned NULL\n");
             err=BOARD_V4L2_ERROR_V4L2_MODEL_INIT;
 		    break;
 	    }
-        printk("board_v4l2_init: v4l2_model_init ok, handle=%p\n", v4l2_handle);
+        printk(KERN_ERR "board_v4l2_init: v4l2_model_init ok, handle=%p\n", v4l2_handle);
 	    board_v4l2_cxt->v4l2_handle=v4l2_handle;
         aver_xilinx_handle=cxt_manager_get_context(cxt_mgr,AVER_XILINX_CXT_ID,0);
 	    if(aver_xilinx_handle==NULL)
@@ -1418,7 +1596,7 @@ void board_v4l2_init(cxt_mgr_handle_t cxt_mgr, int board_id)
         default:
             break;
         }
-        printk("board_v4l2_init: FAILED with err=%d\n", err);
+        printk(KERN_ERR "board_v4l2_init: FAILED with err=%d\n", err);
         debug_msg("%s err %d\n", __func__, err);
     }
 }
