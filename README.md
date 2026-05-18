@@ -9,8 +9,8 @@ Modernized for recent kernels. **Experimental — development and testing only.*
 
 **Last aligned with code:** 2026-05-18 · **Phase 3** (color / byte-order validation)
 
-> [!IMPORTANT]
-> **Vendor blob required:** The driver links against `AverMediaLib_64.a` (place in the **repository root**, next to `driver/`). This file is **not shipped in git** — you must supply it locally (e.g. from an existing driver package) before building.
+> [!NOTE]
+> **Vendor blob:** The driver links against `AverMediaLib_64.a` in the **repository root** (~565 KB, tracked in git). The Makefile copies it into `driver/AverMediaLib_64.o` at build time. See Legal — redistribution of this precompiled archive may be restricted.
 
 > [!NOTE]
 > After every kernel upgrade, rebuild the module. `vermagic` must match `uname -r` (`modinfo cx511h`).
@@ -23,7 +23,7 @@ Modernized for recent kernels. **Experimental — development and testing only.*
 
 | Feature | Status | Description |
 |:---|:---:|:---|
-| **Build / Toolchain** | ⚠️ [CLANG] | Requires `LLVM=1 CC=clang`; GCC may fail on Clang-built kernels; needs local `AverMediaLib_64.a` |
+| **Build / Toolchain** | ⚠️ [CLANG] | Requires `LLVM=1 CC=clang`; GCC may fail on Clang-built kernels; uses `AverMediaLib_64.a` from repo root |
 | **Module Loading** | ✅ [OK] | `insmod.sh` loads deps + `driver/cx511h.ko`, restores audio if PipeWire blocked |
 | **Signal Detection** | 🟡 [PARTIAL] | HDMI lock via ITE6805 events; **4K inputs forced to 1080p** in software (`ITE6805_LOCK` handler) |
 | **IRQ / Interrupts** | ✅ [OK] | MSI with INTx fallback (`pci_model.c`) |
@@ -91,7 +91,7 @@ sudo insmod cx511h.ko force_input_mode=1
 
 - Kernel headers for **running** kernel (`/lib/modules/$(uname -r)/build`)
 - `base-devel`, `llvm`, `clang`
-- **`AverMediaLib_64.a`** in repository root (see note above)
+- **`AverMediaLib_64.a`** in repository root (included in clone)
 
 ### Build & Load
 
@@ -203,7 +203,7 @@ YUV422 from userspace is mapped to FPGA **UYVY** unless `debug_pixel_format` ove
 | Board | `driver/board/cx511h/board_alsa.c` | ALSA PCM |
 | Utils | `driver/utils/pci/pci_model.c` | PCI, MMIO, IRQ, DMA |
 | Utils | `driver/utils/v4l2/*.c` | V4L2, videobuf2, framegrabber |
-| Blob | `AverMediaLib_64.a` (local) | Vendor FPGA / ITE6805 logic |
+| Blob | `AverMediaLib_64.a` (repo root) | Precompiled vendor FPGA / ITE6805 logic |
 
 ### Build (`driver/Makefile`)
 
@@ -360,8 +360,8 @@ dmesg | grep -iE 'cx511h-csc|cx511h-phase2|cx511h-color|cx511h-dma|cx511h-pixfmt
 # Module parameters (from driver/)
 cd driver && sudo rmmod cx511h 2>/dev/null; sudo insmod cx511h.ko debug_pixel_format=1
 
-# Force input colorspace interpretation
-sudo insmod cx511h.ko force_input_mode=1
+# Force input colorspace interpretation (from driver/)
+cd driver && sudo rmmod cx511h 2>/dev/null; sudo insmod cx511h.ko force_input_mode=1
 
 # ffplay format sweep (safe)
 for fmt in uyvy422 yuyv422 yvyu422 vyuy422; do
