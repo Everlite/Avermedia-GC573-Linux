@@ -4,65 +4,76 @@
 [![AI-Assisted](https://img.shields.io/badge/AI-assisted-blue.svg)](https://github.com/Everlite/Avermedia-GC573-Linux#reverse-engineering-methods)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE.md)
 
-Community-maintained, AI-assisted, heavily patched Linux driver for the AVerMedia GC573.
-Modernized for recent kernels. Experimental — for development and testing only.
+Community-maintained, AI-assisted, heavily patched Linux driver for the AVerMedia GC573 (PCI `1461:0054`, subsystem `1461:5730`).
+Modernized for recent kernels. **Experimental — development and testing only.**
+
+**Last aligned with code:** 2026-05-18 · **Phase 3** (color / byte-order validation)
+
+> [!IMPORTANT]
+> **Vendor blob required:** The driver links against `AverMediaLib_64.a` (place in the **repository root**, next to `driver/`). This file is **not shipped in git** — you must supply it locally (e.g. from an existing driver package) before building.
 
 > [!NOTE]
-> Links against the precompiled vendor blob `AverMediaLib_64.a` for low-level FPGA/ITE6805 logic.
+> After every kernel upgrade, rebuild the module. `vermagic` must match `uname -r` (`modinfo cx511h`).
 
 ---
 
 ## Status: [EXPERIMENTAL] / ALPHA
 
-**Kernel Compatibility:** Builds and runs on **Kernel 6.19.10+** (CachyOS / Arch / Gentoo).
-Kernel 7.0.1 requires rebuild — current `.ko` has `vermagic: 6.19.10`.
+**Kernel compatibility:** Builds and runs on **6.19.x–7.x** with matching headers (tested on CachyOS / Arch-style Clang kernels). There is no portable prebuilt `.ko` in the repo — always run `./build.sh LLVM=1 CC=clang` on the machine (and kernel) you use.
 
 | Feature | Status | Description |
 |:---|:---:|:---|
-| **Build / Toolchain** | ⚠️ [CLANG] | Requires `LLVM=1 CC=clang`; GCC may fail on Clang-built kernels |
-| **Module Loading** | ✅ [OK] | insmod.sh with audio service restoration |
-| **Signal Detection** | ✅ [OK] | Forced 1080p EDID handshake |
-| **IRQ / Interrupts** | ✅ [OK] | MSI with INTx fallback |
-| **System Stability** | ✅ [OK] | I2C deadlock workaround, PCI handle fallback, smart unload.sh |
-| **DMA Transfer** | ✅ [OK] | 60fps continuous streaming via doorbell (MMIO 0x304) + IRQ ACK (MMIO 0x10) |
-| **Capture Content** | 🟡 [COLOR] | Streaming works, FPGA CSC active (MMIO 0x1040), I2C path disabled, byte-order testing needed |
-| **Driver Unload** | ✅ [OK] | 3-stage unload.sh (rmmod → PCI unbind → force), audio restored |
-| **Audio Capture** | ✅ [OK] | HDMI audio via ALSA (S16_LE/S24_LE, 32–192 kHz, 1 channel) |
-| **General Use** | ❌ [NO] | Development/testing only — NOT FOR DAILY USE |
+| **Build / Toolchain** | ⚠️ [CLANG] | Requires `LLVM=1 CC=clang`; GCC may fail on Clang-built kernels; needs local `AverMediaLib_64.a` |
+| **Module Loading** | ✅ [OK] | `insmod.sh` loads deps + `driver/cx511h.ko`, restores audio if PipeWire blocked |
+| **Signal Detection** | 🟡 [PARTIAL] | HDMI lock via ITE6805 events; **4K inputs forced to 1080p** in software (`ITE6805_LOCK` handler) |
+| **IRQ / Interrupts** | ✅ [OK] | MSI with INTx fallback (`pci_model.c`) |
+| **System Stability** | 🟡 [WORKAROUND] | Stable when avoiding I2C **writes**; `hdmirxwr()` during stream can still freeze |
+| **DMA Transfer** | ✅ [OK] | Continuous streaming: doorbell MMIO `0x304` + IRQ ACK MMIO `0x10` per buffer |
+| **Capture Content** | 🟡 [UNVERIFIED] | DMA path active; correct colors need **frame dump + format check** (see Debugging) |
+| **Driver Unload** | ✅ [OK] | `unload.sh`: rmmod → PCI unbind → `rmmod -f`; audio services restored |
+| **Audio Capture** | ✅ [OK] | ALSA `AVerMedia CL511H`: S16_LE/S24_LE, 32–192 kHz, **2 channels** |
+| **General Use** | ❌ [NO] | Not for daily use / production |
 
 ### Development Phases
 
 | Phase | Status | Description |
 |:---|:---:|:---|
-| **Phase 1** (Reverse Engineering) | ✅ COMPLETE | Builds on modern kernels, module loads, hardware bring-up |
-| **Phase 2** (Continuous Streaming) | 🟡 COMPLETE* | DMA/IRQ/Doorbell working at 60fps, but I2C path disabled (deadlock workaround) |
-| **Phase 3** (Color Correction) | 🟡 IN PROGRESS | FPGA CSC active, byte-order testing pending |
-| **Phase 4** (Production Ready) | ⏳ PENDING | Robust start/stop, suspend/resume, OBS/GStreamer support |
+| **Phase 1** (Reverse Engineering) | ✅ COMPLETE | Builds on modern kernels, probe, FPGA/ITE6805 bring-up |
+| **Phase 2** (Continuous Streaming) | 🟡 COMPLETE* | DMA/IRQ/doorbell at 60 fps; **all I2C writes in `stream_on` skipped** |
+| **Phase 3** (Color Correction) | 🟡 IN PROGRESS | FPGA CSC (MMIO `0x1040`); byte-order / `vip_cfg` validation open |
+| **Phase 4** (Production Ready) | ⏳ PENDING | Robust PM, OBS/GStreamer, fixed test scripts, no I2C deadlock |
 
-> \*Phase 2: Streaming works end-to-end, but **all I2C write operations are skipped** due to bus deadlock.
-> The FPGA MMIO path (registers 0x10, 0x304, 0x1040) handles streaming control instead.
+> \*Phase 2: End-to-end streaming uses the **FPGA MMIO path** only (`0x10`, `0x304`, `0x1040`). ITE6805 register writes that the Windows driver performs in `stream_on` are disabled.
 
 ---
 
 ## Module Parameters
+
+Load from `driver/` (or pass parameters to `insmod`):
+
+```bash
+cd driver
+sudo insmod cx511h.ko force_input_mode=1
+# Runtime: echo 1 | sudo tee /sys/module/cx511h/parameters/force_input_mode
+```
 
 ### From `board_v4l2.c`
 
 | Parameter | Type | Default | Description |
 |:---|:---:|:---:|:---|
 | `force_input_mode` | int | 0 | 0=Auto, 1=YUV422 BT.709, 2=YUV444 BT.709, 3=RGB Full, 4=RGB Limited |
-| `debug_pixel_format` | int | -1 | -1=Auto, 0=YUYV, 1=UYVY, 2=YVYU, 3=VYUY, 4–11=RGB variants |
-| `auto_test_byteorder` | int | 0 | 1=Cycle through formats 0-3 on stream_on, dump first 64 bytes each |
+| `debug_pixel_format` | int | -1 | -1=Auto; 0–3=YUYV/UYVY/YVYU/VYUY; 4–11=RGB variants (see `aver_xilinx.h`) |
+| `auto_test_byteorder` | int | 0 | 1=On `stream_on`, cycle YUV byte orders 0–3 and log first pixels (see Known Issue #11) |
 
 ### From `board_config.c`
 
 | Parameter | Type | Default | Description |
 |:---|:---:|:---:|:---|
-| `no_signal_pic` | charp | NULL | Bitmap shown when no input signal |
-| `copy_protetion_pic` | charp | NULL | Bitmap shown for copy-protected content |
-| `led_pin_r` | int | 3 | GPIO pin for red LED (-1=disabled) |
-| `led_pin_g` | int | 4 | GPIO pin for green LED (-1=disabled) |
-| `led_pin_b` | int | 5 | GPIO pin for blue LED (-1=disabled) |
+| `no_signal_pic` | charp | NULL | Bitmap when no input signal |
+| `copy_protetion_pic` | charp | NULL | Bitmap for copy-protected content (typo preserved in symbol name) |
+| `led_pin_r` | int | 3 | Red LED GPIO (-1=disabled) |
+| `led_pin_g` | int | 4 | Green LED GPIO (-1=disabled) |
+| `led_pin_b` | int | 5 | Blue LED GPIO (-1=disabled) |
 
 ---
 
@@ -71,177 +82,166 @@ Kernel 7.0.1 requires rebuild — current `.ko` has `vermagic: 6.19.10`.
 ### Prerequisites
 
 > [!IMPORTANT]
-> **Kernel Parameters (GRUB/systemd-boot):**
+> **Kernel command line (GRUB / systemd-boot):**
 > ```bash
 > ibt=off iommu=pt
 > ```
-> - `ibt=off` — Required because `AverMediaLib_64.a` is a precompiled blob without ENDBR64 instructions.
->   The Makefile sets `-fcf-protection=none` and `MODULE_INFO(ibt, "N")` as additional mitigation.
-> - `iommu=pt` — IOMMU passthrough mode (required for DMA).
+> - `ibt=off` — `AverMediaLib_64.a` has no ENDBR64; Makefile uses `-fcf-protection=none` and `MODULE_INFO(ibt, "N")` as extra mitigation.
+> - `iommu=pt` — passthrough mode for DMA.
 
-- **Kernel Headers** matching running kernel
-- **Build Tools:** `base-devel`, `llvm`, `clang`
+- Kernel headers for **running** kernel (`/lib/modules/$(uname -r)/build`)
+- `base-devel`, `llvm`, `clang`
+- **`AverMediaLib_64.a`** in repository root (see note above)
 
 ### Build & Load
 
 ```bash
-# Build (compiles in driver/, copies .ko to project root)
+# Build (output: driver/cx511h.ko, copy to project root)
 ./build.sh LLVM=1 CC=clang
 
-# Load with dependency handling and audio restoration
+# Verify vermagic
+modinfo cx511h.ko | grep vermagic
+
+# Load
 sudo ./insmod.sh
 ```
 
-> **Note:** `build.sh` copies `cx511h.ko` to the project root, but `insmod.sh` loads from
-> `driver/cx511h.ko` (it `cd`s into `driver/` internally). Both paths work; the `driver/` copy
-> is always the freshest build.
+`build.sh` copies `cx511h.ko` to the project root; `insmod.sh` loads **`driver/cx511h.ko`** (always the freshest build after `build.sh`).
 
 ### System Installation (persistent)
 
 ```bash
-sudo ./install.sh
+sudo ./install.sh   # requires cx511h.ko in project root
+sudo ./insmod.sh    # or: modprobe cx511h (after depmod)
 ```
-Installs to `/lib/modules/$(uname -r)/kernel/drivers/media/avermedia/` and runs `depmod -a`.
+
+Install path: `/lib/modules/$(uname -r)/kernel/drivers/media/avermedia/`
 
 ---
 
 ## Quick Start
 
+**Recommended:** use `ffplay` / `ffmpeg` with explicit UYVY — avoid `v4l2-ctl` for streaming tests (see Known Issues).
+
 ```bash
 sudo ./insmod.sh
 
-# Test capture (UYVY = FPGA native format)
+# UYVY = FPGA native output in auto mode
 ffplay -f v4l2 -input_format uyvy422 -video_size 1920x1080 -framerate 60 /dev/video0
 
 sudo ./unload.sh
 ```
 
-### GStreamer Test Scripts
+### GStreamer test scripts (legacy / experimental)
 
 ```bash
-# Video only (YV12 format, X11 output)
 ./gst_1.0_raw_video.sh 0
-
-# Video + HDMI audio (YUY2 format, 48kHz stereo)
 ./gst_1.0_raw_video_audio.sh 0
 ```
+
+> [!WARNING]
+> Both scripts call **`v4l2-ctl`** (can hang the machine) and derive **height from the wrong `v4l2-ctl` field** — prefer `ffplay` until the scripts are fixed. Video should use **UYVY** from the card, not YUY2/YV12 without `videoconvert` from the correct capture format.
 
 ---
 
 ## What Actually Happens in `stream_on`
 
-### Executed (in order):
+Source: `driver/board/cx511h/board_v4l2.c` → `cx511h_stream_on()`.
 
-1. **I2C Reads** — `ite6805_get_frameinfo()`, `ite6805_get_workingmode()`, `ite6805_get_colorspace()`, `ite6805_get_sampingmode()` read HDMI input state from ITE6805
-2. **CPU** — Populates `vip_cfg` struct (resolution, framerate, colorspace, bypass, pixel format)
-3. **MMIO** — `aver_xilinx_enable_video_streaming(FALSE)` — stops any running stream
-4. **MMIO** — `aver_xilinx_config_video_process(&vip_cfg)` — configures FPGA scaler/CSC/DMA
-5. **MMIO** — `pci_model_mmio_write(0x1040, csc_value)` — writes FPGA CSC control register
-6. **MMIO** — `aver_xilinx_enable_video_streaming(TRUE)` — starts streaming
-7. **MMIO** — `pci_model_mmio_write(0x304, 0x01)` — initial doorbell
+### Executed (summary order)
 
-### Skipped (I2C deadlock workaround):
+1. **I2C reads** — `ite6805_get_frameinfo()`, `get_workingmode()`, `get_colorspace()`, `get_sampingmode()` (reads only; safe today)
+2. **CPU** — fill `vip_cfg` (resolution, framerate, colorspace, bypass, pixel format; optional `force_input_mode`)
+3. **MMIO** — `aver_xilinx_enable_video_streaming(FALSE)`; `msleep(50)`
+4. **MMIO** — `aver_xilinx_config_video_process(&vip_cfg)`
+5. **MMIO** — `pci_model_mmio_write(0x1040, csc_value)` — FPGA CSC
+6. **MMIO** — `msleep(200)`; optional pixel-format debug (`debug_pixel_format` / `auto_test_byteorder`)
+7. **MMIO** — `aver_xilinx_enable_video_streaming(TRUE)`
+8. **MMIO** — `pci_model_mmio_write(0x304, 0x01)` — initial doorbell
+
+YUV422 from userspace is mapped to FPGA **UYVY** unless `debug_pixel_format` overrides.
+
+### Skipped (I2C deadlock workaround)
 
 | Operation | Registers | Mechanism |
 |:---|:---|:---|
-| TTL Pixel Mode config | 0xc0, 0xc1, 0xbd, 0xbe, 0xc4 | `goto skip_ttl_config` |
-| HDMI Video Unmute | 0xb0, 0xa0, 0x02 | SKIPPING block (empty) |
-| ITE68051 Streaming Regs | 0x20, 0x86, 0x90, 0xA0–A2, 0xA4, 0xB0 | SKIPPING block (empty) |
-| RX DeSkew | (vendor regs) | SKIPPING block (empty) |
-| ITE6805 CSC Sync | 0x6b, 0x6c, 0x6e, 0x2a | SKIPPING block (empty) |
-| HDCP State | — | Commented out |
-| Freerun Screen | — | Commented out |
+| TTL pixel mode | 0xc0, 0xc1, 0xbd, 0xbe, 0xc4 | `goto skip_ttl_config` at start |
+| HDMI video unmute | 0xb0, 0xa0, 0x02 | empty SKIPPING block |
+| ITE68051 streaming | 0x20, 0x86, 0x90, 0xA0–A2, 0xA4, 0xB0 | empty SKIPPING block |
+| RX deskew | vendor | empty SKIPPING block |
+| ITE6805 CSC sync | 0x6b, 0x6c, 0x6e, 0x2a | empty SKIPPING block |
+| HDCP / freerun | — | commented out |
 
-**Reason:** Any `hdmirxwr()` I2C write during streaming deadlocks on the ITE6805 bus.
-The FPGA MMIO path handles CSC and streaming control instead.
+**Reason:** `hdmirxwr()` during streaming can **deadlock** the ITE6805 I2C bus. CSC and stream control use MMIO instead.
 
-### Per-Frame (in `cx511h_video_buffer_done`, 60×/second):
+### Per frame (`cx511h_video_buffer_done`)
 
-1. `v4l2_model_buffer_done()` — hands filled buffer to V4L2/userspace
-2. `pci_model_mmio_write(0x304, 0x01)` — doorbell: next buffer ready
+1. `v4l2_model_buffer_done()`
+2. `pci_model_mmio_write(0x304, 0x01)` — doorbell
 3. `pci_model_mmio_write(0x10, 0x02)` — IRQ ACK
-4. `wmb()` — write memory barrier
-5. Logs frame count once per minute (every 3600 frames)
+4. `wmb()`
+5. `KERN_DEBUG` frame count once per minute (~3600 frames @ 60 fps)
 
-### `stream_off`:
+### `stream_off`
 
-Single call: `aver_xilinx_enable_video_streaming(FALSE)` — stops DMA.
+`aver_xilinx_enable_video_streaming(FALSE)` only — no I2C teardown.
 
 ---
 
 ## Architecture
 
-### Source Files
+### Source layout
 
 | Layer | Files | Purpose |
 |:---|:---|:---|
-| Entry | `entry.c` | module_init/exit, PCI ID table, MODULE_SOFTDEP, IBT disable |
-| Context | `cxt_mgr.c` | Reference-counted context manager for driver handles |
-| Board | `board/cx511h/board_config.c` | PCI probe/remove, FPGA/ITE6805/GPIO/ALSA/V4L2 init |
-| Board | `board/cx511h/board_v4l2.c` | V4L2 streaming, CSC, doorbell, IRQ ACK, pixel format |
-| Board | `board/cx511h/board_i2c.c` | I2C bus setup, ITE6805 at address 0x58 |
-| Board | `board/cx511h/board_gpio.c` | GPIO init (Reset=Pin0, HPD=Pin2) |
-| Board | `board/cx511h/board_alsa.c` | ALSA capture device (PCM, 32–192kHz, S16_LE/S24_LE) |
-| Utils | `utils/pci/pci_model.c` | PCI MMIO read/write, DMA, IRQ handling |
-| Utils | `utils/v4l2/*.c` | V4L2 device, ioctl, videobuf2, framegrabber abstraction |
-| Utils | `utils/alsa/alsa_model.c` | ALSA model wrapper |
-| Utils | `utils/i2c/i2c_model.c` | I2C model wrapper |
-| Blob | `AverMediaLib_64.a` | Precompiled vendor binary (FPGA/ITE6805 low-level logic) |
+| Entry | `driver/entry.c` | `module_init`, PCI ID table, softdeps, IBT disable |
+| Context | `driver/cxt_mgr.c` | Reference-counted handles |
+| Board | `driver/board/cx511h/board_config.c` | Probe/remove, init order |
+| Board | `driver/board/cx511h/board_v4l2.c` | V4L2, streaming, CSC, doorbell |
+| Board | `driver/board/cx511h/board_i2c.c` | I2C, ITE6805 @ 0x58 |
+| Board | `driver/board/cx511h/board_gpio.c` | GPIO (reset pin 0, HPD pin 2) |
+| Board | `driver/board/cx511h/board_alsa.c` | ALSA PCM |
+| Utils | `driver/utils/pci/pci_model.c` | PCI, MMIO, IRQ, DMA |
+| Utils | `driver/utils/v4l2/*.c` | V4L2, videobuf2, framegrabber |
+| Blob | `AverMediaLib_64.a` (local) | Vendor FPGA / ITE6805 logic |
 
-### Build Configuration (`driver/Makefile`)
+### Build (`driver/Makefile`)
 
-- Compiler: `LLVM=1 CC=clang` required
-- Flags: `-Wno-maybe-uninitialized`, `-Wno-implicit-fallthrough`, `-fcf-protection=none`, `-fno-stack-protector`
-- Clang-specific: `-Wno-implicit-enum-enum-cast`, `-Wno-missing-prototypes`, `-Wno-unused-variable`
-- Blob integration: `AverMediaLib_64.a` is copied to `.o` via custom kbuild rule (kbuild doesn't support `.a` in `-objs`)
+- `LLVM=1 CC=clang` on Clang-kernel distros
+- `-fcf-protection=none`, `-fno-stack-protector`, `MODULE_INFO(ibt, "N")`
+- Blob: `cp AverMediaLib_64.a` → `AverMediaLib_64.o` via custom kbuild rule
 
-### Hardware Initialization (`board_probe`, 14 steps)
+### `board_probe` init sequence
 
-1. Get PCI handle
-2. Init I2C manager
-3. Init GPIO manager
-4. Init memory manager
-5. Init task/thread manager
-6. Init Xilinx FPGA (GPIO mask, I2C speed 400kHz, audio buffer 11520×4)
-7. Configure FPGA registers
-8. Setup I2C bus `I2C_BUS_COM`
-9. Init board GPIOs (Reset=Pin0, HPD=Pin2)
-10. Attach ITE6805 HDMI receiver (I2C addr 0x58) with fallback for broken linker section mechanism
-11. Init bitmap overlay (no-signal / copy-protection)
-12. Init ALSA audio subsystem
-13. Init V4L2 video subsystem
+1. PCI handle · 2. I2C manager · 3. GPIO manager · 4. Memory manager · 5. Task manager  
+6. `aver_xilinx_init` + `aver_xilinx_init_registers` · 7. I2C bus `I2C_BUS_COM` · 8. Board GPIO  
+9. `board_i2c_init` · 10. ITE6805 attach (with linker-section fallback) · 11. Bitmap overlay  
+12. ALSA · 13. V4L2  
 
 ### Audio
 
-HDMI audio capture via ITE6805 → FPGA DMA → ALSA:
-- Device name: `AVerMedia CL511H`
+- Name: `AVerMedia CL511H` (subsystem `0x5730`)
 - Formats: S16_LE, S24_LE
-- Rates: 32kHz, 44.1kHz, 48kHz, 96kHz, 192kHz
-- Channels: 1 (capture)
-- Buffer: 128 periods × 30720 bytes
+- Rates: 32 / 44.1 / 48 / 96 / 192 kHz
+- **Channels: 2** (stereo PCM device; `alsa_model.c`)
+- Buffer: `period_size = 7680×4` (30720 bytes), up to **128** periods (`board_alsa.c`)
 
-### LED Control
+### Suspend / resume
 
-RGB LED via FPGA GPIO pins (configurable via module parameters `led_pin_r/g/b`).
-Function `cx511h_set_led_color()` in `board_v4l2.c`.
-
-### Suspend/Resume
-
-- `board_suspend()` → `board_v4l2_suspend()`
-- `board_resume()` → re-inits FPGA registers via `aver_xilinx_init_registers()` → `board_v4l2_resume()`
+Legacy `board_suspend` / `board_resume` wired from PCI setup — not migrated to `dev_pm_ops` (see Known Issue #10).
 
 ---
 
-## Scripts Reference
+## Scripts
 
 | Script | Purpose |
 |:---|:---|
-| `build.sh` | Builds module in `driver/`, copies `cx511h.ko` to root. Passes args to `make` (e.g. `LLVM=1`). |
-| `insmod.sh` | Loads vb2/snd dependencies, inserts `driver/cx511h.ko`, kills+restores PipeWire/WirePlumber if blocking. |
-| `unload.sh` | 3-stage unload: `rmmod` → PCI unbind → `rmmod -f`. Restores audio services. |
-| `install.sh` | Installs to `/lib/modules/.../kernel/drivers/media/avermedia/`, runs `depmod -a`. |
-| `gst_1.0_raw_video.sh` | GStreamer: v4l2src → videoconvert → YV12 → xvimagesink. |
-| `gst_1.0_raw_video_audio.sh` | GStreamer: v4l2src (YUY2) + alsasrc (48kHz/16bit/stereo) → autovideosink + alsasink. |
+| `build.sh` | `make -C driver`, copy `cx511h.ko` to root |
+| `insmod.sh` | Modprobe vb2/snd deps, `insmod driver/cx511h.ko`, audio restore |
+| `unload.sh` | rmmod → unbind PCI → `rmmod -f`; restore PipeWire |
+| `install.sh` | Install `.ko` under `/lib/modules/.../avermedia/`, `depmod -a` |
+| `gst_1.0_raw_video.sh` | Legacy GStreamer test — **see warnings above** |
+| `gst_1.0_raw_video_audio.sh` | Legacy A/V test — **see warnings above** |
 
 ---
 
@@ -249,154 +249,154 @@ Function `cx511h_set_led_color()` in `board_v4l2.c`.
 
 | Tool | Purpose |
 |:---|:---|
-| `check_patterns.py` | Counts `mov %gs:0x28` / `xor %gs:0x28` stack-canary patterns in a binary |
-| `patch_library.py` | Patches stack-canary prologue/epilogue in a binary to NOPs (neutralizes `-fstack-protector`) |
-| `scan_epilogues.py` | Scans binary for all `xor %gs:0x28, %reg` variants (inventory before patching) |
+| `check_patterns.py` | Stack-canary pattern count in binaries |
+| `patch_library.py` | NOP stack-canary prologue/epilogue |
+| `scan_epilogues.py` | List `xor %gs:0x28` epilogue variants |
 
 ---
 
 ## Known Issues
 
-### 1. I2C Bus Deadlock (Critical)
-- **Status:** WORKAROUND APPLIED
-- **Issue:** Any I2C write (`hdmirxwr()`) to the ITE6805 during streaming freezes the system.
-- **Impact:** All I2C write operations in `stream_on` are skipped (TTL config, HDMI unmute, streaming registers, CSC sync). Streaming works via FPGA MMIO path only.
-- **I2C reads** (`ite6805_get_*`) work and are used for input format detection.
+### 1. I2C bus deadlock (critical)
+- **Status:** workaround in `stream_on`
+- **Issue:** `hdmirxwr()` (I2C **write**) to ITE6805 during/around streaming can **freeze** the system.
+- **Impact:** TTL, unmute, streaming, CSC I2C sequences skipped; MMIO path used instead.
+- **Reads** (`ite6805_get_*`) still run in `stream_on` and event handlers.
 
-### 2. Byte-Order / Green Screen
-- **Status:** TESTING REQUIRED
-- **Issue:** Green tint indicates YUYV/UYVY byte swap between HDMI source and FPGA.
-- **Solution:** Use `debug_pixel_format` (0–3) or `auto_test_byteorder=1` to identify correct mapping.
-- **Workaround:** Always request `uyvy422` in userspace (FPGA native format).
+### 2. Byte-order / green screen
+- **Status:** needs hardware validation
+- **Issue:** YUYV vs UYVY mismatch between FPGA and userspace.
+- **Try:** `debug_pixel_format=0..3`, or ffplay with each of `uyvy422` / `yuyv422` / `yvyu422` / `vyuy422`.
+- **Workaround:** `-input_format uyvy422` in ffmpeg/ffplay.
 
-### 3. V4L2/FPGA Format Mismatch
-- **Status:** KNOWN
-- **Issue:** FPGA always outputs UYVY in auto-mode, but V4L2 may negotiate a different format.
-- **Impact:** Green tint if userspace requests YUYV but FPGA sends UYVY.
-- **Workaround:** Always use `-input_format uyvy422` with ffplay/ffmpeg.
+### 3. V4L2 vs FPGA format
+- Driver advertises many pixel formats; hardware path uses **UYVY** for YUV422 in auto mode.
+- Always set capture format explicitly in applications.
 
-### 4. Module "In Use" Errors
-- **Status:** RESOLVED
-- **Issue:** PipeWire/WirePlumber hold ALSA devices open.
-- **Solution:** `unload.sh` kills blocking processes, restores audio after unload.
+### 4. Module “in use”
+- **Status:** mitigated by `unload.sh` (PipeWire / WirePlumber / `ffplay`).
 
-### 5. v4l2-ctl Incompatibility
-- **Status:** KNOWN
-- **Issue:** `v4l2-ctl --stream-mmap` triggers I2C reads during stream-off → freeze.
-- **Solution:** Use `ffplay` instead.
+### 5. `v4l2-ctl` risk
+- **Status:** known
+- **Issue:** `v4l2-ctl` (especially `--stream-mmap`, format probing, or scripts that call it) can trigger **I2C traffic** and hang.
+- **Prefer:** `ffplay` / `ffmpeg` with explicit formats; raw `dd` only while streaming.
 
-### 6. Toolchain Sensitivity
-- **Status:** UNCHANGED
-- **Issue:** Requires `LLVM=1 CC=clang` on Clang-built kernels (e.g. CachyOS).
+### 6. Toolchain
+- **Status:** unchanged — use `LLVM=1 CC=clang` on Clang-built kernels.
 
-### 7. Width/Height Swap in `vip_cfg`
-- **Status:** UNDER INVESTIGATION
-- **Location:** `driver/board/cx511h/board_v4l2.c` line ~364
-- **Issue:** `vactive` receives `width` and `hactive` receives `height` — possibly vendor convention, possibly a bug affecting scaler/DMA config.
+### 7. `vactive` / `hactive` in `vip_cfg`
+- **Status:** under investigation
+- **Location:** `board_v4l2.c` ~506–507
+- **Issue:** `vactive = width`, `hactive = height` (swapped vs usual timing names). Bypass tables use the same convention — test before “fixing”.
 
-### 8. Kernel 7.0.1 Migration
-- **Status:** PENDING
-- **Issue:** Current `.ko` has `vermagic: 6.19.10`. Won't load on 7.x without rebuild.
-- **Solution:** `./build.sh LLVM=1 CC=clang` after kernel upgrade.
+### 8. Kernel upgrades
+- **Status:** operational note (not a code bug)
+- **Issue:** Module must be **rebuilt** after each kernel update; vermagic mismatch prevents load.
+- **Fix:** `./build.sh LLVM=1 CC=clang` then reload.
 
-### 9. V4L2 Exposes All Pixel Formats
-- **Status:** KNOWN
-- **Issue:** Driver exposes `FRAMEGRABBER_PIXFMT_BITMSK` (all formats), but hardware only supports YUV422 (UYVY). OBS/GStreamer may negotiate unsupported formats.
+### 9. V4L2 exposes all pixel formats
+- Hardware realistically: YUV422 (UYVY). OBS/GStreamer may pick an unsupported FourCC.
 
 ### 10. Legacy suspend/resume
-- **Status:** DEPRECATED
-- **Issue:** Uses legacy `.suspend`/`.resume` in `struct pci_driver`. Should migrate to `dev_pm_ops` for Kernel 7.x.
+- PCI driver uses legacy suspend hooks; should move to `dev_pm_ops` for long-term 7.x maintenance.
+
+### 11. `auto_test_byteorder` debug path
+- **Status:** misleading on its own
+- **Issue:** `dump_first_pixels()` reads the DMA physical address via **PCI MMIO offset**, not CPU-mapped buffer memory — dmesg output may not reflect real frame bytes. Prefer **userspace** `dd` + `xxd` (below).
+
+### 12. GStreamer helper scripts
+- **Status:** broken / risky
+- **Issue:** wrong height parsing; calls `v4l2-ctl`; video caps use YV12/YUY2 without matching capture format.
+
+### 13. 4K HDMI input
+- **Status:** software limited
+- On lock, widths **> 1920** are forced to **1920×1080@60** in `cx511h_ite6805_event()` — true 4K capture not implemented.
 
 ---
 
 ## Reverse Engineering Progress
 
-### Working (MMIO Path)
+### Working (MMIO)
 
-| Register | Type | Value | Purpose |
-|:---:|:---:|:---:|:---|
-| **MMIO 0x10** | FPGA | `0x02` | IRQ ACK after each buffer |
-| **MMIO 0x304** | FPGA | `0x01` | Doorbell: next buffer ready |
-| **MMIO 0x1040** | FPGA | dynamic | CSC control (bit0=422 mode, bit1=RGB→YUV, bits[10:8]=matrix) |
+| Register | Value | Role |
+|:---:|:---:|:---|
+| **0x10** | `0x02` | IRQ ACK per buffer |
+| **0x304** | `0x01` | Doorbell (next buffer) |
+| **0x1040** | dynamic | CSC (422 mode, RGB→YUV, matrix bits [10:8]) |
 
-### Identified but Skipped (I2C Deadlock)
+### Identified but skipped (I2C writes)
 
-| Register | Device | Value | Purpose |
-|:---:|:---:|:---:|:---|
-| **I2C 0x20** | ITE68051 | `0x40` | Video Output Enable (Bit 6) |
-| **I2C 0x86** | ITE68051 | `0x01` | Global Enable |
-| **I2C 0x90** | ITE68051 | `0x8f` | IRQ Enable |
-| **I2C 0xA0–A2** | ITE68051 | `0x80` | DMA Channel Enable |
-| **I2C 0xA4** | ITE68051 | `0x08` | DMA Enable |
-| **I2C 0xB0** | ITE68051 | `0x01` | Buffer Enable |
-| **I2C 0x6b,0x6c,0x6e** | ITE6805 | — | CSC matrix |
-| **I2C 0x2a** | ITE6805 | `0x3a` | Colorspace select |
-| **I2C 0xc0,0xc1** | ITE6805 | `0x02,0x00` | TTL pixel mode (Single/SDR) |
+| Reg | Device | Notes |
+|:---:|:---:|:---|
+| 0x20, 0x86, 0x90, 0xA0–A2, 0xA4, 0xB0 | ITE68051 | Streaming enable chain |
+| 0x6b, 0x6c, 0x6e, 0x2a | ITE6805 | CSC sync |
+| 0xc0, 0xc1, … | ITE6805 | TTL / SDR pixel mode |
 
 ---
 
 ## Debugging
 
+**First step for color problems:** dump one frame while HDMI source is active and compare hex patterns.
+
 ```bash
-# Load/unload
 sudo ./insmod.sh
-sudo ./unload.sh
-
-# Streaming test (UYVY = FPGA native)
-ffplay -f v4l2 -input_format uyvy422 -video_size 1920x1080 -framerate 60 /dev/video0
-
-# Byte-order testing
-sudo insmod cx511h.ko debug_pixel_format=0  # YUYV
-sudo insmod cx511h.ko debug_pixel_format=1  # UYVY (FPGA native)
-sudo insmod cx511h.ko debug_pixel_format=2  # YVYU
-sudo insmod cx511h.ko debug_pixel_format=3  # VYUY
-
-# Auto-test all formats on stream_on
-sudo insmod cx511h.ko auto_test_byteorder=1
-
-# Kernel logs
-dmesg | grep -iE "cx511h-csc|cx511h-phase2|cx511h-color|cx511h-dma"
-
-# Raw frame dump (check hex pattern)
-sudo dd if=/dev/video0 of=frame_raw.bin bs=$((1920*1080*2)) count=1
+# Start capture in another terminal, e.g. ffplay ... &
+sleep 2
+sudo dd if=/dev/video0 of=frame_raw.bin bs=4147200 count=1
 xxd frame_raw.bin | head -4
 ```
 
-### Expected Buffer Patterns (YUV 4:2:2)
-
-| Hex Pattern | Meaning |
+| Hex pattern | Likely meaning |
 |:---|:---|
-| `10 80 10 80...` | Black YUV (Y=16, Cb/Cr=128) — DMA working, source muted |
-| `00 00 00 00...` | No data — DMA not delivering |
-| `80 10 80 10...` | Byte swap (UYVY vs YUYV) |
-| Varying values | Real video — color issue is format/CSC only |
+| `10 80 10 80...` | Black YUV — DMA ok, muted/no picture |
+| `00 00 00 00...` | No DMA data |
+| `80 10 80 10...` | Byte order swap (UYVY ↔ YUYV) |
+| Varying | Real pixels — tune format/CSC |
+
+```bash
+# Kernel log
+dmesg | grep -iE 'cx511h-csc|cx511h-phase2|cx511h-color|cx511h-dma|cx511h-pixfmt'
+
+# Module parameters (from driver/)
+cd driver && sudo rmmod cx511h 2>/dev/null; sudo insmod cx511h.ko debug_pixel_format=1
+
+# Force input colorspace interpretation
+sudo insmod cx511h.ko force_input_mode=1
+
+# ffplay format sweep (safe)
+for fmt in uyvy422 yuyv422 yvyu422 vyuy422; do
+  ffplay -f v4l2 -input_format $fmt -video_size 1920x1080 -framerate 60 /dev/video0
+done
+```
+
+> [!CAUTION]
+> Do not rely on `auto_test_byteorder=1` alone — confirm with userspace `dd`/`xxd`.
 
 ---
 
 ## Reverse Engineering Methods
-- Community-driven register probing and analysis
-- V4L2 callback chain tracing
-- AI-assisted hardware behavior analysis for interoperability testing
-- Iterative testing with actual hardware
+
+- Register probing and Windows-driver comparison
+- V4L2 / videobuf2 callback tracing
+- Iterative testing on real GC573 hardware
+- AI-assisted analysis (clearly experimental)
 
 ---
 
-## Legal/Compliance
+## Legal / Compliance
 
-**Legal Note:** This project is intended for achieving interoperability with the AVerMedia GC573 hardware on Linux platforms. Reverse engineering efforts are conducted in accordance with EU Directive 2009/24/EC Art. 6. All trademarks and proprietary blobs belong to their respective owners.
+Interoperability-focused community project (EU Directive 2009/24/EC Art. 6). AVerMedia trademarks and the vendor blob belong to their respective owners.
 
 > [!CAUTION]
-> This project includes the precompiled vendor archive `AverMediaLib_64.a`.
-> Review redistribution/licensing status before republishing binaries or forks.
-> Non-commercial, community-driven project.
+> `AverMediaLib_64.a` is a precompiled vendor archive — check license/redistribution before publishing binaries or forks.
 
 ---
 
 ## Disclaimer
 
-**Disclaimer:** This is a community project. I am not a lawyer. Use this software at your own risk. AVerMedia does not endorse or support this driver.
+Community project, not supported by AVerMedia. Use at your own risk.
 
 ---
 
-**Maintained by [Everlite](https://github.com/Everlite).**
-Special thanks to original work by [derrod](https://github.com/derrod).
+**Repository:** [github.com/Everlite/Avermedia-GC573-Linux](https://github.com/Everlite/Avermedia-GC573-Linux)  
+**Maintained by [Everlite](https://github.com/Everlite)** · Thanks to [derrod](https://github.com/derrod) for earlier work.
