@@ -170,13 +170,16 @@ v4l2_model_qops_queue_setup(struct vb2_queue *q, const struct v4l2_format *fmt,
   return 0;
 }
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6,0,0)
+/* wait_prepare/wait_finish callbacks were removed from struct vb2_ops
+ * in kernel 7.0 (commit b70886f "media: vb2: drop wait_prepare/finish
+ * callbacks").  On 7.0+ the VB2 core handles the locking internally. */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(7,0,0)
 static void v4l2_model_qops_wait_prepare(struct vb2_queue *q) {
-  return vb2_ops_wait_prepare(q);
+  vb2_ops_wait_prepare(q);
 }
 
 static void v4l2_model_qops_wait_finish(struct vb2_queue *q) {
-  return vb2_ops_wait_finish(q);
+  vb2_ops_wait_finish(q);
 }
 #endif
 
@@ -465,7 +468,7 @@ static void v4l2_model_qops_buf_queue(struct vb2_buffer *vb) {
 const struct vb2_ops v4l2_model_qops = {
     .queue_setup = v4l2_model_qops_queue_setup,
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6,0,0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(7,0,0)
     .wait_prepare = v4l2_model_qops_wait_prepare,
     .wait_finish  = v4l2_model_qops_wait_finish,
 #endif
