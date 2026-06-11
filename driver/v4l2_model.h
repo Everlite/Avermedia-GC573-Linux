@@ -347,6 +347,9 @@ void v4l2_model_swap_pending_plane_byte_pairs(v4l2_model_handle_t context,
 					      unsigned int plane,
 					      size_t len);
 
+void v4l2_model_sync_pending_plane_for_cpu(v4l2_model_handle_t context,
+					   unsigned int plane);
+
 void v4l2_model_buffer_done(v4l2_model_handle_t context);
 //void v4l2_model_buffer_done(v4l2_model_buffer_info_t *next_buffer, void *context);
 //

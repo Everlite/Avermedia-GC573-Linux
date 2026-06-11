@@ -7,7 +7,7 @@
 Community-maintained, AI-assisted, heavily patched Linux driver for the AVerMedia GC573 (PCI `1461:0054`, subsystem `1461:5730`).
 Modernized for recent kernels. **Experimental — development and testing only.**
 
-**Last aligned with code:** 2026-06-11 · **Phase 3** (DMA descriptor ring / green-screen root cause)
+**Last aligned with code:** 2026-06-11 · **Phase 3 breakthrough** (DMA live — IOMMU / vb2 device binding fixed)
 
 > [!NOTE]
 > **Vendor blob:** The driver links against `AverMediaLib_64.a` in the **repository root** (~565 KB, tracked in git). The Makefile copies it into `driver/AverMediaLib_64.o` at build time. See Legal — redistribution of this precompiled archive may be restricted.
@@ -28,11 +28,11 @@ Modernized for recent kernels. **Experimental — development and testing only.*
 | **Signal Detection** | 🟡 [PARTIAL] | HDMI lock via ITE6805 events; **4K inputs forced to 1080p** in software (`ITE6805_LOCK` handler) |
 | **IRQ / Interrupts** | ✅ [OK] | MSI/INTx; **V-DESC hook** on `0x10` bit `0x2`; opt-in I2C ACK on bit `0x800` (`pci_model.c`) |
 | **System Stability** | 🟡 [IMPROVED] | **`insmod` no longer freezes** (I2C IRQ opt-in ACK); **hard-freeze** if `0x304` slot-armed before valid descriptors |
-| **DMA Transfer** | 🟡 [PARTIAL] | V-DESC IRQs fire (ping-pong slots 1+2); **DMA writes stall** — blob programs wrong descriptor sizes (`~0x7` vs `0x3f4800`) |
-| **Capture Content** | 🟡 [BLOCKED] | Buffers are **all zeros** (`0x00` → green in YUV); not a byte-order issue — **descriptor size mismatch** (see Progress Report 2026-06-11) |
+| **DMA Transfer** | ✅ [OK] | V-DESC IRQs fire; FPGA walks SG descriptor chain; **DMA writes reach host RAM** (IOMMU passthrough + `q->dev` fix) |
+| **Capture Content** | 🟡 [IMPROVED] | **Non-zero payload confirmed** (`10 80 10 80…` = YUV422 limited black); ffplay may report **corrupted data** — buffer-done timing / byte-order polish in progress |
 | **Driver Unload** | ✅ [OK] | `unload.sh`: rmmod → unbind → **PCI sysfs remove** + `rmmod -f` on refcnt −1 → **PCIe rescan**; audio restored |
 | **Audio Capture** | ❌ [STUB] | ALSA device `AVerMedia CL511H` **registers** (skeleton in `board_alsa.c`) but **no audio DMA** — capture is silent; no real data delivery yet |
-| **General Use** | ❌ [NO] | Not for daily use / production |
+| **General Use** | ❌ [NO] | **Not for daily use** — DMA reaches RAM, but userspace still shows **green/corrupt output** or **drops after the first frame**; OBS/GStreamer untested (Phase 4) |
 
 ### Development Phases
 
@@ -40,16 +40,100 @@ Modernized for recent kernels. **Experimental — development and testing only.*
 |:---|:---:|:---|
 | **Phase 1** (Reverse Engineering) | ✅ COMPLETE | Builds on modern kernels, probe, FPGA/ITE6805 bring-up |
 | **Phase 2** (Continuous Streaming) | 🟡 COMPLETE* | DMA/IRQ/doorbell at 60 fps; **all I2C writes in `stream_on` skipped** |
-| **Phase 3** (Color / DMA) | 🟡 IN PROGRESS | IRQ intercept + descriptor ring audit done; **root cause = wrong `0x310` sizes** in blob path — fix size mapping before slot arming |
-| **Phase 4** (Production Ready) | ⏳ PENDING | Robust PM, OBS/GStreamer, fixed test scripts, no I2C deadlock |
+| **Phase 3** (Color / DMA) | 🟡 **BREAKTHROUGH** | Root cause of green screen fixed (`q->dev`); DMA payload live; register semantics clarified; tuning for stable dequeue |
+| **Phase 4** (Production Ready) | ⏳ NEXT | Stable ffplay/OBS output, YUYV↔UYVY verification, buffer-done timing, 4K path, fixed test scripts |
 
 > \*Phase 2: End-to-end streaming uses the **FPGA MMIO path** only (`0x10`, `0x304`, `0x1040`). ITE6805 register writes that the Windows driver performs in `stream_on` are disabled.
 
 ---
 
-## Progress Report — 2026-06-11
+## Progress Report
 
-### 1. Infrastructure & tooling (resolved)
+### 2026-06-11 — Phase 3 breakthrough: DMA is alive
+
+After months of all-zero (green) frames, we identified and fixed the **architectural root cause** and confirmed **live video payload** in host memory.
+
+#### 1. Architectural core fix — vb2 device binding (`q->dev = dev`)
+
+| Item | Detail |
+|:---|:---|
+| **File** | `driver/utils/v4l2/v4l2_model_videobuf2.c` → `v4l2_model_vb2_init()` |
+| **Bug** | The vb2 queue was initialized with `mem_ops` and `alloc_ctx`, but **`q->dev` was never set** (kernel ≥ 4.8). |
+| **Effect** | vb2-dma-sg mapped buffers against a **NULL device** → dma-direct path, **no IOMMU domain binding**, and all `dma_sync_sgtable_for_cpu` / `dma_sync_single_for_cpu` calls in the swap/sync path were **silently skipped** (`if (dma_dev)` guard). CPU saw stale zero cache lines even when the FPGA wrote RAM. |
+| **Fix** | `q->dev = dev;` where `dev` is the PCI `struct device *` from `cxt_manager_get_dev()`. |
+| **Companion** | `v4l2_model_sync_pending_plane_for_cpu()` called from `cx511h_video_buffer_done()` **before** `v4l2_model_buffer_done()` so completed frames are cache-coherent for the CPU. |
+
+This was the **primary cause** of the infamous green screen (all zeros), not a wrong FPGA register value.
+
+#### 2. Hardware register semantics — corrected (`aver_xilinx.o` disassembly)
+
+Earlier diagnostics misread the descriptor ring. The blob behaviour is **by design**:
+
+| Register | Actual meaning | Common misread |
+|:---|:---|:---|
+| **`0x308 + n·0xc`** | Bus address **low** of the **descriptor chain** (blob-allocated ring buffer) | Frame buffer address |
+| **`0x30c + n·0xc`** | Bus address **high** of the descriptor chain | Frame buffer address high |
+| **`0x310 + n·0xc`** | **Descriptor count** — number of 16-byte HW descriptors in the chain (`node[0x20]`) | Byte transfer size (`0x3f4800`) |
+
+**Inside each 16-byte chain entry** (written by `aver_xilinx_add_to_cur_desclist`):
+
+| Offset | Content |
+|:---|:---|
+| `+0x0` / `+0x4` | **Video target** bus address (our V4L2 `sg_dma_address`) |
+| `+0x8` | Transfer length in **dwords** (`size >> 2`) |
+| `+0xc` | Control flags (`0x80006000`) |
+
+A value **`0x310 ≈ 0x7`** means **7 SG fragments** in the chain (typical for vb2-dma-sg), **not** a 7-byte transfer. Comparing `0x308` to V4L2 `Desc0` was a **category error** — the chain pointer (`0x583e0000`-class addresses) will never equal the frame address.
+
+Use **`[gc573-chain]`** logs (read entry `[0]` after `active_current_desclist`) to verify the chain **target** matches our buffer.
+
+#### 3. Forensic proof of life — payload `10 80 10 80`
+
+With `q->dev` fixed, userspace and kernel diagnostics show **non-zero DMA**:
+
+| Signal | Meaning |
+|:---|:---|
+| **ffplay** | `Dequeued v4l2 buffer contains corrupted data (4147200 bytes)` — buffer is **full-sized and non-empty** (corruption flag ≠ zero fill). |
+| **`[gc573-payload]`** | First 16 bytes after `dma_sync_*`: e.g. **`10 80 10 80 10 80 …`** (see excerpt below) |
+| **Interpretation** | Valid **UYVY limited-range black**: **Y = 0x10 (16)**, **U/V = 0x80 (128)** per macropixel. The FPGA DMA path works; remaining work is **V4L2 handoff quality** (timing, byte order, CSC). |
+
+Excerpt from `cx511h_video_buffer_done()` in `board_v4l2.c` (documentation — not abbreviated):
+
+```c
+printk(KERN_ERR
+    "[gc573-payload] First 16 bytes of frame: "
+    "%02x %02x %02x %02x %02x %02x %02x %02x "
+    "%02x %02x %02x %02x %02x %02x %02x %02x\n",
+    p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7],
+    p[8], p[9], p[10], p[11], p[12], p[13], p[14], p[15]);
+```
+
+#### 4. Diagnostic tags (current session)
+
+```bash
+dmesg | grep -iE 'gc573-payload|gc573-chain|gc573-debug|gc573-intercept|cx511h-diag|cx511h-swap|cx511h-desc|cx511h-dma'
+```
+
+| Tag | Purpose |
+|:---|:---|
+| `[gc573-debug]` | SG chain total size vs `0x3f4800`, `Desc0`/`Desc1` bus addresses |
+| `[gc573-chain]` | Map chain at `0x308`/`0x30c`, compare entry0 target to V4L2 Desc0 |
+| `[gc573-intercept]` | V-DESC IRQ: live chain pointer + descriptor count per slot |
+| `[gc573-payload]` | First 16 frame bytes (raw FPGA order, pre-swap) |
+| `[cx511h-diag]` | Pre/post YUYV→UYVY swap at frame 10 in `v4l2_model_buffer_done()` |
+
+#### 5. Phase 4 — next steps
+
+1. **Stable dequeue** — eliminate ffplay “corrupted data” by hardening `cx511h_video_buffer_done` ↔ `v4l2_model_buffer_done` ordering and ensuring swap + sync run exactly once per frame.
+2. **Byte order** — confirm whether hardware delivers **YUYV** or **UYVY** (`10 80` = UYVY black; `80 10` = YUYV black); tune swap in `v4l2_model_buffer_done()` accordingly.
+3. **Picture unlock** — with valid DMA, re-enable safe ITE6805/TTL paths where possible; verify CSC (`0x1040`) for real content (not just black).
+4. **4K / high refresh** — ITE6805 downscale path (`iTE68051_Video_Output_Setting`) vs native FPGA modes (Phase 4+).
+
+---
+
+### 2026-06-11 — Earlier diagnostic session (still relevant)
+
+#### Infrastructure & tooling (resolved)
 
 | Area | Change |
 |:---|:---|
@@ -58,35 +142,31 @@ Modernized for recent kernels. **Experimental — development and testing only.*
 | **`unload.sh` hardened** | Escalation path: PCI sysfs **`…/remove`** + **`rmmod -f`**, then **`echo 1 > /sys/bus/pci/rescan`** so the card can be re-probed; PipeWire/WirePlumber restart unchanged. |
 | **Kernel 7.0+ DMA API** | `dma_sync_sgtable_for_cpu` / `_for_device` in `v4l2_model_videobuf2.c` now pass **`struct device *`** from `vb->vb2_queue->dev` (required on modern kernels / CachyOS). |
 
-### 2. Phase 3 progress & insights (diagnostic session)
-
 #### I2C deadlock fixed (`pci_model.c`)
 
 - Hardware continuously asserted IRQ bit **`0x800`** [I2C complete] during probe/init.
 - **Fix:** asynchronous `struct completion` + **opt-in ISR ACK** — bit `0x800` is cleared only when `i2c_waiters > 0`. Unconditional ACK starved the vendor blob’s synchronous I2C poll loop and **froze `insmod`**.
 - **`pci_model_wait_i2c_done()`** uses a 50 ms cap and falls back to `mdelay()` polling when IRQs are not yet live (probe phase).
 
-#### Hardware intercept successful (`pci_model.c` + `board_v4l2.c`)
+#### Hardware intercept (`pci_model.c` + `board_v4l2.c`)
 
 - Custom **Hard-IRQ hook** on bit **`0x2`** [V-DESC complete], registered via `pci_model_register_vdesc_hook()`.
 - Reads MMIO register **`0x300 & 7`** for the active descriptor slot index.
 - **Confirmed:** FPGA ping-pong DMA cycles **Slot 1 ↔ Slot 2** (`[cx511h-bypass] V-DESC INTERCEPTED! Slot Index: N`).
 
-#### The green screen culprit (root cause)
+#### Superseded hypothesis (do not repeat)
 
-| Finding | Detail |
+| Old belief | Correction (2026-06-11) |
 |:---|:---|
-| **Buffer contents** | `[cx511h-diag] FIRST 16 BYTES` at frame 10: **`00 00 00 00 …`** — memory never written. In YUV, all-zero reads as **pure green**, not a FourCC/byte-order mismatch. |
-| **Byte-pair swap** | Software YUYV→UYVY swap in `v4l2_model_buffer_done()` runs but **changes nothing** on zero-filled buffers. |
-| **Descriptor ring audit** | Read-only dump of **`0x308` / `0x30c` / `0x310`** (per slot `+n·0xc`) after `aver_xilinx_active_current_desclist()`: vendor blob writes **wrong size registers** (e.g. **`0x00000007`**) instead of the frame allocation (**`0x003f4800`** = 4 147 200 bytes for 1080p UYVY). |
-| **DMA behaviour** | FPGA raises V-DESC IRQ after a few bytes, then **stops writing** — system memory stays zeroed. |
-| **`0x304` slot arming** | Writing **`0x07`** (run + arm slots 1+2) **before** valid descriptor addresses/sizes → **immediate PCIe hard-freeze** (4 frames or sooner). Per-frame re-arming is equally fatal. **Safe baseline:** `0x304 ← 0x01` only at stream start and per-frame doorbell. |
+| **`0x310` = byte size; blob writes `0x7` instead of `0x3f4800`** | **`0x310` = descriptor count** (7 SG entries). Per-fragment byte size is in chain entry `+0x8` (dwords). |
+| **Green screen = wrong descriptor size in blob** | **Green screen = missing `q->dev`** → no DMA sync → CPU read stale zeros. |
+| **Override `0x308` with V4L2 frame address** | **Dangerous and wrong** — `0x308` points at the **chain**, not the frame. Patching chain **entries** is the correct lever if needed. |
 
-**Descriptor programming path (where sizes must be fixed):**
+**Descriptor programming path (unchanged):**
 
-`v4l2_model_qops_buf_prepare` → `cx511h_v4l2_buffer_prepare` → `aver_xilinx_add_to_cur_desclist(phys, size)` → `aver_xilinx_active_current_desclist()` (blob writes ring registers).
+`v4l2_model_qops_buf_prepare` → `cx511h_v4l2_buffer_prepare` → `aver_xilinx_add_to_cur_desclist(phys, size)` → `aver_xilinx_active_current_desclist()` (blob programs ring + arms slots).
 
-### 3. Approaches tried (summary)
+#### Approaches tried (summary)
 
 | Approach | Result |
 |:---|:---|
@@ -95,12 +175,7 @@ Modernized for recent kernels. **Experimental — development and testing only.*
 | **CPU swap in Hard-IRQ hook** | PCIe timing stalls → userspace frame drops. Moved to `v4l2_model_buffer_done()` (soft path). |
 | **`0x304 ← 0x07` at `stream_on`** | Hard-freeze — slots armed before ring programmed. |
 | **`0x304 ← 0x07` per frame** | FPGA state-machine collision during active DMA → hard-freeze. |
-
-### 4. Next session (focused)
-
-1. **Fix descriptor size mapping** — Ensure `0x310` (and matching addr regs `0x308`/`0x30c`) receive **`0x003f4800`** (1080p UYVY) inside the descriptor programming sequence **before** any stream doorbell or slot arming.
-2. **Apply verified arming mask** — Once sizes match, arm at `stream_on` with the verified mask (**`0x1f`** = run + all programmed slots per `cx511h_dma_verify_slots()`), not before.
-3. **Re-run `[cx511h-diag]` hex dump** — Confirm non-zero pixel data; then re-evaluate YUYV→UYVY byte-pair swap if colours are still wrong.
+| **Force V4L2 addr into `0x308/0x30c`** | **Do not** — misinterprets register semantics; causes garbage DMA / lockup. |
 
 ---
 
@@ -127,7 +202,7 @@ sudo insmod cx511h.ko force_input_mode=1
 | Parameter | Type | Default | Description |
 |:---|:---:|:---:|:---|
 | `no_signal_pic` | charp | NULL | Bitmap when no input signal |
-| `copy_protetion_pic` | charp | NULL | Bitmap for copy-protected content. **Parameter name is misspelled in `board_config.c`** (vendor/original spelling) — you must pass `copy_protetion_pic=...` on `insmod` until the symbol is renamed in code. |
+| `copy_protetion_pic` | charp | NULL | Bitmap for copy-protected content. **Typo preserved from vendor** (`board_config.c`) — the **insmod/sysfs name is exactly `copy_protetion_pic`**, not `copy_protection_pic`. |
 | `led_pin_r` | int | 3 | Red LED GPIO (-1=disabled) |
 | `led_pin_g` | int | 4 | Green LED GPIO (-1=disabled) |
 | `led_pin_b` | int | 5 | Blue LED GPIO (-1=disabled) |
@@ -144,7 +219,7 @@ sudo insmod cx511h.ko force_input_mode=1
 > ibt=off iommu=pt
 > ```
 > - `ibt=off` — `AverMediaLib_64.a` has no ENDBR64; Makefile uses `-fcf-protection=none` and `MODULE_INFO(ibt, "N")` as extra mitigation.
-> - `iommu=pt` — passthrough mode for DMA.
+> - `iommu=pt` — **passthrough mode** for DMA (confirmed on test hardware: bus addresses match host physical addresses; IOMMU still required for correct vb2 **`q->dev`** mapping and `dma_sync_*`).
 
 - Kernel headers for **running** kernel (`/lib/modules/$(uname -r)/build`)
 - `base-devel`, `llvm`, `clang`
@@ -218,12 +293,12 @@ Source: `driver/board/cx511h/board_v4l2.c` → `cx511h_stream_on()`.
 6. **MMIO** — `msleep(200)`; optional pixel-format debug (`debug_pixel_format` / `auto_test_byteorder`)
 7. **MMIO** — `aver_xilinx_enable_video_streaming(TRUE)`
 8. **MMIO** — `pci_model_mmio_write(0x304, 0x01)` — initial doorbell (run bit only; **no slot arming** until descriptor ring verified)
-9. **Read-only** — `cx511h_dma_verify_slots()` dumps ring regs `0x308`/`0x30c`/`0x310` (diagnostic; arming mask logged but **not applied**)
+9. **Read-only** — `cx511h_dma_verify_slots()` + `[gc573-chain]` descriptor entry audit (first buffers only)
 
 YUV422 from userspace is mapped to FPGA **UYVY** unless `debug_pixel_format` overrides.
 
 > [!CAUTION]
-> Do **not** write `0x304 ← 0x07` (run + arm slots) at `stream_on` until descriptor addresses **and** sizes (`0x3f4800` for 1080p) are verified in the ring registers. Arming unprogrammed or wrongly-sized slots causes an immediate **PCIe hard-freeze**.
+> Do **not** write `0x304 ← 0x07` (run + arm slots) at `stream_on` until the descriptor **chain** at `0x308`/`0x30c` is programmed and verified via `[gc573-chain]`. Arming empty slots → **PCIe hard-freeze**. Do **not** write the V4L2 frame address into `0x308` — that register holds the **chain pointer**, not the pixel buffer.
 
 ### Skipped (I2C deadlock workaround)
 
@@ -238,13 +313,18 @@ YUV422 from userspace is mapped to FPGA **UYVY** unless `debug_pixel_format` ove
 
 **Reason:** `hdmirxwr()` during streaming can **deadlock** the ITE6805 I2C bus. CSC and stream control use MMIO instead.
 
-### Per frame — two completion paths (2026-06-11)
+### Per frame — completion paths (2026-06-11)
 
-**Path A — PCIe ISR (active):** `pci_model_irq` in `pci_model.c` intercepts bit **`0x2`** [V-DESC complete] **before** the vendor blob handler. Hook `cx511h_vdesc_irq_hook()` logs slot index from **`0x300 & 7`** and optional frame-100 hex dump. Safety ACK of `0x2` if blob leaves the bit set.
+**Path A — PCIe ISR (active):** `pci_model_irq` in `pci_model.c` intercepts bit **`0x2`** [V-DESC complete] **before** the vendor blob handler. Hook `cx511h_vdesc_irq_hook()` logs slot index from **`0x300 & 7`**, optional `[gc573-intercept]` chain pointer/count, and frame-100 hex dump.
 
-**Path B — blob callback (may not run live):** `cx511h_video_buffer_done` via `aver_xilinx_active_current_desclist(...)`. When invoked: `v4l2_model_buffer_done()` → doorbell `0x304 ← 0x01` → IRQ ACK `0x10 ← 0x02`. **Do not** re-arm slot bits on `0x304` per frame.
+**Path B — blob callback (active when streaming):** `cx511h_video_buffer_done` via `aver_xilinx_active_current_desclist(...)`. Sequence:
 
-**Path C — V4L2 handoff (soft-IRQ safe):** `v4l2_model_buffer_done()` in `v4l2_model_videobuf2.c` — YUYV→UYVY byte-pair swap (if format is UYVY) immediately before `vb2_buffer_done()`. Includes one-shot `[cx511h-diag] FIRST 16 BYTES` dump at frame 10.
+1. **`v4l2_model_sync_pending_plane_for_cpu()`** — invalidate CPU cache for the pending vb2 plane (`DMA_FROM_DEVICE`).
+2. **`[gc573-payload]`** — first 16 bytes (raw FPGA byte order, budgeted).
+3. **`v4l2_model_buffer_done()`** — YUYV→UYVY swap (if UYVY FourCC) + `vb2_buffer_done()`.
+4. Doorbell **`0x304 ← 0x01`** → IRQ ACK **`0x10 ← 0x02`**. **Do not** re-arm slot bits on `0x304` per frame.
+
+**Path C — V4L2 handoff detail:** `v4l2_model_buffer_done()` in `v4l2_model_videobuf2.c` includes one-shot `[cx511h-diag] FIRST 16 BYTES` pre/post swap at frame 10.
 
 ### `stream_off`
 
@@ -266,7 +346,7 @@ YUV422 from userspace is mapped to FPGA **UYVY** unless `debug_pixel_format` ove
 | Board | `driver/board/cx511h/board_gpio.c` | GPIO (reset pin 0, HPD pin 2) |
 | Board | `driver/board/cx511h/board_alsa.c` | ALSA PCM |
 | Utils | `driver/utils/pci/pci_model.c` | PCI, MMIO, IRQ (V-DESC hook, opt-in I2C ACK), DMA verify |
-| Utils | `driver/utils/v4l2/*.c` | V4L2, videobuf2, framegrabber |
+| Utils | `driver/utils/v4l2/*.c` | V4L2, videobuf2 (**`q->dev` binding**), framegrabber, cache sync |
 | Blob | `AverMediaLib_64.a` (repo root) | Precompiled vendor FPGA / ITE6805 logic |
 
 ### Build (`driver/Makefile`)
@@ -326,10 +406,11 @@ Legacy `board_suspend` / `board_resume` wired from PCI setup — not migrated to
 - **Remaining:** `hdmirxwr()` during streaming can still freeze; TTL/unmute/CSC I2C sequences skipped in `stream_on`.
 
 ### 2. Green screen / zero-filled buffers
-- **Status:** **root cause identified** (2026-06-11) — descriptor size mismatch, not byte order
-- **Issue:** V4L2 buffers are **`0x00` throughout** (`[cx511h-diag]` at frame 10). All-zero YUV renders as **pure green**. DMA never writes because the vendor blob programs descriptor **size registers ~`0x7`** instead of **`0x3f4800`** (1080p UYVY).
-- **Not the cause:** YUYV vs UYVY byte order (swap changes nothing on zero buffers).
-- **Next:** Fix size mapping in descriptor programming (`aver_xilinx_add_to_cur_desclist` / ring `0x310`) before any `0x304` slot arming.
+- **Status:** **resolved** (2026-06-11) — missing **`q->dev`** in vb2 init
+- **Issue:** V4L2 buffers appeared **`0x00` throughout** (pure green in YUV). Root cause was **not** FPGA register `0x310` or byte order.
+- **Fix:** `q->dev = dev` in `v4l2_model_vb2_init()` + explicit `v4l2_model_sync_pending_plane_for_cpu()` before buffer handoff.
+- **Proof:** `[gc573-payload]` shows **`10 80 10 80…`**; ffplay reports full 4147200-byte frames (non-zero).
+- **Remaining:** ffplay may still flag **corrupted data** — tune buffer-done timing and YUYV↔UYVY swap (Phase 4).
 
 ### 3. V4L2 vs FPGA format
 - Driver advertises many pixel formats; hardware path uses **UYVY** for YUV422 in auto mode.
@@ -376,16 +457,22 @@ Legacy `board_suspend` / `board_resume` wired from PCI setup — not migrated to
 - **Status:** software limited
 - On lock, widths **> 1920** are forced to **1920×1080@60** in `cx511h_ite6805_event()` — true 4K capture not implemented.
 
-### 14. Descriptor ring size mismatch (critical — blocks capture)
-- **Status:** open (2026-06-11)
-- **Issue:** After `aver_xilinx_active_current_desclist()`, ring dump `[cx511h-desc]` shows **`0x310` ≈ `0x7`** instead of **`0x3f4800`**. FPGA IRQs fire but DMA stops after a few bytes; memory stays zeroed.
-- **Impact:** No real video until sizes are corrected in the descriptor path.
-- **Related:** Forcing `0x304 ← 0x07` before valid programming → **hard-freeze** (PCIe lockup).
+### 14. Descriptor ring register semantics (clarified)
+- **Status:** documented (2026-06-11) — **not** a size-mismatch bug
+- **`0x308` / `0x30c`:** Pointer to the blob’s **descriptor chain** in RAM (not the video frame).
+- **`0x310`:** **Descriptor count** (e.g. `0x7` = seven SG fragments). Per-fragment byte length is in chain entry dword at offset `+0x8` (`bytes >> 2`).
+- **Verification:** Use `[gc573-chain]` to compare chain entry0 **target address** to V4L2 `Desc0`, not `0x308` itself.
+- **Do not:** Write frame addresses into `0x308` or force `0x310 ← 0x3f4800`.
 
 ### 15. `0x304` slot arming hazards
 - **Status:** documented safe baseline
 - **Safe:** `0x304 ← 0x01` at `stream_on` and per-frame doorbell only.
 - **Unsafe:** `0x304 |= 0x07` at `stream_on` (before ring programmed) or per-frame re-arm during active DMA → **system hard-freeze**.
+
+### 16. ffplay “corrupted data” / unstable dequeue (Phase 4)
+- **Status:** open (2026-06-11)
+- **Issue:** After the DMA fix, ffplay may log **`Dequeued v4l2 buffer contains corrupted data (4147200 bytes)`** while `[gc573-payload]` shows valid YUV (`10 80…`). Payload reaches RAM; userspace validation or wrapper timing/byte-order still needs hardening.
+- **Next:** Verify YUYV↔UYVY swap once per frame; audit `cx511h_video_buffer_done` vs vb2 queue state; test with `ffmpeg -f v4l2` and raw `dd`/`xxd`.
 
 ---
 
@@ -398,11 +485,13 @@ Legacy `board_suspend` / `board_resume` wired from PCI setup — not migrated to
 | **0x10** | `0x1fff` mask | IRQ status/ACK: `0x2` V-DESC complete, `0x20`/`0x200` audio, `0x800` I2C engine |
 | **0x300** | `& 7` | Active V-DESC slot index (ping-pong: slots 1↔2 observed) |
 | **0x304** | bit `0` | Global run/enable — **safe doorbell value `0x01`** |
-| **0x304** | bits `1..4` | Descriptor slot arm (`1 << (slot+1)`) — **only after ring programmed** |
-| **0x308+n·0xc** | addr lo | Descriptor ring slot *n* physical address (low) |
-| **0x30c+n·0xc** | addr hi | Descriptor ring slot *n* physical address (high) |
-| **0x310+n·0xc** | size | Transfer size — must be **`0x3f4800`** for 1080p UYVY (blob currently writes ~`0x7`) |
+| **0x304** | bits `1..4` | Descriptor slot arm (`1 << (slot+1)`) — **only after chain programmed** |
+| **0x308+n·0xc** | addr lo | **Descriptor chain** bus address (low) — blob-allocated ring buffer |
+| **0x30c+n·0xc** | addr hi | **Descriptor chain** bus address (high) |
+| **0x310+n·0xc** | count | **Number of HW descriptors** in chain (SG fragment count, e.g. `0x7`) |
 | **0x1040** | dynamic | CSC (422 mode, RGB→YUV, matrix bits [10:8]) |
+
+**Chain entry layout** (16 bytes at address from `0x308`/`0x30c`): `[0]`/`[1]` = video target addr, `[2]` = size in dwords, `[3]` = `0x80006000` control.
 
 ### Identified but skipped (I2C writes)
 
@@ -428,15 +517,14 @@ xxd frame_raw.bin | head -4
 
 | Hex pattern | Likely meaning |
 |:---|:---|
-| `00 00 00 00...` | **Current failure mode** — DMA never wrote; renders as **pure green** in YUV. Check `[cx511h-desc]` size regs (`0x310` should be `0x3f4800`). |
-| `10 80 10 80...` | Black YUV — DMA ok, muted/no picture |
-| `80 10 80 10...` | **YUYV** limited black — if seen after DMA fix, byte-pair swap may be needed |
-| `10 80 10 80...` | **UYVY** limited black — correct colours for UYVY FourCC |
-| Varying | Real pixels — re-evaluate CSC / byte-order only after non-zero data confirmed |
+| `00 00 00 00...` | **Stale cache / pre-fix** — DMA may have written but CPU saw zeros; check **`q->dev`** and `[gc573-payload]` after sync |
+| `10 80 10 80...` | **UYVY limited black** — DMA OK (Y=0x10, U/V=0x80). **Confirmed live payload (2026-06-11).** |
+| `80 10 80 10...` | **YUYV limited black** — DMA OK; enable or disable byte-pair swap accordingly |
+| Varying non-zero | Real picture — tune CSC (`0x1040`) and colours only if needed |
 
 ```bash
-# Kernel log (2026-06-11 diagnostic tags)
-dmesg | grep -iE 'cx511h-bypass|cx511h-desc|cx511h-diag|cx511h-swap|cx511h-irq|cx511h-i2c|cx511h-phase2|cx511h-csc|cx511h-dma'
+# Kernel log — Phase 3 breakthrough tags
+dmesg | grep -iE 'gc573-payload|gc573-chain|gc573-debug|gc573-intercept|cx511h-bypass|cx511h-desc|cx511h-diag|cx511h-swap|cx511h-irq|cx511h-i2c|cx511h-phase2|cx511h-csc|cx511h-dma'
 
 # Module parameters (from driver/)
 cd driver && sudo rmmod cx511h 2>/dev/null; sudo insmod cx511h.ko debug_pixel_format=1
@@ -458,8 +546,9 @@ done
 ## Reverse Engineering Methods
 
 - Register probing and Windows-driver comparison
-- V4L2 / videobuf2 callback tracing
-- Iterative testing on real GC573 hardware
+- **`AverMediaLib_64.a` object disassembly** (`aver_xilinx.o`, `ite6805_sys.o`, …) — descriptor chain semantics, ITE6805 downscale path
+- V4L2 / videobuf2 callback tracing (`[gc573-*]` forensic tags)
+- Iterative testing on real GC573 hardware (CachyOS / kernel 7.x)
 - AI-assisted analysis (clearly experimental)
 
 ---

@@ -69,6 +69,16 @@ MODULE_PARM_DESC(auto_test_byteorder,
 
 static int cx511h_frame_counter = 0;
 
+/* [gc573-intercept] Last V4L2 descriptor-0 DMA address programmed by our
+ * wrapper (split into the FPGA's lo/hi register halves) plus a resolved
+ * pci_handle, captured in buffer_prepare (process context) so the hard-IRQ
+ * V-DESC hook can compare them against what the blob actually wrote into the
+ * FPGA ring registers 0x308/0x30c — without doing handle lookups in IRQ. */
+static u32 g_v4l2_desc0_lo = 0;
+static u32 g_v4l2_desc0_hi = 0;
+static handle_t g_intercept_pci_handle = NULL;
+static int g_intercept_budget = 16;
+
 /* DMA control register 0x304 (Windows audit 2026-06-11):
  *   bit 0      = global run/enable
  *   bits 1..4  = descriptor slot arm bits (1 << (slot_index + 1))
@@ -1192,6 +1202,30 @@ static void cx511h_vdesc_irq_hook(void *data, int slot_index)
     if (!board_v4l2_cxt || !board_v4l2_cxt->v4l2_handle)
         return;
 
+    /* === [gc573-intercept] descriptor-ring state at V-DESC complete ===
+     * NOTE: 0x308/0x30c hold the bus address of the descriptor CHAIN, not the
+     * frame buffer — they are NOT expected to equal our V4L2 Desc0. The real
+     * "does the blob target our buffer?" check is the [gc573-chain] reader in
+     * buffer_prepare, which inspects the chain entry the FPGA actually walks.
+     * This log just records the live ring pointer/count per completed slot.
+     * Budgeted; MMIO read + printk are hard-IRQ safe. */
+    if (g_intercept_budget > 0 && g_intercept_pci_handle &&
+        slot_index >= 0 && slot_index < CX511H_DMA_SLOT_COUNT) {
+        u32 hw_lo = pci_model_mmio_read(g_intercept_pci_handle, 0,
+                                        CX511H_DMA_DESC_LO(slot_index));
+        u32 hw_hi = pci_model_mmio_read(g_intercept_pci_handle, 0,
+                                        CX511H_DMA_DESC_HI(slot_index));
+        u32 hw_sz = pci_model_mmio_read(g_intercept_pci_handle, 0,
+                                        CX511H_DMA_DESC_SZ(slot_index));
+
+        g_intercept_budget--;
+
+        printk(KERN_ERR
+            "[gc573-intercept] V-DESC slot %d: chain ptr 0x308=0x%08x "
+            "0x30c=0x%08x desc_count 0x310=0x%08x\n",
+            slot_index, hw_lo, hw_hi, hw_sz);
+    }
+
     cx511h_frame_counter++;
     if (cx511h_frame_counter == 100) {
         u8 *vaddr = v4l2_model_peek_pending_plane_vaddr(
@@ -1226,6 +1260,40 @@ static void cx511h_video_buffer_done(void *data)
     {
         /* Byte-pair swap lives in v4l2_model_buffer_done() (V4L2 handoff
          * layer) — doing it here too would double-swap and undo the fix. */
+
+        /* === [gc573-debug] force CPU-cache invalidation before serving ===
+         * The FPGA has just finished writing this frame via DMA. On a
+         * non-coherent mapping the CPU may still hold stale (zero) cache
+         * lines for the buffer, which renders as a green screen even when
+         * the DMA succeeded. Invalidate the pending plane for the CPU
+         * BEFORE v4l2_model_buffer_done() hands it to userspace. */
+        v4l2_model_sync_pending_plane_for_cpu(board_v4l2_cxt->v4l2_handle, 0);
+
+        /* === [gc573-payload] Hex-Dump Light ===
+         * Read the first 16 bytes of the just-completed frame (the pending
+         * plane that is about to be served). Runs AFTER the cache sync so we
+         * see the real DMA'd payload, BEFORE v4l2_model_buffer_done() applies
+         * the YUYV->UYVY swap — so this is the raw byte order off the FPGA.
+         * Budgeted to avoid flooding the log at 60 fps. */
+        {
+            static int payload_budget = 30;
+
+            if (payload_budget > 0) {
+                u8 *p = v4l2_model_peek_pending_plane_vaddr(
+                            board_v4l2_cxt->v4l2_handle, 0);
+
+                payload_budget--;
+                if (p)
+                    printk(KERN_ERR
+                        "[gc573-payload] First 16 bytes of frame: "
+                        "%02x %02x %02x %02x %02x %02x %02x %02x "
+                        "%02x %02x %02x %02x %02x %02x %02x %02x\n",
+                        p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7],
+                        p[8], p[9], p[10], p[11], p[12], p[13], p[14], p[15]);
+                else
+                    printk(KERN_ERR "[gc573-payload] pending plane vaddr is NULL\n");
+            }
+        }
 
         v4l2_model_buffer_done(board_v4l2_cxt->v4l2_handle);
 
@@ -1281,6 +1349,7 @@ static void cx511h_v4l2_buffer_prepare(v4l2_model_callback_parameter_t *cb_info)
         unsigned framebufsize,remain;
         int width,height;
         unsigned bytesperline;
+        unsigned long total_size = 0;   /* [gc573-debug] sum of programmed SG sizes */
         
         framegrabber_g_out_framesize(board_v4l2_cxt->fg_handle,&width,&height);
         bytesperline=framegrabber_g_out_bytesperline(board_v4l2_cxt->fg_handle);
@@ -1298,12 +1367,43 @@ static void cx511h_v4l2_buffer_prepare(v4l2_model_callback_parameter_t *cb_info)
             if(remain >= desc[i].size)
             {
                 aver_xilinx_add_to_cur_desclist(board_v4l2_cxt->aver_xilinx_handle,desc[i].addr,desc[i].size);
+                total_size += desc[i].size;
                 remain -= desc[i].size;
             }else
             {
                 aver_xilinx_add_to_cur_desclist(board_v4l2_cxt->aver_xilinx_handle,desc[i].addr,remain);
+                total_size += remain;
                 remain =0;
                 break;
+            }
+        }
+
+        /* === [gc573-debug] forensic SG-chain verification ===
+         * Confirms the wrapper feeds the FPGA a chain that sums to the full
+         * 1080p UYVY frame (0x3f4800) and that the descriptor addresses are
+         * real bus addresses (not 0x0 / trapped). If Total Size != 0x3f4800
+         * the per-descriptor lengths (entry[0x8] in the blob) are wrong; if
+         * Desc0/Desc1 addresses look bogus the FPGA is DMAing into the wrong
+         * memory — both produce the zero-buffer "green screen". */
+        printk(KERN_ERR "[gc573-debug] SG Chain: Total Size=0x%lx (Expected 0x3f4800), Count=%d\n",
+               total_size, buffer_info->buf_count[0]);
+        {
+            dma_addr_t a0, a1;
+
+            if (buffer_info->buf_count[0] > 0) {
+                a0 = (dma_addr_t)desc[0].addr;
+                printk(KERN_ERR "[gc573-debug] Desc0: Addr=%pad, Size=0x%lx\n",
+                       &a0, desc[0].size);
+
+                /* Stash for the hard-IRQ intercept comparison. */
+                g_v4l2_desc0_lo = lower_32_bits(a0);
+                g_v4l2_desc0_hi = upper_32_bits(a0);
+                g_intercept_pci_handle = get_pci_handle_cached(board_v4l2_cxt);
+            }
+            if (buffer_info->buf_count[0] > 1) {
+                a1 = (dma_addr_t)desc[1].addr;
+                printk(KERN_ERR "[gc573-debug] Desc1: Addr=%pad, Size=0x%lx\n",
+                       &a1, desc[1].size);
             }
         }
 
@@ -1325,6 +1425,56 @@ static void cx511h_v4l2_buffer_prepare(v4l2_model_callback_parameter_t *cb_info)
                     desc_dump_budget--;
                     printk(KERN_ERR "[cx511h-desc] ring state after active_current_desclist:\n");
                     cx511h_dma_verify_slots(pci_handle);
+
+                    /* === [gc573-chain] read the descriptor CHAIN, not the ptr ===
+                     * 0x308/0x30c hold the bus address of the blob's descriptor
+                     * ring (NOT the frame buffer). The FPGA reads 16-byte
+                     * descriptors from there; each entry's word[0]/[1] is the
+                     * video target address and word[2] = size/4. We map that
+                     * ring (IOMMU passthrough → bus addr == phys addr) and check
+                     * whether the blob put OUR sg_dma_address into entry[0]. If
+                     * not, the blob built the chain against its own buffer. */
+                    {
+                        int slot;
+
+                        for (slot = 0; slot < CX511H_DMA_SLOT_COUNT; slot++) {
+                            u32 clo = pci_model_mmio_read(pci_handle, 0, CX511H_DMA_DESC_LO(slot));
+                            u32 chi = pci_model_mmio_read(pci_handle, 0, CX511H_DMA_DESC_HI(slot));
+                            u32 cnt = pci_model_mmio_read(pci_handle, 0, CX511H_DMA_DESC_SZ(slot));
+                            phys_addr_t chain_phys = ((phys_addr_t)chi << 32) | clo;
+                            u32 *entry;
+
+                            if ((clo | chi) == 0 || cnt == 0)
+                                continue;
+
+                            entry = memremap(chain_phys, 16, MEMREMAP_WB);
+                            if (!entry) {
+                                printk(KERN_ERR "[gc573-chain] slot %d: chain@0x%llx not mappable\n",
+                                       slot, (unsigned long long)chain_phys);
+                                continue;
+                            }
+
+                            {
+                                u32 e_lo = le32_to_cpu(entry[0]);
+                                u32 e_hi = le32_to_cpu(entry[1]);
+                                u32 e_sz = le32_to_cpu(entry[2]);   /* in dwords */
+                                u32 e_fl = le32_to_cpu(entry[3]);
+                                int target_match = (e_lo == g_v4l2_desc0_lo &&
+                                                    e_hi == g_v4l2_desc0_hi);
+
+                                printk(KERN_ERR
+                                    "[gc573-chain] slot %d chain@0x%llx cnt=%u | "
+                                    "entry0: target=0x%08x_%08x size=0x%x(dw) flags=0x%08x | "
+                                    "V4L2 Desc0=0x%08x_%08x => %s\n",
+                                    slot, (unsigned long long)chain_phys, cnt,
+                                    e_hi, e_lo, e_sz, e_fl,
+                                    g_v4l2_desc0_hi, g_v4l2_desc0_lo,
+                                    target_match ? "MATCH (chain points at our buffer)"
+                                                 : "MISMATCH (chain targets BLOB buffer!)");
+                            }
+                            memunmap(entry);
+                        }
+                    }
                 }
             }
         }

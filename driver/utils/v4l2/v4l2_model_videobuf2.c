@@ -528,6 +528,15 @@ void *v4l2_model_vb2_init(struct vb2_queue *q, v4l2_model_devicetype_t dev_type,
   q->buf_struct_size = sizeof(v4l2_model_vb2_buffer_t);
   q->ops = &v4l2_model_qops;
   q->lock = &vb2_context->qlock;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 0)
+  /* CRITICAL: vb2 core (>=4.8) maps DMA-SG / DMA-contig buffers against
+   * q->dev and the old alloc_ctx API is gone. Without q->dev the buffers
+   * are mapped against a NULL device → dma-direct instead of the PCI
+   * device's IOMMU domain, so sg_dma_address() returns raw host-physical
+   * addresses the FPGA cannot reach when the IOMMU is enforcing → DMA
+   * writes fault → all-zero (green) frames. Bind the queue to the PCI dev. */
+  q->dev = dev;
+#endif
   switch (queue_type) {
   case V4L2_MODEL_BUF_TYPE_VMALLOC:
     q->mem_ops = &vb2_vmalloc_memops;
@@ -805,6 +814,67 @@ void v4l2_model_swap_pending_plane_byte_pairs(v4l2_model_handle_t context,
   spin_unlock_irqrestore(&vb2_context->queuelock, flags);
 
   v4l2_model_swap_plane_byte_pairs_vb(vb2_context, vb, plane, len);
+}
+
+/* Invalidate the CPU cache for the pending (head-of-list) buffer's plane so
+ * userspace reads the freshly DMA'd frame instead of stale cache. Mirrors the
+ * sync logic in v4l2_model_swap_plane_byte_pairs_vb() but does the for_cpu
+ * direction only (no byte swap, no for_device re-handover). Safe to call from
+ * the board buffer-done callback right before v4l2_model_buffer_done(). */
+void v4l2_model_sync_pending_plane_for_cpu(v4l2_model_handle_t context,
+					   unsigned int plane)
+{
+  v4l2_model_context_t *v4l2m_context = (v4l2_model_context_t *)context;
+  v4l2_model_vb2_context_t *vb2_context;
+  v4l2_model_vb2_buffer_t *buf;
+  struct vb2_buffer *vb;
+  struct sg_table *sgt = NULL;
+  dma_addr_t dma_addr = 0;
+  struct device *dma_dev;
+  unsigned long flags;
+
+  if (!v4l2m_context || !v4l2m_context->vb2_context)
+    return;
+  if (plane >= VIDEO_MAX_PLANES)
+    return;
+
+  vb2_context = (v4l2_model_vb2_context_t *)v4l2m_context->vb2_context;
+
+  spin_lock_irqsave(&vb2_context->queuelock, flags);
+  if (list_empty(&vb2_context->buffer_list)) {
+    spin_unlock_irqrestore(&vb2_context->queuelock, flags);
+    return;
+  }
+  buf = list_first_entry(&vb2_context->buffer_list, v4l2_model_vb2_buffer_t,
+			 list);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 4, 0)
+  vb = &buf->vb.vb2_buf;
+#else
+  vb = &buf->vb;
+#endif
+  spin_unlock_irqrestore(&vb2_context->queuelock, flags);
+
+  if (!vb || !vb->vb2_queue)
+    return;
+
+  dma_dev = vb->vb2_queue->dev;
+  if (!dma_dev)
+    return;
+
+  switch (vb2_context->queue_type) {
+  case V4L2_MODEL_BUF_TYPE_DMA_SG:
+    sgt = vb2_dma_sg_plane_desc(vb, plane);
+    if (sgt)
+      dma_sync_sgtable_for_cpu(dma_dev, sgt, DMA_FROM_DEVICE);
+    break;
+  case V4L2_MODEL_BUF_TYPE_DMA_CONT:
+    dma_addr = vb2_dma_contig_plane_dma_addr(vb, plane);
+    dma_sync_single_for_cpu(dma_dev, dma_addr, vb2_plane_size(vb, plane),
+			    DMA_FROM_DEVICE);
+    break;
+  default:
+    break;
+  }
 }
 
 void v4l2_model_buffer_done(v4l2_model_handle_t context) {
