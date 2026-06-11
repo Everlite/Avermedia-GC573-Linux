@@ -340,6 +340,13 @@ void v4l2_model_disconnect(v4l2_model_handle_t context);
 void v4l2_model_next_buffer(v4l2_model_handle_t context,
 			    v4l2_model_buffer_info_t ** buffer_info);
 
+void *v4l2_model_peek_pending_plane_vaddr(v4l2_model_handle_t context,
+					  unsigned int plane);
+
+void v4l2_model_swap_pending_plane_byte_pairs(v4l2_model_handle_t context,
+					      unsigned int plane,
+					      size_t len);
+
 void v4l2_model_buffer_done(v4l2_model_handle_t context);
 //void v4l2_model_buffer_done(v4l2_model_buffer_info_t *next_buffer, void *context);
 //

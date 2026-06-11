@@ -67,6 +67,8 @@ module_param(auto_test_byteorder, int, 0644);
 MODULE_PARM_DESC(auto_test_byteorder,
     "Auto-test: cycle through byte orders 0-3 on stream_on and dump first pixels");
 
+static int cx511h_frame_counter = 0;
+
 /*
  * Set LED color via FPGA GPIO pins.
  * r, g, b: 0=off, 1=on for each color channel.
@@ -377,6 +379,7 @@ static void cx511h_stream_on(framegrabber_handle_t handle)
 {
     board_v4l2_context_t *board_v4l2_cxt=framegrabber_get_data(handle);
     aver_xilinx_video_process_cfg_t vip_cfg;
+    memset(&vip_cfg, 0, sizeof(vip_cfg));
     int width,height;
     int out_width,out_height;
     int frameinterval=0;
@@ -394,6 +397,7 @@ static void cx511h_stream_on(framegrabber_handle_t handle)
     }
 
     printk(KERN_ERR "[cx511h-ttl] === STREAM ON START ===\n");
+    cx511h_frame_counter = 0;
 
     /* TTL PIXEL MODE (Single/SDR Sync) — SKIPPED to avoid I2C deadlock.
      * The ITE6805 blob's hdmirxwr() hangs on register 0xc0 (I2C bus lock).
@@ -656,24 +660,12 @@ skip_ttl_config:
 		vip_cfg.video_bypass = 0;
 	}
 	
-    // --- PHASE2-FINAL --- Map V4L2 pixel format to FPGA pixel format (fix green screen)
-    // Hardware outputs UYVY (BT.656 native), all YUV422 formats must map to FPGA UYVY
-    
-    // DEBUG OVERRIDE: If debug_pixel_format >= 0, force specific FPGA format
     if (debug_pixel_format >= 0) {
         vip_cfg.pixel_format = debug_pixel_format;
         printk(KERN_ERR "[cx511h-v4l2] DEBUG OVERRIDE: FPGA pixel format forced to %d (0x%02x)\n",
                debug_pixel_format, debug_pixel_format);
-    } else if (pixfmt->is_yuv) {
-        // All YUV422 formats (YUYV, UYVY, YVYU, VYUY) map to FPGA UYVY (BT.656 native)
-        vip_cfg.pixel_format = AVER_XILINX_FMT_UYVY;
-        printk(KERN_ERR "[cx511h-v4l2] GREEN SCREEN FIX: YUV422 %s → FPGA UYVY (BT.656 native)\n",
-               pixfmt->name);
     } else {
-        // Default mapping for non-YUV formats (RGB24, etc.)
         vip_cfg.pixel_format = pixfmt->pixfmt_out;
-        printk(KERN_ERR "[cx511h-v4l2] FPGA pixel format: %s → AVER_XILINX_FMT_%d (FourCC: 0x%08x)\n",
-               pixfmt->name, pixfmt->pixfmt_out, pixfmt->fourcc);
     }
 
     /* DEBUG 4: Video Unmute Sequence (from Windows Driver Analysis)
@@ -895,8 +887,6 @@ skip_ttl_config:
              *  overwritten. Restore it from the earlier block.) */
             if (debug_pixel_format >= 0)
                 vip_cfg.pixel_format = debug_pixel_format;
-            else if (pixfmt->is_yuv)
-                vip_cfg.pixel_format = AVER_XILINX_FMT_UYVY;
             else
                 vip_cfg.pixel_format = pixfmt->pixfmt_out;
             aver_xilinx_config_video_process(
@@ -1143,6 +1133,39 @@ static void cx511h_video_buffer_done(void *data)
     //mesg("%s board_v4l2_cxt %p\n",__func__,board_v4l2_cxt);
     if(board_v4l2_cxt)
     {
+        {
+            const framegrabber_pixfmt_t *pixfmt;
+            int width, height;
+            size_t frame_bytes;
+
+            pixfmt = framegrabber_g_out_pixelfmt(board_v4l2_cxt->fg_handle);
+            framegrabber_g_out_framesize(board_v4l2_cxt->fg_handle,
+                                         &width, &height);
+            frame_bytes = (size_t)width * height * 2;
+
+            cx511h_frame_counter++;
+            if (cx511h_frame_counter == 100) {
+                u8 *vaddr = v4l2_model_peek_pending_plane_vaddr(
+                    board_v4l2_cxt->v4l2_handle, 0);
+                if (vaddr) {
+                    printk(KERN_ERR
+                        "AVER_LIVE_HEX_DUMP: %02x %02x %02x %02x %02x %02x %02x %02x "
+                        "%02x %02x %02x %02x %02x %02x %02x %02x\n",
+                        vaddr[0], vaddr[1], vaddr[2], vaddr[3],
+                        vaddr[4], vaddr[5], vaddr[6], vaddr[7],
+                        vaddr[8], vaddr[9], vaddr[10], vaddr[11],
+                        vaddr[12], vaddr[13], vaddr[14], vaddr[15]);
+                } else {
+                    printk(KERN_ERR
+                        "AVER_LIVE_HEX_DUMP: (null vaddr at frame 100)\n");
+                }
+            }
+
+            if (pixfmt && pixfmt->fourcc == V4L2_PIX_FMT_UYVY && frame_bytes)
+                v4l2_model_swap_pending_plane_byte_pairs(
+                    board_v4l2_cxt->v4l2_handle, 0, frame_bytes);
+        }
+
         v4l2_model_buffer_done(board_v4l2_cxt->v4l2_handle);
 
         // --- PHASE2 --- Doorbell and IRQ ACK for continuous streaming

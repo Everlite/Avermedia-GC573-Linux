@@ -10,6 +10,7 @@
  * =================================================================
  */
 #include "typedef.h"
+#include <linux/dma-mapping.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
@@ -669,6 +670,128 @@ void v4l2_model_next_buffer(v4l2_model_handle_t context,
   // vb= &next_buffer->vb;
   // printk("%s vb %p\n",__func__,vb);
   *buffer_info = &next_buffer->buffer_info;
+}
+
+void *v4l2_model_peek_pending_plane_vaddr(v4l2_model_handle_t context,
+					  unsigned int plane)
+{
+  v4l2_model_context_t *v4l2m_context = (v4l2_model_context_t *)context;
+  v4l2_model_vb2_context_t *vb2_context;
+  v4l2_model_vb2_buffer_t *buf;
+  struct vb2_buffer *vb;
+  void *vaddr;
+  unsigned long flags;
+
+  if (!v4l2m_context || !v4l2m_context->vb2_context)
+    return NULL;
+
+  if (plane >= VIDEO_MAX_PLANES)
+    return NULL;
+
+  vb2_context = (v4l2_model_vb2_context_t *)v4l2m_context->vb2_context;
+
+  spin_lock_irqsave(&vb2_context->queuelock, flags);
+  if (list_empty(&vb2_context->buffer_list)) {
+    spin_unlock_irqrestore(&vb2_context->queuelock, flags);
+    return NULL;
+  }
+
+  buf = list_first_entry(&vb2_context->buffer_list, v4l2_model_vb2_buffer_t,
+			 list);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 4, 0)
+  vb = &buf->vb.vb2_buf;
+#else
+  vb = &buf->vb;
+#endif
+  vaddr = vb2_plane_vaddr(vb, plane);
+  spin_unlock_irqrestore(&vb2_context->queuelock, flags);
+
+  return vaddr;
+}
+
+void v4l2_model_swap_pending_plane_byte_pairs(v4l2_model_handle_t context,
+					      unsigned int plane, size_t len)
+{
+  v4l2_model_context_t *v4l2m_context = (v4l2_model_context_t *)context;
+  v4l2_model_vb2_context_t *vb2_context;
+  v4l2_model_vb2_buffer_t *buf;
+  struct vb2_buffer *vb;
+  u8 *vaddr;
+  unsigned long flags;
+  size_t i;
+  struct sg_table *sgt = NULL;
+  v4l2_model_buffer_type_e queue_type;
+  dma_addr_t dma_addr = 0;
+  struct device *dma_dev = NULL;
+
+  if (!v4l2m_context || !v4l2m_context->vb2_context || !len)
+    return;
+
+  if (plane >= VIDEO_MAX_PLANES)
+    return;
+
+  vb2_context = (v4l2_model_vb2_context_t *)v4l2m_context->vb2_context;
+
+  spin_lock_irqsave(&vb2_context->queuelock, flags);
+  if (list_empty(&vb2_context->buffer_list)) {
+    spin_unlock_irqrestore(&vb2_context->queuelock, flags);
+    return;
+  }
+
+  buf = list_first_entry(&vb2_context->buffer_list, v4l2_model_vb2_buffer_t,
+			 list);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 4, 0)
+  vb = &buf->vb.vb2_buf;
+#else
+  vb = &buf->vb;
+#endif
+  vaddr = vb2_plane_vaddr(vb, plane);
+  queue_type = vb2_context->queue_type;
+  dma_dev = vb->vb2_queue->dev;
+  if (queue_type == V4L2_MODEL_BUF_TYPE_DMA_SG)
+    sgt = vb2_dma_sg_plane_desc(vb, plane);
+  else if (queue_type == V4L2_MODEL_BUF_TYPE_DMA_CONT)
+    dma_addr = vb2_dma_contig_plane_dma_addr(vb, plane);
+  spin_unlock_irqrestore(&vb2_context->queuelock, flags);
+
+  if (!vaddr)
+    return;
+
+  if (len > vb2_plane_size(vb, plane))
+    len = vb2_plane_size(vb, plane);
+
+  switch (queue_type) {
+  case V4L2_MODEL_BUF_TYPE_DMA_SG:
+    if (dma_dev && sgt)
+      dma_sync_sgtable_for_cpu(dma_dev, sgt, DMA_FROM_DEVICE);
+    break;
+  case V4L2_MODEL_BUF_TYPE_DMA_CONT:
+    if (dma_dev)
+      dma_sync_single_for_cpu(dma_dev, dma_addr, len, DMA_FROM_DEVICE);
+    break;
+  default:
+    break;
+  }
+
+  for (i = 0; i + 1 < len; i += 2) {
+    u8 t = vaddr[i];
+
+    vaddr[i] = vaddr[i + 1];
+    vaddr[i + 1] = t;
+  }
+
+  switch (queue_type) {
+  case V4L2_MODEL_BUF_TYPE_DMA_SG:
+    if (dma_dev && sgt)
+      dma_sync_sgtable_for_device(dma_dev, sgt, DMA_FROM_DEVICE);
+    break;
+  case V4L2_MODEL_BUF_TYPE_DMA_CONT:
+    if (dma_dev)
+      dma_sync_single_for_device(dma_dev, dma_addr, len, DMA_FROM_DEVICE);
+    break;
+  default:
+    break;
+  }
 }
 
 void v4l2_model_buffer_done(v4l2_model_handle_t context) {

@@ -11,8 +11,11 @@ Module.symvers
 .module-common.o
 .tmp_versions/
 
-# Ghidra/Reverse-Engineering Dateien (sensibel)
+# Ghidra/Reverse-Engineering Dateien (sensibel / lokal)
 AVXGC573_Register_Function_Analysis.md
+AVXGC573_decompiled.c
+IT68051_Analysis_GreenScreen.txt
+IT68051_Register_Analysis.txt
 .codex/
 linuxextract.c
 *_ghidra_*

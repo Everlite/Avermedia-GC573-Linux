@@ -7,7 +7,7 @@
 Community-maintained, AI-assisted, heavily patched Linux driver for the AVerMedia GC573 (PCI `1461:0054`, subsystem `1461:5730`).
 Modernized for recent kernels. **Experimental — development and testing only.**
 
-**Last aligned with code:** 2026-05-18 · **Phase 3** (color / byte-order validation)
+**Last aligned with code:** 2026-06-11 · **Phase 3** (color / byte-order validation)
 
 > [!NOTE]
 > **Vendor blob:** The driver links against `AverMediaLib_64.a` in the **repository root** (~565 KB, tracked in git). The Makefile copies it into `driver/AverMediaLib_64.o` at build time. See Legal — redistribution of this precompiled archive may be restricted.
@@ -29,8 +29,8 @@ Modernized for recent kernels. **Experimental — development and testing only.*
 | **IRQ / Interrupts** | ✅ [OK] | MSI with INTx fallback (`pci_model.c`) |
 | **System Stability** | 🟡 [WORKAROUND] | Stable when avoiding I2C **writes**; `hdmirxwr()` during stream can still freeze |
 | **DMA Transfer** | ✅ [OK] | Continuous streaming: doorbell MMIO `0x304` + IRQ ACK MMIO `0x10` per buffer |
-| **Capture Content** | 🟡 [UNVERIFIED] | DMA path active; correct colors need **frame dump + format check** (see Debugging) |
-| **Driver Unload** | ✅ [OK] | `unload.sh`: rmmod → PCI unbind → `rmmod -f`; audio services restored |
+| **Capture Content** | 🟡 [BLOCKED] | DMA delivers frames; **green screen** from YUYV-on-wire vs UYVY V4L2 label (see Progress Report 2026-06-11) |
+| **Driver Unload** | ✅ [OK] | `unload.sh`: rmmod → unbind → **PCI sysfs remove** + `rmmod -f` on refcnt −1 → **PCIe rescan**; audio restored |
 | **Audio Capture** | ✅ [OK] | ALSA `AVerMedia CL511H`: S16_LE/S24_LE, 32–192 kHz, **2 channels** |
 | **General Use** | ❌ [NO] | Not for daily use / production |
 
@@ -40,10 +40,43 @@ Modernized for recent kernels. **Experimental — development and testing only.*
 |:---|:---:|:---|
 | **Phase 1** (Reverse Engineering) | ✅ COMPLETE | Builds on modern kernels, probe, FPGA/ITE6805 bring-up |
 | **Phase 2** (Continuous Streaming) | 🟡 COMPLETE* | DMA/IRQ/doorbell at 60 fps; **all I2C writes in `stream_on` skipped** |
-| **Phase 3** (Color Correction) | 🟡 IN PROGRESS | FPGA CSC (MMIO `0x1040`); byte-order / `vip_cfg` validation open |
+| **Phase 3** (Color Correction) | 🟡 IN PROGRESS | YUYV↔UYVY mismatch confirmed; FPGA reg `0x1000` ineffective; CPU swap path blocked — **real buffer-done hook TBD** |
 | **Phase 4** (Production Ready) | ⏳ PENDING | Robust PM, OBS/GStreamer, fixed test scripts, no I2C deadlock |
 
 > \*Phase 2: End-to-end streaming uses the **FPGA MMIO path** only (`0x10`, `0x304`, `0x1040`). ITE6805 register writes that the Windows driver performs in `stream_on` are disabled.
+
+---
+
+## Progress Report — 2026-06-11
+
+### 1. Infrastructure & tooling (resolved)
+
+| Area | Change |
+|:---|:---|
+| **C scope / debug flags** | Frame-counter / hex-dump state (`cx511h_frame_counter`) at file scope in `board_v4l2.c` — reset in `stream_on`, dump in `video_buffer_done`. |
+| **Module refcnt −1** | Hard-killing `ffplay` could leave `cx511h` with refcnt **−1**, blocking normal `rmmod`. |
+| **`unload.sh` hardened** | Escalation path: PCI sysfs **`…/remove`** + **`rmmod -f`**, then **`echo 1 > /sys/bus/pci/rescan`** so the card can be re-probed; PipeWire/WirePlumber restart unchanged. |
+| **Kernel 7.0+ DMA API** | `dma_sync_sgtable_for_cpu` / `_for_device` in `v4l2_model_videobuf2.c` now pass **`struct device *`** from `vb->vb2_queue->dev` (required on modern kernels / CachyOS). |
+
+### 2. Test results & hardware diagnosis
+
+**Initial hex dump (frame 0 / cleared buffer):** `80 10 80 10 …`
+
+- In **YUYV** byte order: `Y=0x10` (16), `U/V=0x80` (128) → limited-range digital black.
+- **Green-screen mechanism:** If the FPGA emits **YUYV** on the PCIe bus but V4L2/userspace treat the buffer as **UYVY**, luma and chroma lanes are misread — neutral black becomes a strong green tint in players.
+
+**Approaches tried (failed or inactive):**
+
+| Approach | Result |
+|:---|:---|
+| **V4L2 enum / FourCC swap to YUYV** | Kernel buffer validation failed; FFmpeg rejected frames as corrupted. Driver must keep advertising **`V4L2_PIX_FMT_UYVY`**. |
+| **FPGA register `0x1000[15:8]`** (e.g. `0x9` ↔ `0x0`) | No visible change — blob/`set_out_colorspace` appears to ignore or reset lane-swap codes. |
+| **CPU byte-pair swap in `cx511h_video_buffer_done`** | Implemented via `v4l2_model_swap_pending_plane_byte_pairs()` before `v4l2_model_buffer_done()`, but **`AVER_LIVE_HEX_DUMP` at frame 100 never appeared in dmesg** during live streaming → **`cx511h_video_buffer_done` is likely not called** on the active DMA path; frames may complete via another IRQ/callback in `v4l2_model_videobuf2.c`. |
+
+### 3. Next session (focused)
+
+1. **Find the real completion hook** — Trace `v4l2_model_videobuf2.c` (IRQ path, `v4l2_model_buffer_done`, scatter-gather handling) to locate where finished DMA buffers are handed to vb2 in live operation; move the YUYV→UYVY byte-pair swap there.
+2. **Clean V4L2 format fix (optional)** — If software swap is insufficient, adjust format tables so Linux sees **`V4L2_PIX_FMT_YUYV`** while keeping **`bytesperline` and frame size** unchanged so vb2 validation still passes (FourCC-only lie, not size/stride changes).
 
 ---
 
@@ -70,7 +103,7 @@ sudo insmod cx511h.ko force_input_mode=1
 | Parameter | Type | Default | Description |
 |:---|:---:|:---:|:---|
 | `no_signal_pic` | charp | NULL | Bitmap when no input signal |
-| `copy_protetion_pic` | charp | NULL | Bitmap for copy-protected content (typo preserved in symbol name) |
+| `copy_protetion_pic` | charp | NULL | Bitmap for copy-protected content. **Parameter name is misspelled in `board_config.c`** (vendor/original spelling) — you must pass `copy_protetion_pic=...` on `insmod` until the symbol is renamed in code. |
 | `led_pin_r` | int | 3 | Red LED GPIO (-1=disabled) |
 | `led_pin_g` | int | 4 | Green LED GPIO (-1=disabled) |
 | `led_pin_b` | int | 5 | Blue LED GPIO (-1=disabled) |
@@ -123,11 +156,14 @@ Install path: `/lib/modules/$(uname -r)/kernel/drivers/media/avermedia/`
 
 **Recommended:** use `ffplay` / `ffmpeg` with explicit UYVY — avoid `v4l2-ctl` for streaming tests (see Known Issues).
 
+> [!NOTE]
+> The V4L2 device index is **not fixed** — it may be `/dev/video0`, `/dev/video2`, or another number depending on webcams and other capture devices. After `insmod`, find the AVerMedia node with `v4l2-ctl --list-devices` (listing only; do **not** use `--stream-mmap` on this card). Substitute **`/dev/videoX`** below with your actual node.
+
 ```bash
 sudo ./insmod.sh
 
 # UYVY = FPGA native output in auto mode
-ffplay -f v4l2 -input_format uyvy422 -video_size 1920x1080 -framerate 60 /dev/video0
+ffplay -f v4l2 -input_format uyvy422 -video_size 1920x1080 -framerate 60 /dev/videoX
 
 sudo ./unload.sh
 ```
@@ -140,7 +176,7 @@ sudo ./unload.sh
 ```
 
 > [!WARNING]
-> Both scripts call **`v4l2-ctl`** (can hang the machine) and derive **height from the wrong `v4l2-ctl` field** — prefer `ffplay` until the scripts are fixed. Video should use **UYVY** from the card, not YUY2/YV12 without `videoconvert` from the correct capture format.
+> **Do not run these scripts casually.** Both call **`v4l2-ctl`**, which can trigger **I2C traffic on the ITE6805** and cause a **full system freeze / I2C bus deadlock** — the same failure mode the driver deliberately avoids in `stream_on` (Known Issue #1). They also derive **height from the wrong `v4l2-ctl` field** and use caps (YV12/YUY2) that do not match the card’s **UYVY** capture path. Prefer **`ffplay`** with explicit **UYVY** until the scripts are fixed.
 
 ---
 
@@ -174,13 +210,18 @@ YUV422 from userspace is mapped to FPGA **UYVY** unless `debug_pixel_format` ove
 
 **Reason:** `hdmirxwr()` during streaming can **deadlock** the ITE6805 I2C bus. CSC and stream control use MMIO instead.
 
-### Per frame (`cx511h_video_buffer_done`)
+### Per frame (intended: `cx511h_video_buffer_done`)
 
-1. `v4l2_model_buffer_done()`
-2. `pci_model_mmio_write(0x304, 0x01)` — doorbell
-3. `pci_model_mmio_write(0x10, 0x02)` — IRQ ACK
-4. `wmb()`
-5. `KERN_DEBUG` frame count once per minute (~3600 frames @ 60 fps)
+Registered via `aver_xilinx_active_current_desclist(..., cx511h_video_buffer_done, ...)`. **As of 2026-06-11 this callback may not run during live capture** (no frame-100 `AVER_LIVE_HEX_DUMP` in dmesg); doorbell/IRQ below might still occur on a different path.
+
+When invoked, the handler:
+
+1. Optional frame-100 hex dump (`v4l2_model_peek_pending_plane_vaddr`)
+2. For `V4L2_PIX_FMT_UYVY`: `v4l2_model_swap_pending_plane_byte_pairs()` — adjacent byte swap (YUYV→UYVY) over `width×height×2`
+3. `v4l2_model_buffer_done()`
+4. `pci_model_mmio_write(0x304, 0x01)` — doorbell
+5. `pci_model_mmio_write(0x10, 0x02)` — IRQ ACK
+6. `wmb()`
 
 ### `stream_off`
 
@@ -238,7 +279,7 @@ Legacy `board_suspend` / `board_resume` wired from PCI setup — not migrated to
 |:---|:---|
 | `build.sh` | `make -C driver`, copy `cx511h.ko` to root |
 | `insmod.sh` | Modprobe vb2/snd deps, `insmod driver/cx511h.ko`, audio restore |
-| `unload.sh` | rmmod → unbind PCI → `rmmod -f`; restore PipeWire |
+| `unload.sh` | Release V4L2/ALSA clients → rmmod → unbind → **PCI `remove` + `rmmod -f`** if refcnt −1 → **PCIe rescan**; restore PipeWire |
 | `install.sh` | Install `.ko` under `/lib/modules/.../avermedia/`, `depmod -a` |
 | `gst_1.0_raw_video.sh` | Legacy GStreamer test — **see warnings above** |
 | `gst_1.0_raw_video_audio.sh` | Legacy A/V test — **see warnings above** |
@@ -264,17 +305,19 @@ Legacy `board_suspend` / `board_resume` wired from PCI setup — not migrated to
 - **Reads** (`ite6805_get_*`) still run in `stream_on` and event handlers.
 
 ### 2. Byte-order / green screen
-- **Status:** needs hardware validation
-- **Issue:** YUYV vs UYVY mismatch between FPGA and userspace.
-- **Try:** `debug_pixel_format=0..3`, or ffplay with each of `uyvy422` / `yuyv422` / `yvyu422` / `vyuy422`.
-- **Workaround:** `-input_format uyvy422` in ffmpeg/ffplay.
+- **Status:** root cause identified; fix blocked on callback path
+- **Issue:** Hardware outputs **YUYV** byte layout (`80 10 80 10 …` = limited black in YUYV); V4L2 advertises **UYVY** → green in players.
+- **Failed fixes:** V4L2 FourCC-only swap to YUYV (vb2 corruption); FPGA `0x1000` lane codes (no effect); CPU swap in `cx511h_video_buffer_done` (callback not seen live).
+- **Next:** Hook byte-pair swap at the **actual** buffer-done site in `v4l2_model_videobuf2.c`, or FourCC-only YUYV with unchanged stride/size.
 
 ### 3. V4L2 vs FPGA format
 - Driver advertises many pixel formats; hardware path uses **UYVY** for YUV422 in auto mode.
 - Always set capture format explicitly in applications.
 
-### 4. Module “in use”
-- **Status:** mitigated by `unload.sh` (PipeWire / WirePlumber / `ffplay`).
+### 4. Module “in use” / refcnt −1
+- **Status:** mitigated by hardened `unload.sh`
+- **Issue:** Abrupt client exit (e.g. killed `ffplay`) can leave refcnt **−1**; normal `rmmod` fails.
+- **Fix:** `unload.sh` escalates to PCI sysfs **remove** + **`rmmod -f`**, then **PCIe rescan**; also kills PipeWire/WirePlumber holders when needed.
 
 ### 5. `v4l2-ctl` risk
 - **Status:** known
@@ -312,6 +355,11 @@ Legacy `board_suspend` / `board_resume` wired from PCI setup — not migrated to
 - **Status:** software limited
 - On lock, widths **> 1920** are forced to **1920×1080@60** in `cx511h_ite6805_event()` — true 4K capture not implemented.
 
+### 14. `cx511h_video_buffer_done` not on live path
+- **Status:** open (2026-06-11)
+- **Issue:** `AVER_LIVE_HEX_DUMP` and CPU byte-swap in `cx511h_video_buffer_done` never trigger during active streaming despite visible video in userspace.
+- **Impact:** Doorbell path and color fix must be retargeted after tracing `v4l2_model_videobuf2.c` / IRQ completion.
+
 ---
 
 ## Reverse Engineering Progress
@@ -342,7 +390,7 @@ Legacy `board_suspend` / `board_resume` wired from PCI setup — not migrated to
 sudo ./insmod.sh
 # Start capture in another terminal, e.g. ffplay ... &
 sleep 2
-sudo dd if=/dev/video0 of=frame_raw.bin bs=4147200 count=1
+sudo dd if=/dev/videoX of=frame_raw.bin bs=4147200 count=1
 xxd frame_raw.bin | head -4
 ```
 
@@ -350,8 +398,9 @@ xxd frame_raw.bin | head -4
 |:---|:---|
 | `10 80 10 80...` | Black YUV — DMA ok, muted/no picture |
 | `00 00 00 00...` | No DMA data |
-| `80 10 80 10...` | Byte order swap (UYVY ↔ YUYV) |
-| Varying | Real pixels — tune format/CSC |
+| `80 10 80 10...` | **YUYV** limited black (Y=16, U/V=128) — typical FPGA wire format; V4L2 **UYVY** label → green |
+| `10 80 10 80...` | **UYVY** limited black — what userspace expects for correct colors |
+| Varying | Real pixels — tune format/CSC / swap hook |
 
 ```bash
 # Kernel log
@@ -365,7 +414,7 @@ cd driver && sudo rmmod cx511h 2>/dev/null; sudo insmod cx511h.ko force_input_mo
 
 # ffplay format sweep (safe)
 for fmt in uyvy422 yuyv422 yvyu422 vyuy422; do
-  ffplay -f v4l2 -input_format $fmt -video_size 1920x1080 -framerate 60 /dev/video0
+  ffplay -f v4l2 -input_format $fmt -video_size 1920x1080 -framerate 60 /dev/videoX
 done
 ```
 
