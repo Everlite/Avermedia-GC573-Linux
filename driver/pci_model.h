@@ -22,6 +22,9 @@ typedef void (*pci_model_suspend_func_t)(struct device *dev);
 typedef void (*pci_model_resume_func_t)(struct device *dev);
 typedef void (*pci_model_remove_func_t)(struct device *dev);
 typedef int (*pci_model_irq_func_t)(void *cxt);
+/* Called from hard IRQ context when V-DESC complete (reg 0x10 bit 0x2)
+ * fires, before the vendor blob's irq_func runs. slot_index = reg 0x300 & 7. */
+typedef void (*pci_model_vdesc_hook_t)(void *cxt, int slot_index);
 
 typedef struct
 {
@@ -68,6 +71,15 @@ U16_T pci_model_mmio_readw(pci_model_handle_t handle,int index,unsigned offset);
 void pci_model_mmio_writew(pci_model_handle_t handle,int index,unsigned offset,U16_T value);
 U8_T pci_model_mmio_readb(pci_model_handle_t handle,int index,unsigned offset);
 void pci_model_mmio_writeb(pci_model_handle_t handle,int index,unsigned offset,U8_T value);
+
+/* V-DESC IRQ intercept (reg 0x10 bit 0x2) — hook runs in hard IRQ context. */
+void pci_model_register_vdesc_hook(pci_model_handle_t handle,
+                                   pci_model_vdesc_hook_t hook, void *cxt);
+
+/* I2C engine IRQ (reg 0x10 bit 0x800) notification — see pci_model.c ISR. */
+unsigned pci_model_i2c_done_count(pci_model_handle_t handle);
+U32_T pci_model_last_i2c_status(pci_model_handle_t handle);
+int pci_model_wait_i2c_done(pci_model_handle_t handle, unsigned timeout_ms);
 
 
 #ifdef __cplusplus

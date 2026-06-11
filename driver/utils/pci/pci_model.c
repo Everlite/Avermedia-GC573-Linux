@@ -15,6 +15,10 @@
 #include <linux/errno.h>
 #include <linux/pci.h>
 #include <linux/interrupt.h>
+#include <linux/atomic.h>
+#include <linux/completion.h>
+#include <linux/delay.h>
+#include <linux/preempt.h>
 
 /* Compat: PCI_IRQ_INTX was introduced in kernel 6.8 as a rename of
  * PCI_IRQ_LEGACY. Provide a fallback for older kernels. */
@@ -64,6 +68,24 @@ typedef struct
     int bar_count;
     bar_info_t bar_info[MAX_BAR_COUNT];
     int msi_enabled;
+    /* V-DESC intercept hook (reg 0x10 bit 0x2): called from hard IRQ
+     * context BEFORE the vendor blob's irq_func sees the interrupt.
+     * Used to manipulate the just-completed frame buffer at the
+     * hardware heartbeat (byte-order fix experiments). */
+    pci_model_vdesc_hook_t vdesc_hook;
+    void *vdesc_hook_cxt;
+    /* I2C engine IRQ (bit 0x800 in reg 0x10): latched status + completion
+     * so synchronous I2C polling paths can sleep instead of spinning.
+     *
+     * IMPORTANT: the ISR only ACKs bit 0x800 while i2c_waiters > 0.
+     * The vendor blob's synchronous I2C code polls reg 0x10 for that very
+     * bit; unconditional ACK in the ISR cleared it before the blob's poll
+     * loop could see it → infinite spin → insmod freeze. */
+    atomic_t i2c_done_count;
+    atomic_t i2c_waiters;
+    atomic_t irq_ready;
+    u32 last_i2c_status;
+    struct completion i2c_done;
 }pci_model_cxt_t;
 
 static pci_model_driver_cxt_t *pci_model_drv_cxt=NULL;
@@ -76,7 +98,13 @@ static int user_disable_msi;
 static void *pci_model_alloc()
 {
     pci_model_cxt_t *pci_cxt=mem_model_alloc_buffer(sizeof(pci_model_cxt_t));
-       
+
+    if (pci_cxt) {
+        atomic_set(&pci_cxt->i2c_done_count, 0);
+        atomic_set(&pci_cxt->i2c_waiters, 0);
+        atomic_set(&pci_cxt->irq_ready, 0);
+        init_completion(&pci_cxt->i2c_done);
+    }
     return pci_cxt;
 }
 
@@ -93,17 +121,252 @@ static void pci_model_release(void *cxt)
 	}
 }
 
+/* DIAG (Windows driver audit 2026-06-11): BAR0 reg 0x10 is the central
+ * IRQ status/ACK register. Known bits:
+ *   0x001 video termination     0x002 V-Desc complete (frame done)
+ *   0x010 audio termination     0x020 A-Desc complete (audio)
+ *   0x100 audio termination 2   0x200 AM-Desc complete (audio 2)
+ *   0x800 I2C engine complete (status latch in reg 0x1a4)
+ * The I2C bit is ACKed here (the blob never clears it → IRQ spam /
+ * deadlocked synchronous polling). All other bits are left for the
+ * registered handler/blob so the video DMA chain stays intact. */
+#define CX511H_IRQ_STATUS_REG     0x10
+#define CX511H_IRQ_STATUS_MASK    0x1fff
+#define CX511H_IRQ_VDESC_DONE     0x002
+#define CX511H_IRQ_I2C_DONE       0x800
+#define CX511H_VDESC_INDEX_REG    0x300
+#define CX511H_I2C_STATUS_REG     0x1a4
+#define CX511H_IRQ_LOG_BUDGET     64
+#define CX511H_IRQ_I2C_LOG_BUDGET 8
+#define CX511H_BYPASS_LOG_BUDGET  32
+
+static void pci_model_irq_diag(u32 irq_status)
+{
+    /* Separate budgets: continuous I2C-complete spam must not starve the
+     * interesting video/audio bits out of the log window. */
+    static atomic_t log_budget     = ATOMIC_INIT(CX511H_IRQ_LOG_BUDGET);
+    static atomic_t i2c_log_budget = ATOMIC_INIT(CX511H_IRQ_I2C_LOG_BUDGET);
+    bool i2c_only = (irq_status & CX511H_IRQ_STATUS_MASK) == CX511H_IRQ_I2C_DONE;
+    atomic_t *budget = i2c_only ? &i2c_log_budget : &log_budget;
+
+    if (!atomic_add_unless(budget, -1, 0)) {
+        if (!i2c_only)
+            printk_ratelimited(KERN_ERR
+                "[cx511h-irq] RAW STATUS: 0x%08X (ratelimited; budget spent)\n",
+                irq_status);
+        return;
+    }
+
+    printk(KERN_ERR "[cx511h-irq] RAW STATUS: 0x%08X%s%s%s%s%s%s%s\n",
+           irq_status,
+           (irq_status & 0x002) ? " [V-DESC complete]"   : "",
+           (irq_status & 0x001) ? " [video term]"        : "",
+           (irq_status & 0x020) ? " [A-DESC complete]"   : "",
+           (irq_status & 0x010) ? " [audio term]"        : "",
+           (irq_status & 0x200) ? " [AM-DESC complete]"  : "",
+           (irq_status & 0x100) ? " [audio term 2]"      : "",
+           (irq_status & 0x800) ? " [I2C complete]"      : "");
+}
+
 static irqreturn_t pci_model_irq(int irq, void *dev_id)
 {
     int handled=0;
     pci_model_cxt_t *pci_cxt=dev_id;
+    u32 __iomem *mmio = (u32 __iomem *)pci_cxt->bar_info[0].mmio;
+    bool vdesc_fired = false;
+
+    if (mmio) {
+        u32 irq_status = readl(&mmio[CX511H_IRQ_STATUS_REG >> 2]);
+
+        /* 0xffffffff = device gone; 0 in masked bits = not ours (shared INTx). */
+        if (irq_status != 0xffffffffu &&
+            (irq_status & CX511H_IRQ_STATUS_MASK)) {
+
+            pci_model_irq_diag(irq_status);
+
+            /* === AGGRESSIVE IRQ BYPASS (V-DESC intercept) ===
+             * Grab the completed frame BEFORE the vendor blob's
+             * irq_func can touch/drop it. Slot index per Windows
+             * audit: reg 0x300 & 7. ACK of bit 0x2 stays with the
+             * blob path; see the post-irq_func safety ACK below. */
+            if (irq_status & CX511H_IRQ_VDESC_DONE) {
+                static atomic_t bypass_log_budget =
+                    ATOMIC_INIT(CX511H_BYPASS_LOG_BUDGET);
+                int slot_index =
+                    (int)(readl(&mmio[CX511H_VDESC_INDEX_REG >> 2]) & 7);
+
+                vdesc_fired = true;
+
+                if (atomic_add_unless(&bypass_log_budget, -1, 0))
+                    printk(KERN_ERR
+                        "[cx511h-bypass] V-DESC INTERCEPTED! Slot Index: %d\n",
+                        slot_index);
+
+                if (pci_cxt->vdesc_hook)
+                    pci_cxt->vdesc_hook(pci_cxt->vdesc_hook_cxt, slot_index);
+            }
+
+            /* ACK bit 0x800 ONLY when someone armed a wait via
+             * pci_model_wait_i2c_done(). The blob's synchronous I2C
+             * code polls this bit itself; clearing it unconditionally
+             * starves that poll loop and freezes insmod/probe. */
+            if ((irq_status & CX511H_IRQ_I2C_DONE) &&
+                atomic_read(&pci_cxt->i2c_waiters) > 0) {
+                /* Latch engine status first (Windows ISR reads 0x1a4
+                 * before ACK), then clear the IRQ source. */
+                pci_cxt->last_i2c_status =
+                    readl(&mmio[CX511H_I2C_STATUS_REG >> 2]);
+                writel(CX511H_IRQ_I2C_DONE,
+                       &mmio[CX511H_IRQ_STATUS_REG >> 2]);
+
+                atomic_inc(&pci_cxt->i2c_done_count);
+                complete(&pci_cxt->i2c_done);
+                handled = 1;
+            }
+        }
+    }
+
     if(pci_cxt->irq_func)
     {
-        handled=pci_cxt->irq_func(pci_cxt->irq_func_cxt);
+        handled |= pci_cxt->irq_func(pci_cxt->irq_func_cxt);
     }    
-    
+
+    /* Safety ACK "if necessary": the blob/board path normally ACKs
+     * bit 0x2 itself (0x10 ← 0x2). If it didn't — bit still set after
+     * irq_func — clear it here so the IRQ line doesn't wedge. Same
+     * lesson as the I2C freeze: never steal an ACK the blob expects,
+     * only mop up what nobody claimed. */
+    if (vdesc_fired && mmio) {
+        u32 post_status = readl(&mmio[CX511H_IRQ_STATUS_REG >> 2]);
+
+        if (post_status != 0xffffffffu &&
+            (post_status & CX511H_IRQ_VDESC_DONE)) {
+            writel(CX511H_IRQ_VDESC_DONE,
+                   &mmio[CX511H_IRQ_STATUS_REG >> 2]);
+            printk_ratelimited(KERN_ERR
+                "[cx511h-bypass] V-DESC ACK fallback (blob left 0x2 set)\n");
+            handled = 1;
+        }
+    }
     
     return IRQ_RETVAL(handled);
+}
+
+void pci_model_register_vdesc_hook(pci_model_handle_t handle,
+                                   pci_model_vdesc_hook_t hook, void *cxt)
+{
+    pci_model_cxt_t *pci_cxt = handle;
+
+    if (!pci_cxt)
+        return;
+    /* Context first so the ISR never sees a hook with stale context. */
+    pci_cxt->vdesc_hook_cxt = cxt;
+    smp_wmb();
+    pci_cxt->vdesc_hook = hook;
+}
+
+/* === I2C IRQ notification API ===
+ * Lets I2C transaction code sleep on the completion instead of
+ * synchronously polling the engine (the freeze/deadlock path). */
+
+unsigned pci_model_i2c_done_count(pci_model_handle_t handle)
+{
+    pci_model_cxt_t *pci_cxt = handle;
+
+    if (!pci_cxt)
+        return 0;
+    return (unsigned)atomic_read(&pci_cxt->i2c_done_count);
+}
+
+U32_T pci_model_last_i2c_status(pci_model_handle_t handle)
+{
+    pci_model_cxt_t *pci_cxt = handle;
+
+    if (!pci_cxt)
+        return 0;
+    return pci_cxt->last_i2c_status;
+}
+
+/* Hard upper bound — an I2C transaction at 100 kHz takes ~1ms; anything
+ * beyond 50ms means the engine is wedged and waiting longer only stalls
+ * the caller. Never freeze the kernel thread over a dead I2C engine. */
+#define CX511H_I2C_WAIT_MAX_MS 50
+
+/* Poll fallback: directly watch reg 0x10 bit 0x800 without sleeping.
+ * Used when IRQs aren't live yet (probe phase) or the caller is in
+ * atomic context. Mirrors the blob's own polling, incl. status latch
+ * and ACK on success. */
+static int pci_model_poll_i2c_done(pci_model_cxt_t *pci_cxt,
+                                   unsigned timeout_ms)
+{
+    u32 __iomem *mmio = (u32 __iomem *)pci_cxt->bar_info[0].mmio;
+    unsigned waited;
+
+    if (!mmio)
+        return -ENODEV;
+
+    for (waited = 0; waited <= timeout_ms; waited++) {
+        u32 irq_status = readl(&mmio[CX511H_IRQ_STATUS_REG >> 2]);
+
+        if (irq_status == 0xffffffffu)
+            return -ENODEV;
+        if (irq_status & CX511H_IRQ_I2C_DONE) {
+            pci_cxt->last_i2c_status =
+                readl(&mmio[CX511H_I2C_STATUS_REG >> 2]);
+            writel(CX511H_IRQ_I2C_DONE,
+                   &mmio[CX511H_IRQ_STATUS_REG >> 2]);
+            atomic_inc(&pci_cxt->i2c_done_count);
+            return 0;
+        }
+        mdelay(1);
+    }
+    return -ETIMEDOUT;
+}
+
+int pci_model_wait_i2c_done(pci_model_handle_t handle, unsigned timeout_ms)
+{
+    pci_model_cxt_t *pci_cxt = handle;
+    int ret;
+
+    if (!pci_cxt)
+        return -EINVAL;
+
+    if (timeout_ms == 0 || timeout_ms > CX511H_I2C_WAIT_MAX_MS)
+        timeout_ms = CX511H_I2C_WAIT_MAX_MS;
+
+    /* Sleeping is forbidden in atomic context and pointless before the
+     * IRQ handler is live (probe phase) — poll the register instead. */
+    if (!atomic_read(&pci_cxt->irq_ready) ||
+        in_interrupt() || irqs_disabled() || !preemptible()) {
+        ret = pci_model_poll_i2c_done(pci_cxt, timeout_ms);
+        if (ret == -ETIMEDOUT)
+            printk_ratelimited(KERN_WARNING
+                "[cx511h-i2c] poll-wait timed out after %ums (irq_ready=%d)\n",
+                timeout_ms, atomic_read(&pci_cxt->irq_ready));
+        return ret;
+    }
+
+    /* IRQ path: arm the waiter so the ISR ACKs bit 0x800 for us. */
+    if (atomic_inc_return(&pci_cxt->i2c_waiters) == 1)
+        reinit_completion(&pci_cxt->i2c_done);
+
+    if (!wait_for_completion_timeout(&pci_cxt->i2c_done,
+                                     msecs_to_jiffies(timeout_ms)))
+        ret = -ETIMEDOUT;
+    else
+        ret = 0;
+
+    atomic_dec(&pci_cxt->i2c_waiters);
+
+    if (ret == -ETIMEDOUT) {
+        printk_ratelimited(KERN_WARNING
+            "[cx511h-i2c] IRQ-wait timed out after %ums — falling back to poll\n",
+            timeout_ms);
+        /* One last short poll in case the IRQ was lost/raced. */
+        ret = pci_model_poll_i2c_done(pci_cxt, 2);
+    }
+
+    return ret;
 }
 
 static u16 pci_get_subsystem(struct pci_dev *pdev)
@@ -244,6 +507,7 @@ static int pci_model_probe(struct pci_dev *pci_dev,const struct pci_device_id *p
                 }
                 printk(KERN_ERR "[cx511h-debug] request_irq SUCCESS for irq %d\n",
                        irq_num);
+                atomic_set(&pci_cxt->irq_ready, 1);
             } else {
                 printk(KERN_ERR "[cx511h-debug] pci_alloc_irq_vectors FAILED (%d), "
                        "trying direct request_irq on irq %u\n",
@@ -258,6 +522,7 @@ static int pci_model_probe(struct pci_dev *pci_dev,const struct pci_device_id *p
                 }
                 printk(KERN_ERR "[cx511h-debug] direct request_irq SUCCESS on irq %u\n",
                        pci_dev->irq);
+                atomic_set(&pci_cxt->irq_ready, 1);
             }
         } else {
             printk(KERN_ERR "[cx511h-debug] MSI disabled by flags, using legacy irq %u\n",
@@ -269,6 +534,7 @@ static int pci_model_probe(struct pci_dev *pci_dev,const struct pci_device_id *p
                 err = ERROR_REQUEST_IRQ;
                 break;
             }
+            atomic_set(&pci_cxt->irq_ready, 1);
         }
 
 
@@ -366,6 +632,7 @@ static void pci_model_remove(struct pci_dev *pci_dev)
         if (pci_cxt)
         {
             // --- FIX --- Free IRQ while context is still valid
+            atomic_set(&pci_cxt->irq_ready, 0);
             if (pci_cxt->msi_enabled)
             {
                 free_irq(pci_irq_vector(pci_dev, 0), pci_cxt);
@@ -412,6 +679,7 @@ static int pci_model_suspend (struct pci_dev *pci_dev, pm_message_t state)
 
         pci_model_drv_cxt->suspend_func(dev);
 
+        atomic_set(&pci_cxt->irq_ready, 0);
         free_irq(pci_irq_vector(pci_dev, 0), pci_cxt);
         pci_free_irq_vectors(pci_dev);
         pci_cxt->msi_enabled = false;
@@ -460,6 +728,7 @@ static int pci_model_resume(struct pci_dev *pci_dev)
                 pci_clear_master(pci_dev);
                 return -1;
             }
+            atomic_set(&pci_cxt->irq_ready, 1);
         } else {
             /* FIX: disable and clear PCI device before returning on failure */
             pci_disable_device(pci_dev);

@@ -709,6 +709,69 @@ void *v4l2_model_peek_pending_plane_vaddr(v4l2_model_handle_t context,
   return vaddr;
 }
 
+/* Core byte-pair swap on a vb2 buffer plane: sync for CPU, swap every
+ * adjacent byte pair (YUYV→UYVY), sync back for device/userspace.
+ * Runs OUTSIDE the hard-IRQ path — safe at soft-IRQ / process level. */
+static void v4l2_model_swap_plane_byte_pairs_vb(
+    v4l2_model_vb2_context_t *vb2_context, struct vb2_buffer *vb,
+    unsigned int plane, size_t len)
+{
+  u8 *vaddr;
+  size_t i;
+  struct sg_table *sgt = NULL;
+  dma_addr_t dma_addr = 0;
+  struct device *dma_dev;
+
+  if (!vb || !len || plane >= VIDEO_MAX_PLANES)
+    return;
+
+  vaddr = vb2_plane_vaddr(vb, plane);
+  if (!vaddr)
+    return;
+
+  if (len > vb2_plane_size(vb, plane))
+    len = vb2_plane_size(vb, plane);
+
+  dma_dev = vb->vb2_queue->dev;
+  if (vb2_context->queue_type == V4L2_MODEL_BUF_TYPE_DMA_SG)
+    sgt = vb2_dma_sg_plane_desc(vb, plane);
+  else if (vb2_context->queue_type == V4L2_MODEL_BUF_TYPE_DMA_CONT)
+    dma_addr = vb2_dma_contig_plane_dma_addr(vb, plane);
+
+  switch (vb2_context->queue_type) {
+  case V4L2_MODEL_BUF_TYPE_DMA_SG:
+    if (dma_dev && sgt)
+      dma_sync_sgtable_for_cpu(dma_dev, sgt, DMA_FROM_DEVICE);
+    break;
+  case V4L2_MODEL_BUF_TYPE_DMA_CONT:
+    if (dma_dev)
+      dma_sync_single_for_cpu(dma_dev, dma_addr, len, DMA_FROM_DEVICE);
+    break;
+  default:
+    break;
+  }
+
+  for (i = 0; i + 1 < len; i += 2) {
+    u8 t = vaddr[i];
+
+    vaddr[i] = vaddr[i + 1];
+    vaddr[i + 1] = t;
+  }
+
+  switch (vb2_context->queue_type) {
+  case V4L2_MODEL_BUF_TYPE_DMA_SG:
+    if (dma_dev && sgt)
+      dma_sync_sgtable_for_device(dma_dev, sgt, DMA_FROM_DEVICE);
+    break;
+  case V4L2_MODEL_BUF_TYPE_DMA_CONT:
+    if (dma_dev)
+      dma_sync_single_for_device(dma_dev, dma_addr, len, DMA_FROM_DEVICE);
+    break;
+  default:
+    break;
+  }
+}
+
 void v4l2_model_swap_pending_plane_byte_pairs(v4l2_model_handle_t context,
 					      unsigned int plane, size_t len)
 {
@@ -716,13 +779,7 @@ void v4l2_model_swap_pending_plane_byte_pairs(v4l2_model_handle_t context,
   v4l2_model_vb2_context_t *vb2_context;
   v4l2_model_vb2_buffer_t *buf;
   struct vb2_buffer *vb;
-  u8 *vaddr;
   unsigned long flags;
-  size_t i;
-  struct sg_table *sgt = NULL;
-  v4l2_model_buffer_type_e queue_type;
-  dma_addr_t dma_addr = 0;
-  struct device *dma_dev = NULL;
 
   if (!v4l2m_context || !v4l2m_context->vb2_context || !len)
     return;
@@ -745,53 +802,9 @@ void v4l2_model_swap_pending_plane_byte_pairs(v4l2_model_handle_t context,
 #else
   vb = &buf->vb;
 #endif
-  vaddr = vb2_plane_vaddr(vb, plane);
-  queue_type = vb2_context->queue_type;
-  dma_dev = vb->vb2_queue->dev;
-  if (queue_type == V4L2_MODEL_BUF_TYPE_DMA_SG)
-    sgt = vb2_dma_sg_plane_desc(vb, plane);
-  else if (queue_type == V4L2_MODEL_BUF_TYPE_DMA_CONT)
-    dma_addr = vb2_dma_contig_plane_dma_addr(vb, plane);
   spin_unlock_irqrestore(&vb2_context->queuelock, flags);
 
-  if (!vaddr)
-    return;
-
-  if (len > vb2_plane_size(vb, plane))
-    len = vb2_plane_size(vb, plane);
-
-  switch (queue_type) {
-  case V4L2_MODEL_BUF_TYPE_DMA_SG:
-    if (dma_dev && sgt)
-      dma_sync_sgtable_for_cpu(dma_dev, sgt, DMA_FROM_DEVICE);
-    break;
-  case V4L2_MODEL_BUF_TYPE_DMA_CONT:
-    if (dma_dev)
-      dma_sync_single_for_cpu(dma_dev, dma_addr, len, DMA_FROM_DEVICE);
-    break;
-  default:
-    break;
-  }
-
-  for (i = 0; i + 1 < len; i += 2) {
-    u8 t = vaddr[i];
-
-    vaddr[i] = vaddr[i + 1];
-    vaddr[i + 1] = t;
-  }
-
-  switch (queue_type) {
-  case V4L2_MODEL_BUF_TYPE_DMA_SG:
-    if (dma_dev && sgt)
-      dma_sync_sgtable_for_device(dma_dev, sgt, DMA_FROM_DEVICE);
-    break;
-  case V4L2_MODEL_BUF_TYPE_DMA_CONT:
-    if (dma_dev)
-      dma_sync_single_for_device(dma_dev, dma_addr, len, DMA_FROM_DEVICE);
-    break;
-  default:
-    break;
-  }
+  v4l2_model_swap_plane_byte_pairs_vb(vb2_context, vb, plane, len);
 }
 
 void v4l2_model_buffer_done(v4l2_model_handle_t context) {
@@ -911,6 +924,56 @@ void v4l2_model_buffer_done(v4l2_model_handle_t context) {
                               FRAMEGRABBER_STATUS_SIGNAL_LOCKED_BIT)) ==
       (FRAMEGRABBER_STATUS_V4L_START_STREAMING_BIT |
        FRAMEGRABBER_STATUS_SIGNAL_LOCKED_BIT)) {
+    /* YUYV→UYVY color fix at the V4L2 handoff layer (soft-IRQ safe):
+     * hardware delivers YUYV byte order, V4L2 advertises UYVY. Swap
+     * adjacent byte pairs in place right before userspace sees the
+     * buffer — outside the hard-IRQ path, so no PCIe timing stalls. */
+    {
+      const framegrabber_pixfmt_t *pixfmt =
+          framegrabber_g_out_pixelfmt(v4l2m_context->framegrabber_handle);
+
+      if (pixfmt && pixfmt->fourcc == V4L2_PIX_FMT_UYVY) {
+        int width, height;
+        /* Diagnostic dump fires once per stream: frames is reset to 0 in
+         * start_streaming; frame 10 gives the DMA time to deliver real
+         * data instead of the freshly-cleared first buffers. */
+        bool diag_dump = (vb2_context->frames == 10);
+        u8 *d = diag_dump ? vb2_plane_vaddr(vb, 0) : NULL;
+
+        framegrabber_g_out_framesize(v4l2m_context->framegrabber_handle,
+                                     &width, &height);
+        if (width > 0 && height > 0) {
+          printk_once(KERN_ERR
+              "[cx511h-swap] YUYV→UYVY byte-pair swap active in buffer_done "
+              "(%dx%d, %zu bytes)\n",
+              width, height, (size_t)width * height * 2);
+
+          if (d)
+            printk(KERN_ERR
+                "[cx511h-diag] FIRST 16 BYTES (pre-swap, frame %u): "
+                "%02x %02x %02x %02x %02x %02x %02x %02x "
+                "%02x %02x %02x %02x %02x %02x %02x %02x\n",
+                vb2_context->frames,
+                d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7],
+                d[8], d[9], d[10], d[11], d[12], d[13], d[14], d[15]);
+
+          v4l2_model_swap_plane_byte_pairs_vb(vb2_context, vb, 0,
+                                              (size_t)width * height * 2);
+
+          /* Post-swap dump proves the swap actually touched memory:
+           * bytes must appear pairwise exchanged vs. the line above. */
+          if (d)
+            printk(KERN_ERR
+                "[cx511h-diag] FIRST 16 BYTES (post-swap, frame %u): "
+                "%02x %02x %02x %02x %02x %02x %02x %02x "
+                "%02x %02x %02x %02x %02x %02x %02x %02x\n",
+                vb2_context->frames,
+                d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7],
+                d[8], d[9], d[10], d[11], d[12], d[13], d[14], d[15]);
+        }
+      }
+    }
+
     vb2_buffer_done(vb, VB2_BUF_STATE_DONE);
   } else {
     // printk("%s framegrabber_status %08x\n", __func__, framegrabber_status);

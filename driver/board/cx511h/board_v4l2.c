@@ -69,6 +69,50 @@ MODULE_PARM_DESC(auto_test_byteorder,
 
 static int cx511h_frame_counter = 0;
 
+/* DMA control register 0x304 (Windows audit 2026-06-11):
+ *   bit 0      = global run/enable
+ *   bits 1..4  = descriptor slot arm bits (1 << (slot_index + 1))
+ * Descriptor ring registers per slot n (n = 0..3):
+ *   0x308 + n*0xc = phys addr low
+ *   0x30c + n*0xc = phys addr high
+ *   0x310 + n*0xc = transfer size
+ *
+ * LESSON (two freezes): arm bits may ONLY go high after the descriptor
+ * registers for that slot contain verified, non-zero addresses. Arming
+ * unprogrammed slots makes the FPGA DMA to NULL → instant PCIe lockup.
+ * RMW on 0x304 during active transfers is equally fatal. */
+#define CX511H_DMA_CTRL_REG       0x304
+#define CX511H_DMA_RUN_BIT        0x01
+#define CX511H_DMA_SLOT_COUNT     4
+#define CX511H_DMA_DESC_LO(n)     (0x308 + (n) * 0xc)
+#define CX511H_DMA_DESC_HI(n)     (0x30c + (n) * 0xc)
+#define CX511H_DMA_DESC_SZ(n)     (0x310 + (n) * 0xc)
+
+/* Dump the descriptor ring registers and return the arm mask for slots
+ * that are actually programmed (non-zero address AND size). Returns
+ * CX511H_DMA_RUN_BIT alone when nothing is verified. Read-only — does
+ * NOT touch 0x304. */
+static u32 cx511h_dma_verify_slots(handle_t pci_handle)
+{
+    u32 arm_mask = CX511H_DMA_RUN_BIT;
+    int n;
+
+    for (n = 0; n < CX511H_DMA_SLOT_COUNT; n++) {
+        u32 lo = pci_model_mmio_read(pci_handle, 0, CX511H_DMA_DESC_LO(n));
+        u32 hi = pci_model_mmio_read(pci_handle, 0, CX511H_DMA_DESC_HI(n));
+        u32 sz = pci_model_mmio_read(pci_handle, 0, CX511H_DMA_DESC_SZ(n));
+        int programmed = ((lo | hi) != 0) && (sz != 0);
+
+        printk(KERN_ERR
+               "[cx511h-desc] slot %d: addr=0x%08x_%08x size=0x%08x %s\n",
+               n, hi, lo, sz, programmed ? "[PROGRAMMED]" : "[empty]");
+
+        if (programmed)
+            arm_mask |= 1u << (n + 1);
+    }
+    return arm_mask;
+}
+
 /*
  * Set LED color via FPGA GPIO pins.
  * r, g, b: 0=off, 1=on for each color channel.
@@ -948,8 +992,19 @@ skip_ttl_config:
         
         // Write doorbell register if we have a valid handle
         if (pci_handle) {
-            pci_model_mmio_write(pci_handle, 0, 0x304, 0x01);
-            printk(KERN_ERR "[cx511h-phase2] Initial doorbell sent after stream start\n");
+            /* STABLE BASELINE: plain run bit only. Slot arming is NOT done
+             * here — the descriptor registers may still be empty at this
+             * point (config_video_process can reset the ring), and arming
+             * unprogrammed slots DMAs to NULL → PCIe bus lockup after a
+             * few frames. Verification dump below tells us the real ring
+             * state at stream start. */
+            u32 arm_mask = cx511h_dma_verify_slots(pci_handle);
+
+            pci_model_mmio_write(pci_handle, 0, CX511H_DMA_CTRL_REG,
+                                 CX511H_DMA_RUN_BIT);
+            printk(KERN_ERR "[cx511h-phase2] Initial doorbell sent (0x304=0x01). "
+                   "Verified arm mask would be 0x%02x — NOT applied (safety)\n",
+                   arm_mask);
         } else {
             printk(KERN_ERR "[cx511h-phase2] ERROR: No valid PCI handle, doorbell not sent!\n");
         }
@@ -1123,6 +1178,42 @@ static int cx511h_reg_write(framegrabber_handle_t handle, unsigned int offset, u
     return ret;
 }
 
+/* === IRQ BYPASS HOOK (monitoring only) ===
+ * Runs in HARD IRQ context, dispatched from pci_model_irq the moment
+ * V-DESC complete (reg 0x10 bit 0x2) fires. The byte-pair swap was
+ * REMOVED from here: a ~4MB swap in hard IRQ stalled PCIe bus timing
+ * and caused userspace frame drops. The color fix now lives at the
+ * V4L2 handoff layer (v4l2_model_buffer_done → soft-IRQ safe). This
+ * hook only keeps the lightweight slot monitoring + frame-100 dump. */
+static void cx511h_vdesc_irq_hook(void *data, int slot_index)
+{
+    board_v4l2_context_t *board_v4l2_cxt = data;
+
+    if (!board_v4l2_cxt || !board_v4l2_cxt->v4l2_handle)
+        return;
+
+    cx511h_frame_counter++;
+    if (cx511h_frame_counter == 100) {
+        u8 *vaddr = v4l2_model_peek_pending_plane_vaddr(
+            board_v4l2_cxt->v4l2_handle, 0);
+        if (vaddr) {
+            printk(KERN_ERR
+                "AVER_LIVE_HEX_DUMP (slot %d, pre-swap): "
+                "%02x %02x %02x %02x %02x %02x %02x %02x "
+                "%02x %02x %02x %02x %02x %02x %02x %02x\n",
+                slot_index,
+                vaddr[0], vaddr[1], vaddr[2], vaddr[3],
+                vaddr[4], vaddr[5], vaddr[6], vaddr[7],
+                vaddr[8], vaddr[9], vaddr[10], vaddr[11],
+                vaddr[12], vaddr[13], vaddr[14], vaddr[15]);
+        } else {
+            printk(KERN_ERR
+                "AVER_LIVE_HEX_DUMP: (null vaddr at frame 100, slot %d)\n",
+                slot_index);
+        }
+    }
+}
+
 static void cx511h_video_buffer_done(void *data)
 {
     board_v4l2_context_t *board_v4l2_cxt=data;
@@ -1133,38 +1224,8 @@ static void cx511h_video_buffer_done(void *data)
     //mesg("%s board_v4l2_cxt %p\n",__func__,board_v4l2_cxt);
     if(board_v4l2_cxt)
     {
-        {
-            const framegrabber_pixfmt_t *pixfmt;
-            int width, height;
-            size_t frame_bytes;
-
-            pixfmt = framegrabber_g_out_pixelfmt(board_v4l2_cxt->fg_handle);
-            framegrabber_g_out_framesize(board_v4l2_cxt->fg_handle,
-                                         &width, &height);
-            frame_bytes = (size_t)width * height * 2;
-
-            cx511h_frame_counter++;
-            if (cx511h_frame_counter == 100) {
-                u8 *vaddr = v4l2_model_peek_pending_plane_vaddr(
-                    board_v4l2_cxt->v4l2_handle, 0);
-                if (vaddr) {
-                    printk(KERN_ERR
-                        "AVER_LIVE_HEX_DUMP: %02x %02x %02x %02x %02x %02x %02x %02x "
-                        "%02x %02x %02x %02x %02x %02x %02x %02x\n",
-                        vaddr[0], vaddr[1], vaddr[2], vaddr[3],
-                        vaddr[4], vaddr[5], vaddr[6], vaddr[7],
-                        vaddr[8], vaddr[9], vaddr[10], vaddr[11],
-                        vaddr[12], vaddr[13], vaddr[14], vaddr[15]);
-                } else {
-                    printk(KERN_ERR
-                        "AVER_LIVE_HEX_DUMP: (null vaddr at frame 100)\n");
-                }
-            }
-
-            if (pixfmt && pixfmt->fourcc == V4L2_PIX_FMT_UYVY && frame_bytes)
-                v4l2_model_swap_pending_plane_byte_pairs(
-                    board_v4l2_cxt->v4l2_handle, 0, frame_bytes);
-        }
+        /* Byte-pair swap lives in v4l2_model_buffer_done() (V4L2 handoff
+         * layer) — doing it here too would double-swap and undo the fix. */
 
         v4l2_model_buffer_done(board_v4l2_cxt->v4l2_handle);
 
@@ -1188,7 +1249,12 @@ static void cx511h_video_buffer_done(void *data)
 
         // Write doorbell and IRQ ACK if we have a valid handle
         if (pci_handle) {
-            // Doorbell: notify hardware next buffer is ready
+            // Doorbell: notify hardware next buffer is ready.
+            // NOTE: do NOT re-arm slot bits (0x07) here — RMW on 0x304 while
+            // a DMA transfer is in flight collides with the FPGA state
+            // machine and hard-freezes the card. Slots are armed ONCE in
+            // cx511h_stream_on; the hardware pointer cycles ping-pong
+            // naturally from there.
             pci_model_mmio_write(pci_handle, 0, 0x304, 0x01);
 
             // IRQ ACK: acknowledge interrupt after buffer done
@@ -1243,7 +1309,25 @@ static void cx511h_v4l2_buffer_prepare(v4l2_model_callback_parameter_t *cb_info)
 
         printk(KERN_ERR "[cx511h-dma] buffer_prepare: activating desclist (xilinx=%p)\n",
                board_v4l2_cxt->aver_xilinx_handle);
-        aver_xilinx_active_current_desclist(board_v4l2_cxt->aver_xilinx_handle,cx511h_video_buffer_done,board_v4l2_cxt);   
+        aver_xilinx_active_current_desclist(board_v4l2_cxt->aver_xilinx_handle,cx511h_video_buffer_done,board_v4l2_cxt);
+
+        /* Verification: did the blob actually write our physical addresses
+         * into the ring registers 0x308/0x30c/0x310? Read-only dump for
+         * the first few queued buffers (requeues during streaming would
+         * spam the log otherwise). */
+        {
+            static int desc_dump_budget = 8;
+
+            if (desc_dump_budget > 0) {
+                handle_t pci_handle = get_pci_handle_cached(board_v4l2_cxt);
+
+                if (pci_handle) {
+                    desc_dump_budget--;
+                    printk(KERN_ERR "[cx511h-desc] ring state after active_current_desclist:\n");
+                    cx511h_dma_verify_slots(pci_handle);
+                }
+            }
+        }
     }  
 }
 
@@ -1591,7 +1675,21 @@ void board_v4l2_init(cxt_mgr_handle_t cxt_mgr, int board_id)
         v4l2_model_register_callback(v4l2_handle,V4L2_MODEL_CALLBACK_STREAMOFF,&cx511h_v4l2_stream_off, board_v4l2_cxt);
         v4l2_model_register_callback(v4l2_handle,V4L2_MODEL_CALLBACK_BUFFER_PREPARE,&cx511h_v4l2_buffer_prepare, board_v4l2_cxt);
         v4l2_model_register_callback(v4l2_handle,V4L2_MODEL_CALLBACK_BUFFER_INIT,&cx511h_v4l2_buffer_init, board_v4l2_cxt);
-      
+
+        /* IRQ BYPASS: intercept V-DESC complete in the PCIe ISR before
+         * the vendor blob — byte-pair swap at the hardware heartbeat. */
+        {
+            handle_t pci_handle = pci_model_get_handle(cxt_mgr);
+            if (pci_handle) {
+                pci_model_register_vdesc_hook(pci_handle,
+                                              cx511h_vdesc_irq_hook,
+                                              board_v4l2_cxt);
+                printk(KERN_ERR "[cx511h-bypass] V-DESC IRQ hook registered\n");
+            } else {
+                printk(KERN_ERR "[cx511h-bypass] ERROR: no PCI handle, V-DESC hook NOT registered\n");
+            }
+        }
+
         ite6805_register_callback(board_v4l2_cxt->i2c_chip_handle[CL511H_I2C_CHIP_ITE6805_0],cx511h_ite6805_event,board_v4l2_cxt);
         framegrabber_start(framegrabber_handle);
         cxt_manager_ref_context(aver_xilinx_handle);
@@ -1680,6 +1778,14 @@ void board_v4l2_stop(cxt_mgr_handle_t cxt_mgr)
     {
         debug_msg("Error: cannot get board_v4l2_cxt");
         return;
+    }
+
+    /* Detach the V-DESC IRQ hook BEFORE tearing anything down — the
+     * ISR must never call into a half-released board context. */
+    {
+        handle_t pci_handle = pci_model_get_handle(cxt_mgr);
+        if (pci_handle)
+            pci_model_register_vdesc_hook(pci_handle, NULL, NULL);
     }
 
     /* Stop hardware video streaming */
