@@ -31,7 +31,7 @@ Modernized for recent kernels. **Experimental — development and testing only.*
 | **DMA Transfer** | ✅ [OK] | Continuous streaming: doorbell MMIO `0x304` + IRQ ACK MMIO `0x10` per buffer |
 | **Capture Content** | 🟡 [BLOCKED] | DMA delivers frames; **green screen** from YUYV-on-wire vs UYVY V4L2 label (see Progress Report 2026-06-11) |
 | **Driver Unload** | ✅ [OK] | `unload.sh`: rmmod → unbind → **PCI sysfs remove** + `rmmod -f` on refcnt −1 → **PCIe rescan**; audio restored |
-| **Audio Capture** | ✅ [OK] | ALSA `AVerMedia CL511H`: S16_LE/S24_LE, 32–192 kHz, **2 channels** |
+| **Audio Capture** | ❌ [STUB] | ALSA device `AVerMedia CL511H` **registers** (skeleton in `board_alsa.c`) but **no audio DMA** — capture is silent; no real data delivery yet |
 | **General Use** | ❌ [NO] | Not for daily use / production |
 
 ### Development Phases
@@ -259,13 +259,11 @@ When invoked, the handler:
 9. `board_i2c_init` · 10. ITE6805 attach (with linker-section fallback) · 11. Bitmap overlay  
 12. ALSA · 13. V4L2  
 
-### Audio
+### Audio (stub — not functional)
 
-- Name: `AVerMedia CL511H` (subsystem `0x5730`)
-- Formats: S16_LE, S24_LE
-- Rates: 32 / 44.1 / 48 / 96 / 192 kHz
-- **Channels: 2** (stereo PCM device; `alsa_model.c`)
-- Buffer: `period_size = 7680×4` (30720 bytes), up to **128** periods (`board_alsa.c`)
+- **Status:** PCM device visible in the system (`AVerMedia CL511H`, subsystem `0x5730`) because the ALSA registration path exists — **actual HDMI audio capture is unimplemented**.
+- **No audio DMA stream** — buffers stay silent; `board_alsa.c` / `alsa_model.c` are scaffolding only.
+- **Advertised caps** (if probed): S16_LE / S24_LE, 32–192 kHz, 2 channels; `period_size = 7680×4` (30720 bytes), up to 128 periods — not validated on live audio.
 
 ### Suspend / resume
 
