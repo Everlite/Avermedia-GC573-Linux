@@ -681,28 +681,32 @@ void v4l2_model_next_buffer(v4l2_model_handle_t context,
   *buffer_info = &next_buffer->buffer_info;
 }
 
-void *v4l2_model_peek_pending_plane_vaddr(v4l2_model_handle_t context,
-					  unsigned int plane)
+int v4l2_model_pending_buffer_handoff_ready(v4l2_model_handle_t context,
+					    unsigned int plane,
+					    void **vaddr_out)
 {
   v4l2_model_context_t *v4l2m_context = (v4l2_model_context_t *)context;
   v4l2_model_vb2_context_t *vb2_context;
   v4l2_model_vb2_buffer_t *buf;
   struct vb2_buffer *vb;
-  void *vaddr;
   unsigned long flags;
+  int ret = 0;
+
+  if (vaddr_out)
+    *vaddr_out = NULL;
 
   if (!v4l2m_context || !v4l2m_context->vb2_context)
-    return NULL;
+    return -ENODEV;
 
   if (plane >= VIDEO_MAX_PLANES)
-    return NULL;
+    return -EINVAL;
 
   vb2_context = (v4l2_model_vb2_context_t *)v4l2m_context->vb2_context;
 
   spin_lock_irqsave(&vb2_context->queuelock, flags);
   if (list_empty(&vb2_context->buffer_list)) {
-    spin_unlock_irqrestore(&vb2_context->queuelock, flags);
-    return NULL;
+    ret = -ENODATA;
+    goto out_unlock;
   }
 
   buf = list_first_entry(&vb2_context->buffer_list, v4l2_model_vb2_buffer_t,
@@ -712,114 +716,39 @@ void *v4l2_model_peek_pending_plane_vaddr(v4l2_model_handle_t context,
 #else
   vb = &buf->vb;
 #endif
-  vaddr = vb2_plane_vaddr(vb, plane);
+
+  if (vb->state != VB2_BUF_STATE_ACTIVE) {
+    ret = -EINVAL;
+    goto out_unlock;
+  }
+
+  if (plane >= vb->num_planes) {
+    ret = -EINVAL;
+    goto out_unlock;
+  }
+
+  if (vaddr_out)
+    *vaddr_out = vb2_plane_vaddr(vb, plane);
+
+out_unlock:
   spin_unlock_irqrestore(&vb2_context->queuelock, flags);
+  return ret;
+}
+
+void *v4l2_model_peek_pending_plane_vaddr(v4l2_model_handle_t context,
+					  unsigned int plane)
+{
+  void *vaddr = NULL;
+
+  if (v4l2_model_pending_buffer_handoff_ready(context, plane, &vaddr) != 0)
+    return NULL;
 
   return vaddr;
 }
 
-/* Core byte-pair swap on a vb2 buffer plane: sync for CPU, swap every
- * adjacent byte pair (YUYV→UYVY), sync back for device/userspace.
- * Runs OUTSIDE the hard-IRQ path — safe at soft-IRQ / process level. */
-static void v4l2_model_swap_plane_byte_pairs_vb(
-    v4l2_model_vb2_context_t *vb2_context, struct vb2_buffer *vb,
-    unsigned int plane, size_t len)
-{
-  u8 *vaddr;
-  size_t i;
-  struct sg_table *sgt = NULL;
-  dma_addr_t dma_addr = 0;
-  struct device *dma_dev;
-
-  if (!vb || !len || plane >= VIDEO_MAX_PLANES)
-    return;
-
-  vaddr = vb2_plane_vaddr(vb, plane);
-  if (!vaddr)
-    return;
-
-  if (len > vb2_plane_size(vb, plane))
-    len = vb2_plane_size(vb, plane);
-
-  dma_dev = vb->vb2_queue->dev;
-  if (vb2_context->queue_type == V4L2_MODEL_BUF_TYPE_DMA_SG)
-    sgt = vb2_dma_sg_plane_desc(vb, plane);
-  else if (vb2_context->queue_type == V4L2_MODEL_BUF_TYPE_DMA_CONT)
-    dma_addr = vb2_dma_contig_plane_dma_addr(vb, plane);
-
-  switch (vb2_context->queue_type) {
-  case V4L2_MODEL_BUF_TYPE_DMA_SG:
-    if (dma_dev && sgt)
-      dma_sync_sgtable_for_cpu(dma_dev, sgt, DMA_FROM_DEVICE);
-    break;
-  case V4L2_MODEL_BUF_TYPE_DMA_CONT:
-    if (dma_dev)
-      dma_sync_single_for_cpu(dma_dev, dma_addr, len, DMA_FROM_DEVICE);
-    break;
-  default:
-    break;
-  }
-
-  for (i = 0; i + 1 < len; i += 2) {
-    u8 t = vaddr[i];
-
-    vaddr[i] = vaddr[i + 1];
-    vaddr[i + 1] = t;
-  }
-
-  switch (vb2_context->queue_type) {
-  case V4L2_MODEL_BUF_TYPE_DMA_SG:
-    if (dma_dev && sgt)
-      dma_sync_sgtable_for_device(dma_dev, sgt, DMA_FROM_DEVICE);
-    break;
-  case V4L2_MODEL_BUF_TYPE_DMA_CONT:
-    if (dma_dev)
-      dma_sync_single_for_device(dma_dev, dma_addr, len, DMA_FROM_DEVICE);
-    break;
-  default:
-    break;
-  }
-}
-
-void v4l2_model_swap_pending_plane_byte_pairs(v4l2_model_handle_t context,
-					      unsigned int plane, size_t len)
-{
-  v4l2_model_context_t *v4l2m_context = (v4l2_model_context_t *)context;
-  v4l2_model_vb2_context_t *vb2_context;
-  v4l2_model_vb2_buffer_t *buf;
-  struct vb2_buffer *vb;
-  unsigned long flags;
-
-  if (!v4l2m_context || !v4l2m_context->vb2_context || !len)
-    return;
-
-  if (plane >= VIDEO_MAX_PLANES)
-    return;
-
-  vb2_context = (v4l2_model_vb2_context_t *)v4l2m_context->vb2_context;
-
-  spin_lock_irqsave(&vb2_context->queuelock, flags);
-  if (list_empty(&vb2_context->buffer_list)) {
-    spin_unlock_irqrestore(&vb2_context->queuelock, flags);
-    return;
-  }
-
-  buf = list_first_entry(&vb2_context->buffer_list, v4l2_model_vb2_buffer_t,
-			 list);
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 4, 0)
-  vb = &buf->vb.vb2_buf;
-#else
-  vb = &buf->vb;
-#endif
-  spin_unlock_irqrestore(&vb2_context->queuelock, flags);
-
-  v4l2_model_swap_plane_byte_pairs_vb(vb2_context, vb, plane, len);
-}
-
 /* Invalidate the CPU cache for the pending (head-of-list) buffer's plane so
- * userspace reads the freshly DMA'd frame instead of stale cache. Mirrors the
- * sync logic in v4l2_model_swap_plane_byte_pairs_vb() but does the for_cpu
- * direction only (no byte swap, no for_device re-handover). Safe to call from
+ * userspace reads the freshly DMA'd frame instead of stale cache.
+ * for_cpu only — no byte swap, no for_device re-handover. Safe to call from
  * the board buffer-done callback right before v4l2_model_buffer_done(). */
 void v4l2_model_sync_pending_plane_for_cpu(v4l2_model_handle_t context,
 					   unsigned int plane)
@@ -838,13 +767,12 @@ void v4l2_model_sync_pending_plane_for_cpu(v4l2_model_handle_t context,
   if (plane >= VIDEO_MAX_PLANES)
     return;
 
+  if (v4l2_model_pending_buffer_handoff_ready(context, plane, NULL) != 0)
+    return;
+
   vb2_context = (v4l2_model_vb2_context_t *)v4l2m_context->vb2_context;
 
   spin_lock_irqsave(&vb2_context->queuelock, flags);
-  if (list_empty(&vb2_context->buffer_list)) {
-    spin_unlock_irqrestore(&vb2_context->queuelock, flags);
-    return;
-  }
   buf = list_first_entry(&vb2_context->buffer_list, v4l2_model_vb2_buffer_t,
 			 list);
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 4, 0)
@@ -896,16 +824,30 @@ void v4l2_model_buffer_done(v4l2_model_handle_t context) {
   /* get next v4l2_model_buffer from vb2 context buffer_list */
   spin_lock_irqsave(&vb2_context->queuelock, flags);
   if (!list_empty(&vb2_context->buffer_list)) {
+    struct vb2_buffer *peek_vb;
+
     buf = list_first_entry(&vb2_context->buffer_list, v4l2_model_vb2_buffer_t,
                            list);
-    list_del_init(&buf->list);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 4, 0)
+    peek_vb = &buf->vb.vb2_buf;
+#else
+    peek_vb = &buf->vb;
+#endif
+    if (peek_vb->state != VB2_BUF_STATE_ACTIVE) {
+      printk_ratelimited(KERN_WARNING
+          "%s: head buffer state %u (expected ACTIVE %u), skipping handoff\n",
+          __func__, peek_vb->state, VB2_BUF_STATE_ACTIVE);
+      buf = NULL;
+    } else {
+      list_del_init(&buf->list);
+    }
   } else {
     buf = NULL;
   }
   spin_unlock_irqrestore(&vb2_context->queuelock, flags);
 
   if (!buf) {
-    printk("%s no buffer to serve\n", __func__);
+    printk_ratelimited(KERN_WARNING "%s: no ACTIVE buffer to serve\n", __func__);
     return;
   }
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 5, 0)
@@ -994,56 +936,8 @@ void v4l2_model_buffer_done(v4l2_model_handle_t context) {
                               FRAMEGRABBER_STATUS_SIGNAL_LOCKED_BIT)) ==
       (FRAMEGRABBER_STATUS_V4L_START_STREAMING_BIT |
        FRAMEGRABBER_STATUS_SIGNAL_LOCKED_BIT)) {
-    /* YUYV→UYVY color fix at the V4L2 handoff layer (soft-IRQ safe):
-     * hardware delivers YUYV byte order, V4L2 advertises UYVY. Swap
-     * adjacent byte pairs in place right before userspace sees the
-     * buffer — outside the hard-IRQ path, so no PCIe timing stalls. */
-    {
-      const framegrabber_pixfmt_t *pixfmt =
-          framegrabber_g_out_pixelfmt(v4l2m_context->framegrabber_handle);
-
-      if (pixfmt && pixfmt->fourcc == V4L2_PIX_FMT_UYVY) {
-        int width, height;
-        /* Diagnostic dump fires once per stream: frames is reset to 0 in
-         * start_streaming; frame 10 gives the DMA time to deliver real
-         * data instead of the freshly-cleared first buffers. */
-        bool diag_dump = (vb2_context->frames == 10);
-        u8 *d = diag_dump ? vb2_plane_vaddr(vb, 0) : NULL;
-
-        framegrabber_g_out_framesize(v4l2m_context->framegrabber_handle,
-                                     &width, &height);
-        if (width > 0 && height > 0) {
-          printk_once(KERN_ERR
-              "[cx511h-swap] YUYV→UYVY byte-pair swap active in buffer_done "
-              "(%dx%d, %zu bytes)\n",
-              width, height, (size_t)width * height * 2);
-
-          if (d)
-            printk(KERN_ERR
-                "[cx511h-diag] FIRST 16 BYTES (pre-swap, frame %u): "
-                "%02x %02x %02x %02x %02x %02x %02x %02x "
-                "%02x %02x %02x %02x %02x %02x %02x %02x\n",
-                vb2_context->frames,
-                d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7],
-                d[8], d[9], d[10], d[11], d[12], d[13], d[14], d[15]);
-
-          v4l2_model_swap_plane_byte_pairs_vb(vb2_context, vb, 0,
-                                              (size_t)width * height * 2);
-
-          /* Post-swap dump proves the swap actually touched memory:
-           * bytes must appear pairwise exchanged vs. the line above. */
-          if (d)
-            printk(KERN_ERR
-                "[cx511h-diag] FIRST 16 BYTES (post-swap, frame %u): "
-                "%02x %02x %02x %02x %02x %02x %02x %02x "
-                "%02x %02x %02x %02x %02x %02x %02x %02x\n",
-                vb2_context->frames,
-                d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7],
-                d[8], d[9], d[10], d[11], d[12], d[13], d[14], d[15]);
-        }
-      }
-    }
-
+    /* Raw FPGA bytes only — no in-place YUYV↔UYVY swap. CPU writes during
+     * active DMA corrupt subsequent frames (cache vs. DMA engine). */
     vb2_buffer_done(vb, VB2_BUF_STATE_DONE);
   } else {
     // printk("%s framegrabber_status %08x\n", __func__, framegrabber_status);

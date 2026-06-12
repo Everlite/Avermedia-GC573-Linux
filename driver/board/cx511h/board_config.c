@@ -274,6 +274,15 @@ int board_probe(struct device *dev,unsigned long driver_info)
         printk(KERN_ERR "[cx511h-debug] Step 13: board_v4l2_init starten...\n");
         board_v4l2_init(cxt_mgr,subsystem_id);  
         printk(KERN_ERR "[cx511h-debug] Step 14: board_v4l2_init DONE\n");
+
+        /*
+         * Bootstrap ITE6805 RX + IT6664 splitter once at probe — not during
+         * stream_on, where manual hdmirxwr() collides with blob auto-negotiation.
+         */
+        printk(KERN_ALERT "[cx511h-phase4] Bootstrapping ITE6805/IT6664 hardware pipeline once at probe...\n");
+        iTE6805_Hardware_Init(ite6805_handle_1);
+        printk(KERN_ALERT "[cx511h-phase4] ITE6805/IT6664 hardware bootstrap complete\n");
+
         //aver_xilinx_sha204_init(aver_xilinx_handle);
         
     }while(0);

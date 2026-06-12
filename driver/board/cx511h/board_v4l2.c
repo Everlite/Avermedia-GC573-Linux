@@ -450,56 +450,13 @@ static void cx511h_stream_on(framegrabber_handle_t handle)
         return;
     }
 
-    printk(KERN_ERR "[cx511h-ttl] === STREAM ON START ===\n");
+    printk(KERN_ERR "[cx511h-dma] === STREAM ON (MMIO/FPGA only — no I2C) ===\n");
     cx511h_frame_counter = 0;
 
-    /* TTL PIXEL MODE (Single/SDR Sync) — SKIPPED to avoid I2C deadlock.
-     * The ITE6805 blob's hdmirxwr() hangs on register 0xc0 (I2C bus lock).
-     * These are power-on defaults for Single/SDR and don't need reconfiguration.
-     * Uncomment if byte-order testing requires TTL mode changes. */
-    printk(KERN_ERR "[cx511h-ttl] SKIPPING TTL config (I2C deadlock workaround)\n");
-    goto skip_ttl_config;
-
-    /* TRUE TTL PIXEL MODE (Single/SDR Sync) 
-     * Aligning HDMI receiver TTL bus with the forced FPGA/V4L2 YUYV path. 
-     * MUST BE DONE AT THE VERY START! */
-    printk(KERN_ERR "[cx511h-ttl] Configuring TTL Pixel Mode (Single/SDR)...\n");
-
-    // 1. Reset TTL Interface
-    printk(KERN_ERR "[cx511h-ttl] Step 1/5: Reset TTL (0xc0=0x00)...\n");
-    hdmirxwr(ite6805_handle, 0xc0, 0x00);
-    printk(KERN_ERR "[cx511h-ttl] Step 1/5: done\n");
-    msleep(10);
-
-    // 2. Base Mode (Single Pixel / SDR - Bits [2:1] = 10)
-    printk(KERN_ERR "[cx511h-ttl] Step 2/5: Base Mode (0xc0=0x02)...\n");
-    hdmirxwr(ite6805_handle, 0xc0, 0x02);
-    printk(KERN_ERR "[cx511h-ttl] Step 2/5: done\n");
-    msleep(10);
-
-    // 3. Lane/DDR Config (Standard SDR)
-    printk(KERN_ERR "[cx511h-ttl] Step 3/5: Lane Config (0xc1=0x00)...\n");
-    hdmirxwr(ite6805_handle, 0xc1, 0x00);
-    printk(KERN_ERR "[cx511h-ttl] Step 3/5: done, Reverted to 0xc0=0x02, 0xc1=0x00\n");
-    msleep(10);
-
-    // 4. Pixel Mode Enumeration (Auto detection flags)
-    printk(KERN_ERR "[cx511h-ttl] Step 4/5: Pixel Mode Enum (0xbd=0x00)...\n");
-    hdmirxwr(ite6805_handle, 0xbd, 0x00);
-    printk(KERN_ERR "[cx511h-ttl] Step 4/5a: done, now 0xbe=0x00...\n");
-    hdmirxwr(ite6805_handle, 0xbe, 0x00);
-    printk(KERN_ERR "[cx511h-ttl] Step 4/5b: done\n");
-    msleep(10);
-
-    // 5. DDR Flag (Disabled for SDR)
-    printk(KERN_ERR "[cx511h-ttl] Step 5/5: DDR Flag (0xc4=0x00)...\n");
-    hdmirxwr(ite6805_handle, 0xc4, 0x00);
-    printk(KERN_ERR "[cx511h-ttl] Step 5/5: done\n");
-    msleep(10);
-    
-    printk(KERN_ERR "[cx511h-ttl] TTL Pixel Mode (Single/SDR) sequence complete.\n");
-
-skip_ttl_config:
+    /* ITE6805 I2C writes during stream_on are FORBIDDEN: hdmirxwr() collides
+     * with the blob's background HDMI auto-negotiation (0xc0, 0x23, streaming
+     * chain, deskew, CSC all hard-freeze PCIe). The frontend is already locked
+     * at 1080p from init — we only configure vip_cfg and arm FPGA DMA via MMIO. */
 
     //ite6805_get_hdcp_state(ite6805_handle, &hdcp_state);
     //ite6805_set_hdcp_state(ite6805_handle, hdcp_state);
@@ -539,43 +496,59 @@ skip_ttl_config:
         
     //audio_rate = framegrabber_g_input_audioinfo(board_v4l2_cxt->fg_handle);
     
-    dual_pixel = framegrabber_g_input_dualmode(board_v4l2_cxt->fg_handle);
-    
-    //aver_xilinx_dual_pixel(board_v4l2_cxt->aver_xilinx_handle,dual_pixel);
-    if (dual_pixel ==1)
-        vip_cfg.dual_pixel = 1;
-    else
-        vip_cfg.dual_pixel = 0;   
-    
     audio_rate = aver_xilinx_get_audioinfo(board_v4l2_cxt->aver_xilinx_handle);
     vip_cfg.audio_rate = audio_rate;
     
     framegrabber_s_input_audioinfo(board_v4l2_cxt->fg_handle,audio_rate);
 
     mesg("%s...vip_cfg.audio_rate_index=%d\n",__func__,vip_cfg.audio_rate);
-    ite6805_get_frameinfo(ite6805_handle,fe_frameinfo);
-    
+    ite6805_get_frameinfo(ite6805_handle, fe_frameinfo);
+
     debug_msg("%s========fe_frameinfo->packet_colorspace=%d\n",__func__,fe_frameinfo->packet_colorspace);
-    
-    vip_cfg.in_videoformat.fps = framegrabber_g_input_framerate(board_v4l2_cxt->fg_handle);
-    //if(vip_cfg.is_interlace==TRUE)
-        //vip_cfg.in_framerate = vip_cfg.in_framerate * 2;
-    vip_cfg.packet_colorspace = fe_frameinfo->packet_colorspace;    
-    vip_cfg.in_videoformat.vactive = width;
-    vip_cfg.in_videoformat.hactive = height;
-    //if (vip_cfg.in_videoformat.is_interlace==TRUE)
-        //vip_cfg.in_videoformat.hactive *= 2; 
-    vip_cfg.out_videoformat.width=out_width;
-    vip_cfg.out_videoformat.height=out_height;
-    vip_cfg.clip_start.x=0;
-    vip_cfg.clip_start.y=0;
-    vip_cfg.clip_size.width=width;
-    vip_cfg.clip_size.height=height;
-//  vip_cfg.valid_mask=CLIP_CFG_VALID_MASK|SCALER_CFG_VALID_MASK;
-//  vip_cfg.valid_mask=SCALER_CFG_VALID_MASK|SCALER_CFG_SHRINK_MASK;
-    vip_cfg.valid_mask=SCALER_CFG_VALID_MASK|FRAMERATE_CFG_VALID_MASK;
-    vip_cfg.pixel_clock=board_v4l2_cxt->cur_fe_frameinfo.pixel_clock;
-    vip_cfg.in_ddrmode = fe_frameinfo->ddr_mode;
+
+    /* Physical HDMI dimensions from ITE6805 — NOT framegrabber (may be forced to
+     * 1080p in ITE6805_LOCK while the FPGA still ingests native 4K). */
+    {
+        int phy_w = fe_frameinfo->width;
+        int phy_h = fe_frameinfo->height;
+        int needs_downscale = 0;
+
+        vip_cfg.in_videoformat.fps = fe_frameinfo->framerate ?
+            fe_frameinfo->framerate : framegrabber_g_input_framerate(board_v4l2_cxt->fg_handle);
+        vip_cfg.packet_colorspace = fe_frameinfo->packet_colorspace;
+        vip_cfg.in_videoformat.vactive = phy_w;
+        vip_cfg.in_videoformat.hactive = phy_h;
+        vip_cfg.out_videoformat.width = out_width;
+        vip_cfg.out_videoformat.height = out_height;
+        vip_cfg.clip_start.x = 0;
+        vip_cfg.clip_start.y = 0;
+        vip_cfg.clip_size.width = phy_w;
+        vip_cfg.clip_size.height = phy_h;
+
+        if (fe_frameinfo->pixel_clock > 170000000 || phy_w > 1920 ||
+            fe_frameinfo->dual_pixel || fe_frameinfo->dual_pixel_like)
+            vip_cfg.dual_pixel = 1;
+        else
+            vip_cfg.dual_pixel = 0;
+
+        dual_pixel = vip_cfg.dual_pixel;
+
+        needs_downscale = (phy_w > out_width) || (phy_h > out_height);
+        if (needs_downscale) {
+            vip_cfg.video_bypass = 0;
+            vip_cfg.valid_mask = SCALER_CFG_VALID_MASK | FRAMERATE_CFG_VALID_MASK |
+                                 SCALER_CFG_SHRINK_MASK;
+            printk(KERN_ERR "[cx511h-scale] 4K/2K downscale: HDMI %dx%d -> V4L2 %dx%d "
+                   "dual=%d pclk=%u\n",
+                   phy_w, phy_h, out_width, out_height,
+                   vip_cfg.dual_pixel, fe_frameinfo->pixel_clock);
+        } else {
+            vip_cfg.valid_mask = SCALER_CFG_VALID_MASK | FRAMERATE_CFG_VALID_MASK;
+        }
+
+        vip_cfg.pixel_clock = fe_frameinfo->pixel_clock;
+        vip_cfg.in_ddrmode = fe_frameinfo->ddr_mode;
+    }
     //vip_cfg.out_framerate= 0; //for test
     vip_cfg.out_videoformat.fps=frameinterval;
     mesg("%s..in_framerate=%d  out_framerate=%d pixel_clock=%d\n",__func__,vip_cfg.in_videoformat.fps,vip_cfg.out_videoformat.fps,vip_cfg.pixel_clock);
@@ -722,25 +695,6 @@ skip_ttl_config:
         vip_cfg.pixel_format = pixfmt->pixfmt_out;
     }
 
-    /* DEBUG 4: Video Unmute Sequence (from Windows Driver Analysis)
-     * SKIPPED: hdmirxwr() I2C writes deadlock on ITE6805 during stream_on.
-     * Registers were already set in board_probe/init. */
-    {
-        printk(KERN_ERR "[cx511h-hdmi] SKIPPING Video UNMUTE (I2C deadlock workaround)\n");
-    }
-
-    // --- PHASE2 --- I2C Enable Sequence for Continuous Streaming
-    // SKIPPED: hdmirxwr() deadlocks. Registers set during init.
-    {
-        printk(KERN_ERR "[cx511h-phase2] SKIPPING ITE68051 streaming regs (I2C deadlock workaround)\n");
-    }
-
-    // --- PHASE2-FIX --- RX DeSkew Error Mitigation
-    // SKIPPED: hdmirxwr() deadlocks.
-    {
-        printk(KERN_ERR "[cx511h-phase2] SKIPPING RX DeSkew (I2C deadlock workaround)\n");
-    }
-
     printk(KERN_ERR "[cx511h-dma] stream_on: BEFORE aver_xilinx_config_video_process\n");
     printk(KERN_ERR "[cx511h-dma]   in=%dx%d out=%dx%d fps_in=%d fps_out=%d\n",
            vip_cfg.in_videoformat.vactive, vip_cfg.in_videoformat.hactive,
@@ -761,109 +715,32 @@ skip_ttl_config:
     /* SAFETY 2: Small delay to let the FPGA/DMA engine fully stop */
     msleep(50);
 
-    aver_xilinx_config_video_process(board_v4l2_cxt->aver_xilinx_handle,&vip_cfg);
-
-    // 6. Final CSC Sync (BT.709 Pass-through)
-    // SKIPPED: hdmirxwr() deadlocks. Registers already set in init.
-    printk(KERN_ERR "[cx511h-color] SKIPPING ITE6805 CSC sync (I2C deadlock workaround)\n");
-    // hdmirxwr calls removed: 0x6b, 0x6c, 0x6e, 0x2a
-
-    // --- CSC-FIX --- FPGA CSC Configuration (MMIO 0x1040) - Dynamic based on input format
-    // Based on Windows driver analysis:
-    // - bit0 = 1 (VIDEO_422_MODE) - always set for YUV422 output
-    // - bit1 = 1 if RGB->YUV conversion needed (input is RGB)
-    // - bit3 = 0 (YUV->RGB disable) - always 0 for YUV output
-    // - bits[10:8] = CSC matrix: 
-    //   0 = RGB Full -> YUV BT.709 (RGBF_to_BT709)
-    //   1 = RGB Limited -> YUV BT.709 (RGBL_to_BT709)
-    //   4 = YUV BT.601 -> YUV BT.709 (BT601_to_BT709)
-    //   5 = YUV BT.709 -> YUV BT.601 (BT709_to_BT601)
-    // - bit5 = 0 (single-pixel mode) - always 0
-    {
-        u32 csc_value = 0;
-        u8 csc_matrix = 0;
-        
-        // Always set VIDEO_422_MODE (bit0)
-        csc_value |= 0x1;
-        
-        // Determine CSC matrix based on input format
-        if (vip_cfg.in_colorspacemode == 0) {
-            // Input is YUV
-            csc_value &= ~(0x1 << 1); // Clear RGB->YUV bit
-            if (vip_cfg.in_packetcsc_bt == COLORMETRY_ITU601) {
-                // YUV BT.601 -> YUV BT.709
-                csc_matrix = 4; // BT601_to_BT709
-            } else {
-                // YUV BT.709 -> YUV BT.709 (passthrough)
-                csc_matrix = 0; // No conversion needed
-            }
-        } else if (vip_cfg.in_colorspacemode == 1) {
-            // Input is RGB Limited
-            csc_value |= (0x1 << 1); // Set RGB->YUV bit
-            if (vip_cfg.in_packetcsc_bt == COLORMETRY_ITU601) {
-                csc_matrix = 3; // RGBL_to_BT601
-            } else {
-                csc_matrix = 1; // RGBL_to_BT709
-            }
-        } else if (vip_cfg.in_colorspacemode == 2) {
-            // Input is RGB Full
-            csc_value |= (0x1 << 1); // Set RGB->YUV bit
-            if (vip_cfg.in_packetcsc_bt == COLORMETRY_ITU601) {
-                csc_matrix = 2; // RGBF_to_BT601
-            } else {
-                csc_matrix = 0; // RGBF_to_BT709
-            }
-        }
-        
-        // Set CSC matrix bits [10:8]
-        csc_value |= (csc_matrix << 8);
-        
-        cxt_mgr_handle_t cxt_mgr = get_cxt_manager_from_context(board_v4l2_cxt);
-        handle_t pci_handle = NULL;
-        
-        printk(KERN_ERR "[cx511h-csc] Debug: board_v4l2_cxt=%p\n", board_v4l2_cxt);
-        if (cxt_mgr) {
-            printk(KERN_ERR "[cx511h-csc] Debug: cxt_mgr=%p\n", cxt_mgr);
-            pci_handle = pci_model_get_handle(cxt_mgr);
-            if (pci_handle) {
-                printk(KERN_ERR "[cx511h-csc] Debug: pci_handle from pci_model_get_handle=%p\n", pci_handle);
-            } else {
-                printk(KERN_ERR "[cx511h-csc] Debug: pci_model_get_handle returned NULL\n");
-            }
-        } else {
-            printk(KERN_ERR "[cx511h-csc] Debug: cxt_mgr is NULL\n");
-        }
-        
-        // Fallback: use stored pci_handle from board context
-        if (!pci_handle && board_v4l2_cxt->pci_handle) {
-            pci_handle = board_v4l2_cxt->pci_handle;
-            printk(KERN_ERR "[cx511h-csc] Debug: using stored pci_handle=%p\n", pci_handle);
-        }
-        
-        // If still NULL, try to get PCI handle via cxt_manager_get_context
-        if (!pci_handle && cxt_mgr) {
-            pci_handle = cxt_manager_get_context(cxt_mgr, PCI_CXT_ID, 0);
-            if (pci_handle) {
-                printk(KERN_ERR "[cx511h-csc] Debug: pci_handle from cxt_manager_get_context=%p\n", pci_handle);
-            }
-        }
-        
-        // Write CSC register if we have a valid handle
-        if (pci_handle) {
-            pci_model_mmio_write(pci_handle, 0, 0x1040, csc_value);
-            printk(KERN_ERR "[cx511h-csc] FPGA CSC configured: 0x1040 = 0x%03x ", csc_value);
-            printk(KERN_ERR "(in_cs=%u, csc_bt=%u, matrix=%u, %s->YUV)\n",
-                   vip_cfg.in_colorspacemode, vip_cfg.in_packetcsc_bt, csc_matrix,
-                   (vip_cfg.in_colorspacemode == 0) ? "YUV" : 
-                   (vip_cfg.in_colorspacemode == 1) ? "RGB_L" : "RGB_F");
-        } else {
-            printk(KERN_ERR "[cx511h-csc] ERROR: No valid PCI handle, CSC register not written!\n");
-        }
+    /*
+     * Feed native scale coordinates into the blob — it programs XV H/V scaler,
+     * 0x1088 working mode, and 0x1040 CSC/dual-pixel via aver_xilinx_dual_pixel().
+     * Do NOT post-patch 0x1040/0x1088; manual writes corrupt ingest mapping.
+     */
+    if (fe_frameinfo->width > out_width || fe_frameinfo->height > out_height) {
+        vip_cfg.in_videoformat.vactive = fe_frameinfo->width;
+        vip_cfg.in_videoformat.hactive = fe_frameinfo->height;
+        vip_cfg.out_videoformat.width = out_width;
+        vip_cfg.out_videoformat.height = out_height;
+        vip_cfg.clip_start.x = 0;
+        vip_cfg.clip_start.y = 0;
+        vip_cfg.clip_size.width = fe_frameinfo->width;
+        vip_cfg.clip_size.height = fe_frameinfo->height;
+        vip_cfg.dual_pixel = 1;
+        vip_cfg.video_bypass = 0;
+        vip_cfg.valid_mask = SCALER_CFG_VALID_MASK | FRAMERATE_CFG_VALID_MASK |
+                             SCALER_CFG_SHRINK_MASK;
+        printk(KERN_ERR "[cx511h-scale] blob vip_cfg: %dx%d -> %dx%d dual=1 bypass=0\n",
+               fe_frameinfo->width, fe_frameinfo->height, out_width, out_height);
     }
 
+    aver_xilinx_config_video_process(board_v4l2_cxt->aver_xilinx_handle, &vip_cfg);
 
     /* SAFETY 3: Settle delay after config — give the FPGA time to latch
-     * the new scaler/CSC/DMA settings before we start the stream.
+     * scaler/DMA settings before we start the stream.
      * Too short = FPGA uses stale config = DMA writes to wrong addresses. */
     printk(KERN_ERR "[cx511h-dma] stream_on: config done, settling 200ms...\n");
     msleep(200);
@@ -1188,6 +1065,65 @@ static int cx511h_reg_write(framegrabber_handle_t handle, unsigned int offset, u
     return ret;
 }
 
+/* Resolve PCI MMIO handle for doorbell / IRQ-ACK writes. */
+static handle_t cx511h_resolve_pci_handle(board_v4l2_context_t *board_v4l2_cxt)
+{
+    cxt_mgr_handle_t cxt_mgr;
+    handle_t pci_handle = NULL;
+
+    if (!board_v4l2_cxt)
+        return NULL;
+
+    cxt_mgr = get_cxt_manager_from_context(board_v4l2_cxt);
+    if (cxt_mgr)
+        pci_handle = pci_model_get_handle(cxt_mgr);
+    if (!pci_handle && board_v4l2_cxt->pci_handle)
+        pci_handle = board_v4l2_cxt->pci_handle;
+    if (!pci_handle && cxt_mgr)
+        pci_handle = cxt_manager_get_context(cxt_mgr, PCI_CXT_ID, 0);
+
+    return pci_handle;
+}
+
+/* Acknowledge V-DESC IRQ without ringing the DMA doorbell. */
+static void cx511h_vdesc_irq_ack_only(board_v4l2_context_t *board_v4l2_cxt)
+{
+    handle_t pci_handle = cx511h_resolve_pci_handle(board_v4l2_cxt);
+
+    if (pci_handle)
+        pci_model_mmio_write(pci_handle, 0, 0x10, 0x02);
+}
+
+/* Doorbell + IRQ ACK after a successful V4L2 buffer handoff. */
+static void cx511h_dma_handoff_complete(board_v4l2_context_t *board_v4l2_cxt)
+{
+    handle_t pci_handle = cx511h_resolve_pci_handle(board_v4l2_cxt);
+
+    if (!pci_handle) {
+        printk(KERN_ERR
+            "[cx511h-phase2] ERROR: No valid PCI handle, doorbell/IRQ ACK not sent!\n");
+        return;
+    }
+
+    /* Doorbell: notify hardware the next descriptor is ready.
+     * Do NOT re-arm slot bits (0x07) here — RMW on 0x304 during an
+     * in-flight transfer hard-freezes the card. */
+    pci_model_mmio_write(pci_handle, 0, 0x304, 0x01);
+    pci_model_mmio_write(pci_handle, 0, 0x10, 0x02);
+    wmb();
+}
+
+static bool cx511h_v4l2_streaming_active(board_v4l2_context_t *board_v4l2_cxt)
+{
+    framegrabber_status_bitmask_e st;
+
+    if (!board_v4l2_cxt || !board_v4l2_cxt->fg_handle)
+        return false;
+
+    st = framegrabber_g_status(board_v4l2_cxt->fg_handle);
+    return (st & FRAMEGRABBER_STATUS_V4L_START_STREAMING_BIT) != 0;
+}
+
 /* === IRQ BYPASS HOOK (monitoring only) ===
  * Runs in HARD IRQ context, dispatched from pci_model_irq the moment
  * V-DESC complete (reg 0x10 bit 0x2) fires. The byte-pair swap was
@@ -1250,91 +1186,78 @@ static void cx511h_vdesc_irq_hook(void *data, int slot_index)
 
 static void cx511h_video_buffer_done(void *data)
 {
-    board_v4l2_context_t *board_v4l2_cxt=data;
-    cxt_mgr_handle_t cxt_mgr;
-    handle_t pci_handle;
+    board_v4l2_context_t *board_v4l2_cxt = data;
+    void *vaddr = NULL;
+    int handoff;
     static int frame_count = 0;
 
-    //mesg("%s board_v4l2_cxt %p\n",__func__,board_v4l2_cxt);
-    if(board_v4l2_cxt)
+    if (!board_v4l2_cxt || !board_v4l2_cxt->v4l2_handle)
+        return;
+
+    /* Raw FPGA payload — no CPU byte-pair swap (collides with active DMA). */
+
+    /* The blob may fire this callback before STREAMON enqueues buffers, after
+     * STREAMOFF, or when userspace has not re-queued yet. Finalizing in those
+     * cases dequeues nothing / marks ERROR → ffplay "corrupted data". */
+    if (!cx511h_v4l2_streaming_active(board_v4l2_cxt)) {
+        printk_ratelimited(KERN_DEBUG
+            "[gc573-handoff] spurious buffer_done (streaming inactive)\n");
+        cx511h_vdesc_irq_ack_only(board_v4l2_cxt);
+        return;
+    }
+
+    handoff = v4l2_model_pending_buffer_handoff_ready(
+        board_v4l2_cxt->v4l2_handle, 0, &vaddr);
+    if (handoff != 0) {
+        printk_ratelimited(KERN_ERR
+            "[gc573-handoff] skip frame: no ACTIVE pending buffer (%d)\n",
+            handoff);
+        /* Clear the IRQ but do not doorbell — there is no V4L2 buffer to
+         * advance the ping-pong chain against. */
+        cx511h_vdesc_irq_ack_only(board_v4l2_cxt);
+        return;
+    }
+
+    /* === CPU-cache invalidation before serving ===
+     * FPGA just finished DMA. dma_sync_* runs on the SG table (no vaddr
+     * required) so this is safe even when vaddr is NULL below. */
+    v4l2_model_sync_pending_plane_for_cpu(board_v4l2_cxt->v4l2_handle, 0);
+
+    /* === [gc573-payload] Hex-Dump Light ===
+     * vaddr was captured under queuelock while the buffer was ACTIVE.
+     * Re-peek after sync only for the diagnostic read. Handoff passes raw
+     * FPGA bytes to userspace with no further CPU manipulation. */
     {
-        /* Byte-pair swap lives in v4l2_model_buffer_done() (V4L2 handoff
-         * layer) — doing it here too would double-swap and undo the fix. */
+        static int payload_budget = 30;
+        u8 *p = vaddr;
 
-        /* === [gc573-debug] force CPU-cache invalidation before serving ===
-         * The FPGA has just finished writing this frame via DMA. On a
-         * non-coherent mapping the CPU may still hold stale (zero) cache
-         * lines for the buffer, which renders as a green screen even when
-         * the DMA succeeded. Invalidate the pending plane for the CPU
-         * BEFORE v4l2_model_buffer_done() hands it to userspace. */
-        v4l2_model_sync_pending_plane_for_cpu(board_v4l2_cxt->v4l2_handle, 0);
+        if (payload_budget > 0) {
+            payload_budget--;
+            if (!p)
+                p = v4l2_model_peek_pending_plane_vaddr(
+                    board_v4l2_cxt->v4l2_handle, 0);
 
-        /* === [gc573-payload] Hex-Dump Light ===
-         * Read the first 16 bytes of the just-completed frame (the pending
-         * plane that is about to be served). Runs AFTER the cache sync so we
-         * see the real DMA'd payload, BEFORE v4l2_model_buffer_done() applies
-         * the YUYV->UYVY swap — so this is the raw byte order off the FPGA.
-         * Budgeted to avoid flooding the log at 60 fps. */
-        {
-            static int payload_budget = 30;
-
-            if (payload_budget > 0) {
-                u8 *p = v4l2_model_peek_pending_plane_vaddr(
-                            board_v4l2_cxt->v4l2_handle, 0);
-
-                payload_budget--;
-                if (p)
-                    printk(KERN_ERR
-                        "[gc573-payload] First 16 bytes of frame: "
-                        "%02x %02x %02x %02x %02x %02x %02x %02x "
-                        "%02x %02x %02x %02x %02x %02x %02x %02x\n",
-                        p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7],
-                        p[8], p[9], p[10], p[11], p[12], p[13], p[14], p[15]);
-                else
-                    printk(KERN_ERR "[gc573-payload] pending plane vaddr is NULL\n");
+            if (p) {
+                printk(KERN_ERR
+                    "[gc573-payload] First 16 bytes of frame: "
+                    "%02x %02x %02x %02x %02x %02x %02x %02x "
+                    "%02x %02x %02x %02x %02x %02x %02x %02x\n",
+                    p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7],
+                    p[8], p[9], p[10], p[11], p[12], p[13], p[14], p[15]);
+            } else {
+                printk_ratelimited(KERN_ERR
+                    "[gc573-payload] ACTIVE buffer but no kernel vaddr "
+                    "(DMA handoff via sg sync only)\n");
             }
         }
-
-        v4l2_model_buffer_done(board_v4l2_cxt->v4l2_handle);
-
-        // --- PHASE2 --- Doorbell and IRQ ACK for continuous streaming
-        cxt_mgr = get_cxt_manager_from_context(board_v4l2_cxt);
-        pci_handle = NULL;
-
-        if (cxt_mgr) {
-            pci_handle = pci_model_get_handle(cxt_mgr);
-        }
-
-        // Fallback: use stored pci_handle from board context
-        if (!pci_handle && board_v4l2_cxt->pci_handle) {
-            pci_handle = board_v4l2_cxt->pci_handle;
-        }
-
-        // If still NULL, try to get PCI handle via cxt_manager_get_context
-        if (!pci_handle && cxt_mgr) {
-            pci_handle = cxt_manager_get_context(cxt_mgr, PCI_CXT_ID, 0);
-        }
-
-        // Write doorbell and IRQ ACK if we have a valid handle
-        if (pci_handle) {
-            // Doorbell: notify hardware next buffer is ready.
-            // NOTE: do NOT re-arm slot bits (0x07) here — RMW on 0x304 while
-            // a DMA transfer is in flight collides with the FPGA state
-            // machine and hard-freezes the card. Slots are armed ONCE in
-            // cx511h_stream_on; the hardware pointer cycles ping-pong
-            // naturally from there.
-            pci_model_mmio_write(pci_handle, 0, 0x304, 0x01);
-
-            // IRQ ACK: acknowledge interrupt after buffer done
-            pci_model_mmio_write(pci_handle, 0, 0x10, 0x02);
-            wmb(); // write memory barrier
-
-            if (frame_count++ % 3600 == 0)  // Log once per minute at 60fps
-                printk(KERN_DEBUG "[cx511h-phase2] frames processed: %d\n", frame_count);
-        } else {
-            printk(KERN_ERR "[cx511h-phase2] ERROR: No valid PCI handle, doorbell/IRQ ACK not sent!\n");
-        }
     }
+
+    v4l2_model_buffer_done(board_v4l2_cxt->v4l2_handle);
+
+    cx511h_dma_handoff_complete(board_v4l2_cxt);
+
+    if (frame_count++ % 3600 == 0)
+        printk(KERN_DEBUG "[cx511h-phase2] frames processed: %d\n", frame_count);
 }
 
 static void cx511h_v4l2_buffer_prepare(v4l2_model_callback_parameter_t *cb_info)
@@ -1497,15 +1420,6 @@ static void cx511h_v4l2_buffer_init(v4l2_model_callback_parameter_t *cb_info)
         } 
     }  
 }
-/*
-static void cx511h_v4l2_hardware_init(framegrabber_handle_t handle)
-{
-    board_v4l2_context_t *board_v4l2_cxt=framegrabber_get_data(handle);
-    handle_t ite6805_handle=board_v4l2_cxt->i2c_chip_handle[CL511H_I2C_CHIP_ITE6805_0]; 
-
-    iTE6805_Hardware_Init(ite6805_handle);
-}
-*/
 static void check_signal_stable_task(void *data)
 {
     board_v4l2_context_t *board_v4l2_cxt=data;
@@ -1827,7 +1741,7 @@ void board_v4l2_init(cxt_mgr_handle_t cxt_mgr, int board_id)
         v4l2_model_register_callback(v4l2_handle,V4L2_MODEL_CALLBACK_BUFFER_INIT,&cx511h_v4l2_buffer_init, board_v4l2_cxt);
 
         /* IRQ BYPASS: intercept V-DESC complete in the PCIe ISR before
-         * the vendor blob — byte-pair swap at the hardware heartbeat. */
+         * the vendor blob (monitoring only). */
         {
             handle_t pci_handle = pci_model_get_handle(cxt_mgr);
             if (pci_handle) {

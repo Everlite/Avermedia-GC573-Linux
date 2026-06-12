@@ -343,9 +343,12 @@ void v4l2_model_next_buffer(v4l2_model_handle_t context,
 void *v4l2_model_peek_pending_plane_vaddr(v4l2_model_handle_t context,
 					  unsigned int plane);
 
-void v4l2_model_swap_pending_plane_byte_pairs(v4l2_model_handle_t context,
-					      unsigned int plane,
-					      size_t len);
+/* Return 0 when the head-of-driver-queue vb2 buffer is VB2_BUF_STATE_ACTIVE
+ * and safe to finalize.  -ENODATA: queue empty.  -EINVAL: wrong vb2 state.
+ * vaddr_out may be NULL even on success (DMA mapping without kernel vaddr). */
+int v4l2_model_pending_buffer_handoff_ready(v4l2_model_handle_t context,
+					    unsigned int plane,
+					    void **vaddr_out);
 
 void v4l2_model_sync_pending_plane_for_cpu(v4l2_model_handle_t context,
 					   unsigned int plane);
