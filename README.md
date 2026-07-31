@@ -276,6 +276,16 @@ sudo ./reload.sh     # unload + insmod the freshly built cx511h.ko
 > capture+audio users and runs a clean `rmmod`; if the module is genuinely stuck it says so
 > instead of making it worse.
 
+> ⚠️ **`reload.sh` / `unload.sh` are still work-in-progress — treat as possibly broken.**
+> The rewrite removed the dangerous removal path, but the reload workflow has **not** been
+> proven end-to-end yet:
+> - A first live attempt of `./reload.sh` hit `unload.sh: command not found` (needs `./`;
+>   fixed since) and then `insmod: File exists` because the module had never actually been
+>   unloaded.
+> - The cleanest verified path is still: **reboot → `sudo ./insmod.sh`**. Audio/PipeWire
+>   (and even Discord) may re-grab the CL511H PCM, which can keep `refcnt` at 1 and block
+>   `rmmod`/`reload` until the audio holders are stopped.
+
 ### Debug log filter
 
 ```bash
