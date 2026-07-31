@@ -6,6 +6,8 @@
 *.cmd
 *.tmp
 *.mod
+__pycache__/
+*.pyc
 Module.symvers
 .modules.order
 .module-common.o

@@ -66,4 +66,7 @@ def patch_library(filename):
     print(f"Successfully patched {filename}")
 
 if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print(f"Usage: {sys.argv[0]} <library>", file=sys.stderr)
+        sys.exit(2)
     patch_library(sys.argv[1])

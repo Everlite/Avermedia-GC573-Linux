@@ -35,4 +35,7 @@ def scan_epilogues(filename):
         print(f"Variant {instr}: {cnt}")
 
 if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print(f"Usage: {sys.argv[0]} <library>", file=sys.stderr)
+        sys.exit(2)
     scan_epilogues(sys.argv[1])
