@@ -61,7 +61,7 @@ iTE6805_Hardware_Init(ite6805_handle_1);
 
 **IT6664 splitter:** Brought up inside the blob via `ite6805_attach()` → `ite6664_attach()` during `board_i2c_init()`. Background `ite6664_task` runs on a **500 ms** timer (blob `task_model`).
 
-**When is HDMI ready?** Wait for this line in `dmesg` — that is the user-facing “go” signal (green LED also turns on):
+**When is HDMI ready?** The reliable “go” signal is this line in `dmesg`:
 
 ```
 cx511h_ite6805_event locked fe 1920x1080p (raw)
@@ -70,6 +70,13 @@ cx511h_ite6805_event locked fe 1920x1080p (raw)
 `(raw)` is the physical timing from ITE6805. Since the EDID fix (below) the card advertises
 **1080p-max**, so a PS5/DVSI source configures to 1080p and this lock line shows `1920x1080p`;
 only then open `/dev/videoX`.
+
+> ⚠️ **Do not rely on the physical LED color.** The code sets green on
+> `ITE6805_LOCK` (board_v4l2.c:1539), red on no-signal, blue while waiting after
+> load. In practice the card's LED is reported to **flash red continuously even
+> with a solid 1080p lock** — the driver's GPIO/LED mapping and the locked-logic
+> disagree (another symptom consistent with the Phase-4b “datapath not feeding
+> pixels” state). Trust the `dmesg` lock line, not the LED.
 
 ### 1080p-only EDID + HPD re-negotiation (2026-08-01)
 
@@ -143,6 +150,9 @@ hex dump reads `10 80 10 80 …` = UYVY with **Y=128** and U/V=16/0). That is a 
   re-arms desc slots only on the *next* V-DESC after stream start.
 - One frame is produced per stream (good), `spurious buffer_done (streaming inactive)` fires
   at teardown (benign).
+- The physical card LED flashes **red** even though `ITE6805_LOCK` is logged (code sets green
+  on lock). Either the GPIO/LED mapping is wrong or a later no-signal event overrides the green —
+  either way it corroborates “no video datapath”, not just a cosmetic issue.
 
 **Next steps to try (in order):**
 1. Verify/fix `fe_frameinfo` timing before feeding the blob: force `pixel_clock`/`fps` to the
