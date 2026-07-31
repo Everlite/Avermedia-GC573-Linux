@@ -7,7 +7,7 @@
 Community-maintained, AI-assisted Linux driver for the AVerMedia GC573 (PCI `1461:0054`, subsystem `1461:5730`).
 Modernized for recent kernels. **Experimental — development and testing only.**
 
-**Last aligned with code:** 2026-06-12 · **Phase 4** (lockup-free streaming path; picture quality still open)
+**Last aligned with code:** 2026-08-01 · **Phase 4 stable; Phase 4b (picture) open**
 
 > [!NOTE]
 > **Vendor blob:** Links against `AverMediaLib_64.a` in the **repository root** (~565 KB). The Makefile copies it to `driver/AverMediaLib_64.o` at build time. Redistribution of the blob may be restricted — see [Legal](#legal--compliance).
@@ -24,6 +24,7 @@ Modernized for recent kernels. **Experimental — development and testing only.*
 | Area | Status | Notes |
 |:---|:---:|:---|
 | **Build / load** | ✅ | `LLVM=1 CC=clang`; `insmod.sh` / `unload.sh` |
+| **reload / unload script** | 🟡 | `reload.sh` added but not yet proven end-to-end (Known issues #4) |
 | **Probe / insmod** | ✅ | No hard-freeze when I2C IRQ opt-in ACK is active |
 | **HDMI lock** | ✅ | ITE6805 events; **1080p-max EDID now advertised** (patched at build time) |
 | **Phase 4 pipeline** | ✅ | Boot-time `iTE6805_Hardware_Init()`; MMIO-only `stream_on`; blob owns scaler/CSC |
@@ -101,7 +102,7 @@ delivered over DMA. **Still open:** content is a constant filler (`0x10 0x80`) s
 [cx511h-dma] === STREAM ON (MMIO/FPGA only — no I2C) ===
 ```
 
-**4K → 1080p:** Physical timing comes from `ite6805_get_frameinfo()` (e.g. 3840×2160), not framegrabber metadata (which `ITE6805_LOCK` may force to 1920×1080 for V4L2 caps). When input exceeds output:
+**4K → 1080p:** Physical timing comes from `ite6805_get_frameinfo()` (e.g. 3840×2160), not framegrabber metadata (which `ITE6805_LOCK` may force to 1920×1080 for V4L2 caps). Since the 1080p-max EDID fix this path is normally bypassed (source negotiates 1080p directly, `dual=0`, `bypass=0`), but it still guards against an unexpectedly 4K source. When input exceeds output:
 
 - `vip_cfg.in_videoformat.vactive/hactive` = physical HDMI size  
 - `vip_cfg.out_videoformat.width/height` = V4L2 output (e.g. 1920×1080)  
@@ -174,7 +175,7 @@ Missing `q->dev` caused **silent skip** of `dma_sync_*` → CPU read stale zeros
 | Manual `pci_model_mmio_write(0x1040, …)` after blob config | **Corrupt / zero payload** |
 | `0x304 ← 0x07` at `stream_on` (arm slots before ring ready) | **Hard-freeze** |
 | Write V4L2 frame address into `0x308` | Wrong semantics — `0x308` is **chain pointer**, not frame |
-| `v4l2-ctl --stream-mmap` / GStreamer helper scripts | **I2C traffic → freeze risk** |
+| GStreamer helper scripts (`gst_1.0_raw_video*.sh`) | Legacy, risky — use `v4l2-ctl` instead |
 
 **Safe doorbell:** `0x304 ← 0x01` only (run bit, no slot arm at stream start).
 
@@ -231,14 +232,14 @@ Chain entry (16 bytes): `[0]`/`[1]` target addr, `[2]` size in dwords, `[3]` con
 
 ### Prerequisites
 
-Kernel cmdline (recommended):
+Kernel cmdline (compatibility, usually only needed on some kernels):
 
 ```bash
 ibt=off iommu=pt
 ```
 
-- `ibt=off` — blob lacks ENDBR64; module sets `MODULE_INFO(ibt, "N")` and `-fcf-protection=none`
-- `iommu=pt` — passthrough; still need correct **`q->dev`** for vb2 DMA mapping
+- `ibt=off` — blob lacks ENDBR64; the module sets `MODULE_INFO(ibt, "N")` and `-fcf-protection=none`, so this is normally **not** required
+- `iommu=pt` — passthrough IOMMU; keep it if DMA map failures occur, but still need correct **`q->dev`** for vb2 DMA mapping
 
 ### Build & load
 
@@ -257,7 +258,7 @@ v4l2-ctl --list-devices
 Wait for `cx511h_ite6805_event locked fe 1920x1080p …` in `dmesg`, then capture (or view in `ffplay`):
 
 ```bash
-v4l2-ctl -d /dev/videoX --set-fmt-video=width=1920,height=1080 \
+sudo v4l2-ctl -d /dev/videoX --set-fmt-video=width=1920,height=1080 \
   --stream-mmap=3 --stream-count=1 --stream-to=/tmp/frame.raw
 xxd /tmp/frame.raw | head -4
 ffplay -f v4l2 -input_format uyvy422 -video_size 1920x1080 -framerate 60 /dev/videoX
@@ -295,7 +296,7 @@ dmesg | grep -iE 'cx511h-phase4|cx511h-scale|cx511h-dma|gc573-payload|gc573-hand
 ### Dump one frame (userspace)
 
 ```bash
-v4l2-ctl -d /dev/videoX --set-fmt-video=width=1920,height=1080 \
+sudo v4l2-ctl -d /dev/videoX --set-fmt-video=width=1920,height=1080 \
   --stream-mmap=3 --stream-count=1 --stream-to=/tmp/frame.raw
 python3 -c "
 d=open('/tmp/frame.raw','rb').read(1_000_000)
@@ -317,9 +318,10 @@ xxd /tmp/frame.raw | head -4
 
 | Parameter | Default | Description |
 |:---|:---:|:---|
+| `edid_force_hpd` | 1 | Pulse HPD after `iTE6805_Hardware_Init()` so the source re-reads the 1080p-max EDID (set 0 to skip) |
 | `force_input_mode` | 0 | 0=auto, 1=YUV422, 2=YUV444, 3=RGB full, 4=RGB limited |
 | `debug_pixel_format` | -1 | -1=auto; 0–3 force YUV byte order |
-| `auto_test_byteorder` | 0 | Cycle formats on stream_on (MMIO peek — prefer `dd`/`xxd`) |
+| `auto_test_byteorder` | 0 | Cycle formats on stream_on (MMIO peek) |
 | `no_signal_pic` | NULL | Bitmap path when no signal |
 | `copy_protection_pic` | NULL | Bitmap when content is HDCP-protected. **Insmod name today:** `copy_protetion_pic` — upstream typo in `board_config.c` (missing `c` in *protection*) |
 | `led_pin_r/g/b` | 3/4/5 | GPIO LED pins (-1=off) |
@@ -341,19 +343,19 @@ xxd /tmp/frame.raw | head -4
 
 ## Known issues (honest list)
 
-1. **Picture not reliable** — DMA IRQ and sync path work; userspace may still see green, zeros, or corrupt frames. Next: HDCP-off testing, handoff timing, confirm `[gc573-payload]` vs `dd`/`xxd`.
+1. **Picture is still constant filler** — DMA fully works (full 1920×1080 frames), 1080p lock is correct, but the content is a constant `0x10 0x80` (Y=128). The video datapath is not feeding real pixels. See **Phase 4b** for the current theory and next steps. **This is the #1 open issue.**
 
 2. **No I2C writes while streaming** — by design. Do not re-enable TTL/unmute/streaming I2C blocks without new safety analysis.
 
-3. **4K metadata split** — `ITE6805_LOCK` forces **1920×1080** into framegrabber for caps; FPGA **`vip_cfg`** uses **physical** `fe_frameinfo` for scaler. Both are intentional.
+3. **4K metadata split** — `ITE6805_LOCK` forces **1920×1080** into framegrabber for caps; FPGA **`vip_cfg`** uses **physical** `fe_frameinfo` for scaler. Both are intentional. (With the 1080p-max EDID this is now mostly moot, source negotiates 1080p.)
 
-4. **`v4l2-ctl` streaming** — can trigger I2C and freeze. Use ffplay/ffmpeg with explicit UYVY.
+4. **`reload.sh` / `unload.sh` not yet proven end-to-end** — the dangerous PCI-remove fallback was removed, but a live reload attempt exposed issues (missing `./`; `insmod File exists`). **Reboot + `insmod.sh` is the currently reliable path.** See Build & quick start warning.
 
-5. **GStreamer scripts** (`gst_1.0_raw_video*.sh`) — broken / risky; call `v4l2-ctl`.
+5. **GStreamer scripts** (`gst_1.0_raw_video*.sh`) — legacy / risky; use `v4l2-ctl` or `ffplay`.
 
-6. **Module refcnt −1** — killed clients can strand the module; `unload.sh` escalates to PCI remove + `rmmod -f` + rescan.
+6. **Module refcnt pinned** — audio holders (PipeWire / Discord) may keep the CL511H PCM open and hold `refcnt` at 1, blocking `rmmod`/`reload`. `unload.sh` kills them first; if the module is truly wedged (`refcnt −1`, `GOING`) only a reboot helps — `unload.sh` no longer tries the dangerous PCI-remove path.
 
-7. **Audio** — stub only.
+7. **Audio** — ALSA PCM registers and looks like a capture device ("CL511H Stereo"), but no captured audio bits are delivered yet.
 
 8. **Legacy suspend/resume** — not migrated to `dev_pm_ops`.
 
@@ -365,9 +367,10 @@ xxd /tmp/frame.raw | head -4
 
 | Script | Purpose |
 |:---|:---|
-| `build.sh` | Build module, copy `.ko` to root |
-| `insmod.sh` | Load deps + `driver/cx511h.ko` |
-| `unload.sh` | Stop clients, rmmod, PCI remove/rescan if needed |
+| `build.sh` | Build module (stages out of space-containing path), copy `cx511h.ko` to root |
+| `insmod.sh` | Load deps (`videobuf2_dma_*`) + `./cx511h.ko` from project root, auto-find our V4L2 node |
+| `unload.sh` | Safe unload: stop capture/audio holders, clean `rmmod` (no PCI remove) |
+| `reload.sh` | Safe unload (`./unload.sh`) + `insmod ./cx511h.ko` — work in progress |
 | `install.sh` | Install under `/lib/modules/.../avermedia/` |
 | `gst_1.0_raw_video*.sh` | Legacy — avoid (see Known Issues) |
 
@@ -377,7 +380,7 @@ xxd /tmp/frame.raw | head -4
 
 - Windows driver comparison and live hardware testing
 - **`AverMediaLib_64.a` disassembly** (`aver_xilinx.o`, `ite6805_sys.o`, `ite6664*.o`) for descriptor chain, scaler, and ITE6805 downscale logic
-- Forensic tags: `[gc573-payload]`, `[gc573-chain]`, `[gc573-handoff]`, `[cx511h-scale]`, `[cx511h-phase4]`
+- Forensic tags: `[gc573-payload]`, `[gc573-chain]`, `[gc573-handoff]`, `[cx511h-scale]`, `[cx511h-phase4]`, `[cx511h-color]`, `[cx511h-edid]`, `[cx511h-dma]`, `[cx511h-desc]`, `[cx511h-pixfmt]`
 
 ---
 
