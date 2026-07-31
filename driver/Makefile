@@ -72,10 +72,10 @@ obj-m += $(MODULE_NAME).o
 KDIR := /lib/modules/$(shell uname -r)/build
 
 all:
-	$(MAKE) -C $(KDIR) M=$(CURDIR) modules
+	$(MAKE) -C "$(KDIR)" M="$(CURDIR)" modules
 
 clean:
-	$(MAKE) -C $(KDIR) M=$(CURDIR) clean
+	$(MAKE) -C "$(KDIR)" M="$(CURDIR)" clean
 	rm -f AverMediaLib_64.o .AverMediaLib_64.o.cmd
 	rm -f *.ko *.mod.c *.mod .tmp_versions
 
@@ -83,6 +83,11 @@ clean:
 # $(src) is set by kbuild to the absolute source directory during the
 # recursive make invocation.  Without this rule, kbuild tries to compile
 # AverMediaLib_64.o from a non-existent .c file.
-$(obj)/AverMediaLib_64.o: $(src)/../AverMediaLib_64.a
-	cp $< $@
+#
+# After copying, patch the blob's EDID tables (Default_Edid_Block /
+# Fix_Edid_Block) to 1080p-max so sources drop to native 1080p instead of
+# driving the 4K dual-pixel path that currently yields a black frame.
+$(obj)/AverMediaLib_64.o: $(src)/../AverMediaLib_64.a $(src)/patch_edid.py
+	cp "$<" "$@"
+	python3 "$(src)/patch_edid.py" "$@"
 	@echo 'cmd_$@ := cp $< $@' > $(obj)/.AverMediaLib_64.o.cmd

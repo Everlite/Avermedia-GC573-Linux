@@ -1,5 +1,7 @@
 #!/bin/bash
-# cx511h unload: release V4L2/ALSA users, unbind PCI (driver name CL511H), then rmmod.
+# cx511h unload: release V4L2/ALSA users, then rmmod.  NEVER touches the PCI bus,
+# because writing to the device's sysfs "remove" file wedges the card in a
+# MODULE_STATE_GOING / refcnt --1 state that only a reboot can clear.
 
 if [ "$EUID" -ne 0 ]; then
     echo "Please run as root (use sudo)"
@@ -8,20 +10,10 @@ fi
 
 echo "=== cx511h module unloader with audio restoration ==="
 
-AVM_PCI_VENDOR="0x1461"
-AVM_PCI_DEVICE="0x0054"
-AVM_PCI_ID="1461:0054"
-# Kernel module is cx511h; the registered pci_driver name is CL511H (see board_config.c).
-PCI_DRIVER_NAMES=(CL511H cx511h)
-
 KILLED_AUDIO_SERVICES=false
 
 command_exists() {
     command -v "$1" >/dev/null 2>&1
-}
-
-is_pci_bdf() {
-    [[ "$1" =~ ^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]$ ]]
 }
 
 # Return ALSA card index for the capture card, or empty.
@@ -73,55 +65,6 @@ find_our_video_sysfs_nodes() {
             fi
         fi
     done
-}
-
-# Return PCI BDF (e.g. 0000:0a:00.0) for the AVerMedia GC573 / CL511H.
-find_cx511h_pci_bdf() {
-    local driver dir entry vendor device bdf
-
-    # 1) Device already bound under the kernel PCI driver (name is CL511H, not cx511h).
-    for driver in "${PCI_DRIVER_NAMES[@]}"; do
-        dir="/sys/bus/pci/drivers/$driver"
-        [ -d "$dir" ] || continue
-        for entry in "$dir"/*; do
-            [ -e "$entry" ] || continue
-            bdf=$(basename "$entry")
-            is_pci_bdf "$bdf" || continue
-            echo "$bdf"
-            return 0
-        done
-    done
-
-    # 2) Match vendor:device in sysfs (works even if driver lookup by name failed).
-    for entry in /sys/bus/pci/devices/*; do
-        [ -f "$entry/vendor" ] || continue
-        vendor=$(<"$entry/vendor")
-        device=$(<"$entry/device")
-        if [ "$vendor" = "$AVM_PCI_VENDOR" ] && [ "$device" = "$AVM_PCI_DEVICE" ]; then
-            basename "$entry"
-            return 0
-        fi
-    done
-
-    # 3) lspci fallback.
-    if command_exists lspci; then
-        bdf=$(lspci -Dn 2>/dev/null | awk -v id="$AVM_PCI_ID" '$3 == id { print $1; exit }')
-        if [ -n "$bdf" ]; then
-            echo "$bdf"
-            return 0
-        fi
-    fi
-
-    return 1
-}
-
-# Return sysfs directory of the bound PCI driver for BDF, or empty.
-pci_driver_sysfs_for_bdf() {
-    local bdf=$1 driver_link
-    [ -n "$bdf" ] || return 1
-    [ -L "/sys/bus/pci/devices/$bdf/driver" ] || return 1
-    driver_link=$(readlink -f "/sys/bus/pci/devices/$bdf/driver")
-    dirname "$driver_link"
 }
 
 kill_processes_on_device() {
@@ -234,34 +177,6 @@ release_cx511h_device_nodes() {
     sleep 0.5
 }
 
-unbind_cx511h_pci() {
-    local bdf driver_sysfs
-
-    bdf=$(find_cx511h_pci_bdf || true)
-    if [ -z "$bdf" ]; then
-        echo "⚠ Could not locate AVerMedia PCI device (${AVM_PCI_ID})."
-        return 1
-    fi
-
-    echo "Found AVerMedia PCI device: $bdf"
-
-    driver_sysfs=$(pci_driver_sysfs_for_bdf "$bdf" || true)
-    if [ -z "$driver_sysfs" ] || [ ! -f "$driver_sysfs/unbind" ]; then
-        echo "⚠ PCI device $bdf is not bound to a driver (already unbound?)."
-        return 1
-    fi
-
-    echo "Unbinding via $driver_sysfs/unbind ..."
-    if echo "$bdf" > "$driver_sysfs/unbind" 2>/dev/null; then
-        echo "✓ PCI device $bdf unbound."
-        sleep 2
-        return 0
-    fi
-
-    echo "✗ PCI unbind failed for $bdf"
-    return 1
-}
-
 get_cx511h_refcnt() {
     local rc
     [ -f /sys/module/cx511h/refcnt ] || return 1
@@ -270,74 +185,55 @@ get_cx511h_refcnt() {
     echo "$rc"
 }
 
-# True when refcnt is unreadable or negative (kernel underflow / stuck state).
-refcnt_needs_radical_remove() {
-    local rc=$1
-    if [ -z "$rc" ]; then
-        return 0
-    fi
-    if [ "$rc" -lt 0 ]; then
-        return 0
-    fi
-    return 1
-}
+# NOTE on the "radical PCI remove" technique that used to live here: writing 1
+# to /sys/bus/pci/devices/<BDF>/remove yanks the card off the bus while the
+# module's board_remove()/blob teardown is still talking to it over I2C, which
+# hangs cx511h in MODULE_STATE_GOING with refcnt -1 — an unrecoverable state
+# that forces a full reboot.  That path was removed on purpose; unload.sh now
+# only ever releases users and runs a clean rmmod, and if the module is already
+# wedged it plainly tells the user to reboot instead of wedging it harder.
 
-# Sever PCI device from the bus, then force-remove the module (refcnt -1 recovery).
-radical_pci_remove_cx511h() {
-    local bdf remove_path driver_sysfs
 
-    bdf=$(find_cx511h_pci_bdf || true)
-    if [ -z "$bdf" ]; then
-        echo "✗ Radical remove: could not find PCI BDF for ${AVM_PCI_ID}."
-        return 1
-    fi
+# Aggressively stop the userspace that pins V4L2/ALSA nodes on the card.  A
+# normal rmmod only succeeds once every open/reference on the card is released.
+# PipeWire/wireplumber commonly hold the capture PCM and must be SIGKILLed, not
+# just SIGTERMed.  Dies with status 0 if at least the capture/ALSA holders were
+# stopped; callers then retry rmmod.
+kill_everything_holding_card() {
+    local card_num dev
 
-    remove_path="/sys/bus/pci/devices/$bdf/remove"
-    if [ ! -f "$remove_path" ]; then
-        echo "✗ Radical remove: $remove_path does not exist."
-        return 1
-    fi
+    echo "[audio] Killing capture/playback clients..."
+    for p in ffplay ffmpeg obs gst-launch-1.0 gst-launch v4l2-ctl \
+             parecord pw-record pw-cat mpv vlc; do
+        pkill -TERM -x "$p" 2>/dev/null || true
+    done
+    sleep 0.5
 
-    echo "=== RADICAL PCI REMOVE: $bdf ==="
-    echo "  (sysfs remove severs the device from the kernel PCI bus)"
-
-    driver_sysfs=$(pci_driver_sysfs_for_bdf "$bdf" || true)
-    if [ -n "$driver_sysfs" ] && [ -f "$driver_sysfs/unbind" ]; then
-        echo "  Pre-unbinding driver before remove..."
-        echo "$bdf" > "$driver_sysfs/unbind" 2>/dev/null || true
-        sleep 0.5
-    fi
-
-    if echo 1 > "$remove_path" 2>/dev/null; then
-        echo "✓ Wrote 1 to $remove_path"
-    else
-        echo "✗ Failed to write 1 to $remove_path"
-        return 1
-    fi
-
+    # The sound server(s) are the usual culprit.  Kill them hard.
+    echo "[audio] Stopping PipeWire/WirePlumber/Pulse/ALSA..."
+    pkill -KILL -x pipewire-pulse 2>/dev/null || true
+    pkill -KILL -x wireplumber 2>/dev/null || true
+    pkill -KILL -x pipewire 2>/dev/null || true
+    pkill -KILL -x pipewire-media-session 2>/dev/null || true
+    pkill -KILL -x pulseaudio 2>/dev/null || true
     sleep 1
 
-    if rmmod -f cx511h 2>/dev/null; then
-        echo "✓ Module force-removed (rmmod -f) after PCI remove."
-        return 0
-    fi
+    card_num=$(find_our_alsa_card || true)
 
-    if ! lsmod | grep -q '^cx511h '; then
-        echo "✓ Module no longer loaded after PCI remove."
-        return 0
-    fi
+    # Fall back to fuser SIGKILL on any of our nodes / the card's PCMs.
+    while IFS= read -r sysfs; do
+        [ -n "$sysfs" ] || continue
+        dev="/dev/$(basename "$sysfs")"
+        [ -e "$dev" ] && fuser -k -KILL -v "$dev" 2>/dev/null || true
+    done < <(find_our_video_sysfs_nodes)
 
-    echo "✗ PCI device removed but cx511h module is still loaded."
-    return 1
-}
-
-pci_rescan() {
-    if [ -w /sys/bus/pci/rescan ]; then
-        echo 1 > /sys/bus/pci/rescan 2>/dev/null
-        echo "✓ PCIe rescan triggered (/sys/bus/pci/rescan)."
-    else
-        echo "⚠ Cannot write /sys/bus/pci/rescan (run as root)."
+    if [ -n "$card_num" ]; then
+        for dev in /dev/snd/controlC${card_num} /dev/snd/pcmC${card_num}* /dev/snd/timer; do
+            [ -e "$dev" ] && fuser -k -KILL -v "$dev" 2>/dev/null || true
+        done
     fi
+    sleep 1
+    return 0
 }
 
 restart_wireplumber_user() {
@@ -405,79 +301,60 @@ echo "cx511h module is loaded."
 REF_COUNT=$(get_cx511h_refcnt 2>/dev/null || echo "?")
 echo "Initial module reference count: $REF_COUNT"
 
-release_cx511h_device_nodes
-
 MODULE_UNLOADED=false
-USE_RADICAL=false
 
-if refcnt_needs_radical_remove "$REF_COUNT"; then
-    echo "⚠ refcnt=$REF_COUNT — negative or invalid; skipping normal rmmod."
-    USE_RADICAL=true
+# 1) A normal rmmod works only when every user of the card's nodes is gone.
+echo "Attempting normal rmmod cx511h..."
+if rmmod cx511h 2>/dev/null; then
+    echo "✓ Module removed via normal rmmod."
+    MODULE_UNLOADED=true
 fi
 
-if [ "$USE_RADICAL" = false ]; then
-    echo "Attempting normal rmmod cx511h..."
-    if rmmod cx511h 2>/dev/null; then
-        echo "✓ Module removed via normal rmmod."
-        MODULE_UNLOADED=true
-    else
-        echo "Normal rmmod failed."
-        REF_COUNT=$(get_cx511h_refcnt 2>/dev/null || echo "?")
-        echo "Module reference count: $REF_COUNT"
-        if refcnt_needs_radical_remove "$REF_COUNT"; then
-            USE_RADICAL=true
-        fi
-    fi
-fi
-
-if [ "$MODULE_UNLOADED" = false ] && [ "$USE_RADICAL" = false ]; then
-    echo "Trying PCI unbind (clean unload path)..."
-    if unbind_cx511h_pci; then
-        if rmmod cx511h 2>/dev/null || modprobe -r cx511h 2>/dev/null; then
-            echo "✓ Module removed after PCI unbind."
-            MODULE_UNLOADED=true
-        fi
-    fi
-fi
-
-if [ "$MODULE_UNLOADED" = false ] && [ "$USE_RADICAL" = false ]; then
-    echo "Module still loaded — releasing devices and retrying unbind..."
-    release_cx511h_device_nodes
-    unbind_cx511h_pci || true
-    if rmmod cx511h 2>/dev/null || modprobe -r cx511h 2>/dev/null; then
-        echo "✓ Module removed after second unbind attempt."
-        MODULE_UNLOADED=true
-    else
-        USE_RADICAL=true
-    fi
-fi
-
+# 2) rmmod busy → gently release capture/audio holders (STREAMOFF, TERM clients),
+#    then retry.  The PCI device is left untouched.
 if [ "$MODULE_UNLOADED" = false ]; then
-    echo "Escalating to radical PCI remove + rmmod -f..."
-    if radical_pci_remove_cx511h; then
-        MODULE_UNLOADED=true
+    echo "rmmod busy — releasing capture/audio holders and retrying..."
+    release_cx511h_device_nodes
+    rmmod cx511h 2>/dev/null && MODULE_UNLOADED=true
+fi
+
+# 3) Still busy → hard-kill the whole audio stack (PipeWire/WirePlumber often
+#    pin the ALSA capture PCM even when idle) and retry again.
+if [ "$MODULE_UNLOADED" = false ]; then
+    echo "Still busy — hard-stopping audio daemons and retrying..."
+    kill_everything_holding_card
+    rmmod cx511h 2>/dev/null && MODULE_UNLOADED=true
+fi
+
+# 4) A final clean retry after everything has had time to fully exit.
+if [ "$MODULE_UNLOADED" = false ]; then
+    echo "Retrying rmmod after a short settle..."
+    sleep 2
+    rmmod cx511h 2>/dev/null && MODULE_UNLOADED=true
+fi
+
+# Refusal to unload despite releasing everyone usually means a wedged module
+# (refcnt underflow / MODULE_STATE_GOING).  Do NOT touch the PCI 'remove' file:
+# that is what wedges the card permanently.  Report and stop.
+if [ "$MODULE_UNLOADED" = false ]; then
+    echo ""
+    echo "✗ Could not unload cx511h even after releasing all users."
+    echo "  refcnt=$(get_cx511h_refcnt 2>/dev/null || echo '?')   " \
+         "initstate=$(cat /sys/module/cx511h/initstate 2>/dev/null || echo '?')"
+    if [ "$(cat /sys/module/cx511h/initstate 2>/dev/null)" = "going" ] \
+       || { rc=$(get_cx511h_refcnt 2>/dev/null || echo 0); [ "$rc" -lt 0 ]; }; then
+        echo "  The module is WEDGED (stuck in GOING / negative refcnt)."
+        echo "  The card will NOT reach a clean state in software."
+        echo "  ► REBOOT the machine, then just run: sudo ./insmod.sh"
+        echo "  (reload.sh / unload.sh no longer wedge the card.)"
     else
-        echo "✗ Radical PCI remove path failed."
-        echo "  Diagnostics:"
-        echo "    refcnt=$(get_cx511h_refcnt 2>/dev/null || echo '?')"
-        bdf=$(find_cx511h_pci_bdf || true)
-        if [ -n "$bdf" ]; then
-            echo "    PCI BDF: $bdf"
-            if [ -L "/sys/bus/pci/devices/$bdf/driver" ]; then
-                echo "    driver: $(basename "$(readlink -f "/sys/bus/pci/devices/$bdf/driver")")"
-            elif [ -e "/sys/bus/pci/devices/$bdf" ]; then
-                echo "    driver: (unbound)"
-            else
-                echo "    sysfs: device entry gone (remove may have succeeded)"
-            fi
-        fi
-        echo "  Check: fuser -v /dev/video* /dev/snd/*"
+        echo "  Check what still holds it:  fuser -v /dev/video* /dev/snd/*"
     fi
+    exit 3
 fi
 
 echo ""
-echo "Triggering PCIe rescan so the card can be re-probed on next insmod..."
-pci_rescan
+echo "The PCI device was never touched, so no rescan is needed."
 
 echo ""
 echo "Restoring user audio (wireplumber)..."

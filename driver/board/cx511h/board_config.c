@@ -57,6 +57,10 @@ static char *copy_protetion_pic = NULL;
 module_param(copy_protetion_pic, charp, 0444);
 MODULE_PARM_DESC(copy_protetion_pic, "Loading this bitmap file and display it when the content was protected");
 
+static int edid_force_hpd = 1;
+module_param(edid_force_hpd, int, 0644);
+MODULE_PARM_DESC(edid_force_hpd, "Pulse HPD after EDID load so the HDMI source re-negotiates at 1080p (default: 1)");
+
 /*
  * LED GPIO pin configuration (module parameters)
  * The GC573 has 9 FPGA GPIO pins (0-8). Pin 0 = Reset, Pin 2 = HPD.
@@ -282,6 +286,24 @@ int board_probe(struct device *dev,unsigned long driver_info)
         printk(KERN_ALERT "[cx511h-phase4] Bootstrapping ITE6805/IT6664 hardware pipeline once at probe...\n");
         iTE6805_Hardware_Init(ite6805_handle_1);
         printk(KERN_ALERT "[cx511h-phase4] ITE6805/IT6664 hardware bootstrap complete\n");
+
+        /*
+         * After the (now 1080p-max) EDID is loaded, force the HDMI source
+         * (e.g. PS5) to re-read it by pulsing HPD.  Without this the source
+         * keeps its previous 4K lock and still drives the broken dual-pixel
+         * path.  Gated by module param edid_force_hpd (default on).
+         */
+        if (edid_force_hpd) {
+            printk(KERN_ALERT "[cx511h-edid] Forcing HPD re-negotiation "
+                   "(EDID is now 1080p-max)...\n");
+            x_IssueHotPlug(ite6805_handle_1, HPD_LOW);
+            msleep(400);
+            x_IssueHotPlug(ite6805_handle_1, HPD_HIGH);
+            msleep(400);
+            printk(KERN_ALERT "[cx511h-edid] HPD pulse complete\n");
+        } else {
+            printk(KERN_INFO "[cx511h-edid] edid_force_hpd=0, HPD re-negotiation skipped\n");
+        }
 
         //aver_xilinx_sha204_init(aver_xilinx_handle);
         

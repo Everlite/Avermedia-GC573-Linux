@@ -620,30 +620,55 @@ static void cx511h_stream_on(framegrabber_handle_t handle)
         printk(KERN_ERR "[cx511h-color] MANUAL OVERRIDE: Mode 4 — RGB Limited BT709\n");
         break;
     default: /* 0 = Auto-detect from ITE6805 */
-        if (fe_frameinfo->packet_colorspace == CS_YUV) {
-            vip_cfg.in_colorspacemode = 0;
-            vip_cfg.in_packetsamplingmode = 1;
-            vip_cfg.in_packetcsc_bt = COLORMETRY_ITU709;
-            vip_cfg.currentCSC = CAPTURE_BT709_STUDIO;
-            vip_cfg.in_videoformat.colorspace = VIDEO_422_MODE;
-            printk(KERN_ERR "[cx511h-color] AUTO: YUV 4:2:2 BT709 Limited\n");
-        } else if (fe_frameinfo->packet_colorspace == CS_RGB_FULL) {
+        /* Prefer the LIVE colorspace/samplingmode reported by the ITE6805
+         * front-end.  fe_frameinfo->packet_colorspace is unreliable here: the
+         * blob leaves it at 0 (YUV) even when the source is actually sending
+         * RGB, and the two ITE6805 query APIs disagree.  If we program the FPGA
+         * input as YUV422 while the PS5 pushes RGB, the input decode fails and
+         * the DMA delivers a constant filler value instead of pixels. */
+        if (vip_cfg.in_colorspacemode == 2) {
+            /* RGB Full */
             vip_cfg.in_colorspacemode = 2;
-            vip_cfg.in_packetsamplingmode = 0;
+            vip_cfg.in_packetsamplingmode = 0;  /* RGB */
             vip_cfg.in_packetcsc_bt = COLORMETRY_ITU709;
             vip_cfg.currentCSC = CAPTURE_BT709_COMPUTER;
             vip_cfg.in_videoformat.colorspace = VIDEO_RGB_MODE;
-            printk(KERN_ERR "[cx511h-color] AUTO: RGB Full BT709\n");
-        } else if (fe_frameinfo->packet_colorspace == CS_RGB_LIMIT) {
+            vip_cfg.packet_colorspace = CS_RGB_FULL;
+            printk(KERN_ERR "[cx511h-color] AUTO(src): RGB Full BT709 "
+                   "(colorspace=%u)\n", vip_cfg.in_colorspacemode);
+        } else if (vip_cfg.in_colorspacemode == 1) {
+            /* RGB Limited */
+            vip_cfg.in_colorspacemode = 1;
+            vip_cfg.in_packetsamplingmode = 0;  /* RGB */
+            vip_cfg.in_packetcsc_bt = COLORMETRY_ITU709;
+            vip_cfg.currentCSC = CAPTURE_BT709_STUDIO;
+            vip_cfg.in_videoformat.colorspace = VIDEO_RGB_MODE;
+            vip_cfg.packet_colorspace = CS_RGB_LIMIT;
+            printk(KERN_ERR "[cx511h-color] AUTO(src): RGB Limited BT709 "
+                   "(colorspace=%u sample=%u)\n",
+                   vip_cfg.in_colorspacemode, vip_cfg.in_packetsamplingmode);
+        } else if (vip_cfg.in_colorspacemode == 0 &&
+                   vip_cfg.in_packetsamplingmode == 0) {
+            /* Explicit RGB with colorspace=0 readback -> treat as RGB limited */
             vip_cfg.in_colorspacemode = 1;
             vip_cfg.in_packetsamplingmode = 0;
             vip_cfg.in_packetcsc_bt = COLORMETRY_ITU709;
             vip_cfg.currentCSC = CAPTURE_BT709_STUDIO;
             vip_cfg.in_videoformat.colorspace = VIDEO_RGB_MODE;
-            printk(KERN_ERR "[cx511h-color] AUTO: RGB Limited BT709\n");
+            vip_cfg.packet_colorspace = CS_RGB_LIMIT;
+            printk(KERN_ERR "[cx511h-color] AUTO(src): RGB via sample=0, forcing "
+                   "RGB Limited BT709\n");
         } else {
-            printk(KERN_ERR "[cx511h-color] AUTO: UNKNOWN cs=%d — using blob defaults\n",
-                   fe_frameinfo->packet_colorspace);
+            /* Fall back to YUV 4:2:2 (colorspace=0, sample=1 or 422) */
+            vip_cfg.in_colorspacemode = 0;
+            vip_cfg.in_packetsamplingmode = 1;
+            vip_cfg.in_packetcsc_bt = COLORMETRY_ITU709;
+            vip_cfg.currentCSC = CAPTURE_BT709_STUDIO;
+            vip_cfg.in_videoformat.colorspace = VIDEO_422_MODE;
+            vip_cfg.packet_colorspace = CS_YUV;
+            printk(KERN_ERR "[cx511h-color] AUTO(src): YUV 4:2:2 BT709 Limited "
+                   "(colorspace=%u sample=%u)\n",
+                   vip_cfg.in_colorspacemode, vip_cfg.in_packetsamplingmode);
         }
         break;
     }

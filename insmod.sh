@@ -30,6 +30,25 @@ find_our_card() {
     return 1
 }
 
+# Return the V4L2 node registered by this module.  /dev/video0 is not
+# reserved; on many machines it belongs to a USB webcam.
+find_our_video_device() {
+    local sysnode name
+
+    for sysnode in /sys/class/video4linux/video*; do
+        [ -r "$sysnode/name" ] || continue
+        name=$(<"$sysnode/name")
+        case "$name" in
+            *CL511H*|*AVerMedia*)
+                echo "/dev/${sysnode##*/}"
+                return 0
+                ;;
+        esac
+    done
+
+    return 1
+}
+
 # Function to kill blocking processes for a specific card
 kill_blocking_processes() {
     local CARD_NUM=$1
@@ -157,16 +176,17 @@ echo "✓ Dependencies loaded."
 
 # Load our module
 echo "Loading cx511h module..."
-cd "$(dirname "$0")/driver"
+PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd -P)"
+MODULE_PATH="$PROJECT_ROOT/cx511h.ko"
 
 # Warn if the kernel module file doesn't exist yet
-if [ ! -f cx511h.ko ]; then
-    echo "ERROR: cx511h.ko not found in $(pwd)." >&2
+if [ ! -f "$MODULE_PATH" ]; then
+    echo "ERROR: cx511h.ko not found at $MODULE_PATH." >&2
     echo "       Run ./build.sh from the project root first to compile the module." >&2
     exit 1
 fi
 
-if insmod cx511h.ko; then
+if insmod "$MODULE_PATH"; then
     echo "✓ cx511h module loaded successfully."
 
     # Verify module is actually loaded
@@ -176,11 +196,12 @@ if insmod cx511h.ko; then
         echo "⚠️  Warning: cx511h not found in module list"
     fi
 
-    # Check for video device
-    if test -c /dev/video0; then
-        echo "✓ Video device created: /dev/video0 exists"
+    # Check for the V4L2 node created by this driver; never assume video0.
+    VIDEO_DEVICE=$(find_our_video_device || true)
+    if [ -n "$VIDEO_DEVICE" ]; then
+        echo "✓ Video device created: $VIDEO_DEVICE"
     else
-        echo "⚠️  Warning: /dev/video0 not created"
+        echo "⚠️  Warning: no CL511H/AVerMedia V4L2 node was created"
         # Check for any video devices
         VIDEO_DEVICES=$(ls /dev/video* 2>/dev/null | wc -l)
         if [ "$VIDEO_DEVICES" -gt 0 ]; then

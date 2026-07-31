@@ -25,12 +25,12 @@ Modernized for recent kernels. **Experimental — development and testing only.*
 |:---|:---:|:---|
 | **Build / load** | ✅ | `LLVM=1 CC=clang`; `insmod.sh` / `unload.sh` |
 | **Probe / insmod** | ✅ | No hard-freeze when I2C IRQ opt-in ACK is active |
-| **HDMI lock** | 🟡 | ITE6805 events; 4K sources detected; framegrabber metadata may show forced 1080p |
+| **HDMI lock** | ✅ | ITE6805 events; **1080p-max EDID now advertised** (patched at build time) |
 | **Phase 4 pipeline** | ✅ | Boot-time `iTE6805_Hardware_Init()`; MMIO-only `stream_on`; blob owns scaler/CSC |
 | **V-DESC / DMA IRQ** | ✅ | Hook on `0x10` bit `0x2`; descriptor chain + handoff guards |
-| **DMA to host RAM** | ✅ | `q->dev` binding + `dma_sync_*` on buffer done |
-| **Userspace picture** | 🟡 | May still be green, `00` bytes, or ffplay “corrupted data” — **not production-ready** |
-| **Audio** | ❌ | ALSA device registers; no audio DMA |
+| **DMA to host RAM** | ✅ | `q->dev` binding + `dma_sync_*` on buffer done; full 1920×1080 frames delivered |
+| **Userspace picture** | 🟡 | 1080p lock OK + full frames, but still constant filler (`0x10 0x80`) — see Phase 4b |
+| **Audio** | 🟡 | ALSA capture PCM registers (Card “CL511H Stereo”), recognized by PipeWire/Discord; no captured audio bits |
 | **Daily use** | ❌ | Capture testing only |
 
 ### Development phases
@@ -40,8 +40,8 @@ Modernized for recent kernels. **Experimental — development and testing only.*
 | **1** — RE & bring-up | ✅ | Kernel port, probe, FPGA / ITE6805 attach |
 | **2** — DMA / IRQ | ✅ | V-DESC hook, doorbell `0x304 ← 0x01`, descriptor chain understood |
 | **3** — DMA coherency | ✅ | `q->dev = dev` in vb2; cache sync before handoff |
-| **4** — Stable streaming path | 🟡 **BREAKTHROUGH** | No I2C writes at stream time; boot bootstrap; blob-native 4K→1080p scaler |
-| **4b** — Picture quality | ⏳ | Valid pixels in userspace; HDCP / byte order / handoff timing |
+| **4** — Stable streaming path | ✅ **BREAKTHROUGH** | No I2C writes at stream time; boot bootstrap; 1080p-max EDID; full frames delivered |
+| **4b** — Picture quality | 🟡 | 1080p lock + full DMA frames, but constant filler (`0x10 0x80`) — data path not feeding real pixels |
 
 ---
 
@@ -63,10 +63,35 @@ iTE6805_Hardware_Init(ite6805_handle_1);
 **When is HDMI ready?** Wait for this line in `dmesg` — that is the user-facing “go” signal (green LED also turns on):
 
 ```
-cx511h_ite6805_event locked fe 3840x2160p (raw)
+cx511h_ite6805_event locked fe 1920x1080p (raw)
 ```
 
-`(raw)` is the physical timing from ITE6805 **before** the framegrabber 1080p override. On 4K sources it may appear a few seconds after `insmod`; only then open `/dev/videoX`.
+`(raw)` is the physical timing from ITE6805. Since the EDID fix (below) the card advertises
+**1080p-max**, so a PS5/DVSI source configures to 1080p and this lock line shows `1920x1080p`;
+only then open `/dev/videoX`.
+
+### 1080p-only EDID + HPD re-negotiation (2026-08-01)
+
+**Problem:** The card’s vendor EDID tables (embedded in `AverMediaLib_64.a`) still advertised
+**4K**. A source such as a PS5 locked to 4K → the dual-pixel downscale path ran and delivered
+**black/empty frames**. The driver’s own 1080p EDID in `ite6805_EDID.h` was **dead code**
+(never compiled in — the blob ships its own copies).
+
+**Fix (at build time):**
+- `driver/patch_edid.py` overwrites the **ITE6805** `Default_Edid_Block`/`Fix_Edid_Block` and the
+  **IT6664** `Default_Edid_table4k`/`table2k` within `AverMediaLib_64.o` (an `ar` archive) with a
+  checksum-correct **1080p-max** EDID.
+- `driver/Makefile` reruns `patch_edid.py` after the blob is copied into the build.
+- `driver/board/cx511h/board_config.c`: after `iTE6805_Hardware_Init()` (module-param-gated,
+  default on) it pulses HPD (LOW→HIGH) via `x_IssueHotPlug()` so the source re-reads the new EDID:
+
+```
+[cx511h-edid] Forcing HPD re-negotiation (EDID is now 1080p-max)...
+[cx511h-edid] HPD pulse complete
+```
+
+**Effect observed:** source renegotiates to `1920x1080p`, `dual=0`, `bypass=0` — full frames are
+delivered over DMA. **Still open:** content is a constant filler (`0x10 0x80`) see Phase 4b.
 
 ### Sterile `stream_on` (MMIO / FPGA only)
 
@@ -89,6 +114,43 @@ cx511h_ite6805_event locked fe 3840x2160p (raw)
 ### I2C IRQ deadlock (probe)
 
 Hardware asserts IRQ bit **`0x800`** [I2C complete] continuously. **Fix in `pci_model.c`:** opt-in ACK only when `i2c_waiters > 0`. Unconditional ACK starved the blob’s I2C poll loop and froze `insmod`.
+
+---
+
+## Phase 4b — Picture quality (open — resume here)
+
+**Where we are (2026-08-01):** With the 1080p EDID fix the card locks to `1920x1080p`,
+`dual=0`, `bypass=0`, and **full 4,147,200-byte DMA frames** reach userspace
+(`buffer_prepare` programs an 8-frag SG descriptor list, e.g.
+`desc[0..7] = 0x200000 … 0x1000`). Pictures are **not** there yet.
+
+**Symptom:** every frame is a constant filler — `unique bytes ≈ 3` (`{0, 0x10, 0x80}`;
+hex dump reads `10 80 10 80 …` = UYVY with **Y=128** and U/V=16/0). That is a typical
+“video idle / no pixel data” fill injected by the scaler, not real HDMI content.
+
+**Observed this session (clues for next time):**
+- ITE6805 reports the PS5 is sending **RGB Limited** (`in_colorspacemode=1`,
+  `in_packetsamplingmode=0`), so the AUTO path now (correctly) programs the input as
+  **RGB Limited BT709** (`[cx511h-color] AUTO(src): RGB Limited BT709`). **This changed
+  nothing** — so format/CSC config is *not* (the only) cause. The video *datapath* feeds
+  nothing in.
+- `pixel_clock=124952` and `fps_in=51` from `fe_frameinfo` are **not** valid 1080p60 numbers
+  (should be ≈148500 kHz / 60). If the ITE6805 timing readback is off, the FPGA pipe may
+  not gate a valid active region → idle fill.
+- `0x308`/chain slots read `0x0`/`empty` right after `enable_video_streaming(TRUE)` even
+  though `buffer_prepare` programmed a descriptor list — worth confirming whether the blob
+  re-arms desc slots only on the *next* V-DESC after stream start.
+- One frame is produced per stream (good), `spurious buffer_done (streaming inactive)` fires
+  at teardown (benign).
+
+**Next steps to try (in order):**
+1. Verify/fix `fe_frameinfo` timing before feeding the blob: force `pixel_clock`/`fps` to the
+   actual 1080p60 values (148500 kHz / 60) when input is 1920×1080, and re-check the frame.
+2. If still filler, probe whether the blob’s `aver_xilinx_dual_pixel(0)` and the XV scaler
+   ingest must be armed with a non-zero `clip`/`active` window (check `0x300` desc-slot index
+   advancing across frames).
+3. Capture intermediate MMIO: dump what the FPGA writes at the *input* stage by enabling the
+   existing `debug_pixel_format` (0–3) path — but note reading `0x308` early is invalid.
 
 ---
 
@@ -182,41 +244,62 @@ ibt=off iommu=pt
 
 ```bash
 ./build.sh LLVM=1 CC=clang
-modinfo driver/cx511h.ko | grep vermagic
+modinfo cx511h.ko | grep vermagic        # must match `uname -r`
 sudo ./insmod.sh
 ```
 
-Find device (listing only — do **not** stream with `v4l2-ctl`):
+Find device (safe to list):
 
 ```bash
 v4l2-ctl --list-devices
 ```
 
-Wait for `cx511h_ite6805_event locked fe …` in `dmesg`, then:
+Wait for `cx511h_ite6805_event locked fe 1920x1080p …` in `dmesg`, then capture (or view in `ffplay`):
 
 ```bash
+v4l2-ctl -d /dev/videoX --set-fmt-video=width=1920,height=1080 \
+  --stream-mmap=3 --stream-count=1 --stream-to=/tmp/frame.raw
+xxd /tmp/frame.raw | head -4
 ffplay -f v4l2 -input_format uyvy422 -video_size 1920x1080 -framerate 60 /dev/videoX
-sudo ./unload.sh
 ```
+
+**Unload / reload without reboot:**
+
+```bash
+sudo ./unload.sh     # safe clean rmmod (kills audio holders) — never touches PCI 'remove'
+sudo ./reload.sh     # unload + insmod the freshly built cx511h.ko
+```
+
+> `unload.sh` no longer uses the old "RADICAL PCI REMOVE" fallback
+> (`echo 1 > /sys/bus/pci/devices/…/remove`). That path wedged the module in
+> `MODULE_STATE_GOING` / `refcnt -1` and forced a reboot. It now only kills/restarts the
+> capture+audio users and runs a clean `rmmod`; if the module is genuinely stuck it says so
+> instead of making it worse.
 
 ### Debug log filter
 
 ```bash
-dmesg | grep -iE 'cx511h-phase4|cx511h-scale|cx511h-dma|gc573-payload|gc573-handoff|ite6805_event locked|ITE6805_LOCK'
+dmesg | grep -iE 'cx511h-phase4|cx511h-scale|cx511h-dma|gc573-payload|gc573-handoff|ite6805_event locked|ITE6805_LOCK|cx511h-edid|cx511h-color'
 ```
 
 ### Dump one frame (userspace)
 
 ```bash
-sudo dd if=/dev/videoX of=frame_raw.bin bs=4147200 count=1
-xxd frame_raw.bin | head -4
+v4l2-ctl -d /dev/videoX --set-fmt-video=width=1920,height=1080 \
+  --stream-mmap=3 --stream-count=1 --stream-to=/tmp/frame.raw
+python3 -c "
+d=open('/tmp/frame.raw','rb').read(1_000_000)
+print('unique bytes in first MB:', len(set(d)))   # >~50 = real pixels; ~2-3 = constant filler
+"
+xxd /tmp/frame.raw | head -4
 ```
 
 | Hex pattern | Meaning |
 |:---|:---|
 | `00 00 00 00…` | Stale cache, wrong CSC path, or no DMA |
-| `10 80 10 80…` | UYVY limited black — DMA likely OK |
+| `10 80 10 80…` | UYVY constant filler (Y=128 “no signal”) — DMA ok, no video content |
 | `80 10 80 10…` | YUYV order — try different `-input_format` |
+| many distinct bytes | Real pixels are flowing |
 
 ---
 
