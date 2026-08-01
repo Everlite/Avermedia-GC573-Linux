@@ -17,40 +17,6 @@ Modernized for recent kernels. **Experimental — development and testing only.*
 
 ---
 
-## Session 2026-08-01 — status / where to resume  (resume point after the pause)
-
-**TL;DR:** DMA delivers full 1080p frames + V-DESC IRQs, but the payload stays constant filler (`unique=2/3`). The color-space/TTL/timing fix is **ruled out** as the sole blocker. The concrete next suspicion is the **DMA-ingest datapath / `ddr_mode`**, no longer the TTL color format.
-
-**Verified (do not re-prove):**
-- 1080p-max EDID + HPD → source locked `1920x1080p`, `dual=0`, `bypass=0`, full `4147200 B` frames.
-- TTL format now runs deterministically on RGB 444 via `check_signal_stable_task`:
-  `[cx511h-ttl] check_signal_stable_task: eff_cs=1 sampling=0 -> out_format=0x40` (repeats ~every 100 ms).
-- `stream_on` normalizes the (unreliable) ITE6805 timing to `pixel_clock=148500000 / fps=60` —
-  **but only under the new module param `normalize_timing=1`** (default; toggle at runtime via
-  `/sys/module/cx511h/parameters/normalize_timing`, no rebuild).
-- **Not yet cleanly reproduced:** a long, continuous `[gc573-intercept] V-DESC` series **during a
-  locked + normalized stream**. The only V-DESCs with a valid `0x308` came from a session with
-  `in=0x0 pclk=0 ddr=1` (still unlocked); locked sessions with `ddr=0` showed **no** steady series.
-  → Next A/B step: `normalize_timing=0` vs `1`, and check the `ddr_mode` origin (original chip value
-  vs. the LOCK override, which currently forces `=0`).
-
-**Open driver bug (reboot trap on reload):** `unload.sh`/`insmod.sh` can cleanly unload the module
-(nice release + audio restore), but if the driver teardown itself hangs, `rmmod` dies with
-`refcnt=-1 / initstate=going` (WEDGED) → reboot only. The **PCI-remove** path is still removed
-(never touches the bus). Fix the driver teardown side first in the next iterations (e.g. debug the
-known `board_remove()` hang), otherwise every test is expensive.
-
-**Recommended next focus (after the pause) — in order:**
-1. Fix the driver unload hang (otherwise there are no cheap iterations).
-2. Lower the `AVER_LIVE_HEX_DUMP` trigger to an early frame (e.g. frame 1, not 100) to see the real
-   raw bytes of a locked frame.
-3. Defined A/B: `normalize_timing=0/1` + let `ddr_mode` pass through → which combo produces a
-   continuous V-DESC series and `unique>50`?
-
-The "Phase 4b" README section (below) holds the detailed history + fix notes.
-
----
-
 ## Status
 
 **Kernel:** Builds on **6.19.x–7.x** with matching headers (tested on CachyOS / Clang kernels). No portable prebuilt `.ko` — run `./build.sh LLVM=1 CC=clang` on the target machine.
@@ -58,7 +24,7 @@ The "Phase 4b" README section (below) holds the detailed history + fix notes.
 | Area | Status | Notes |
 |:---|:---:|:---|
 | **Build / load** | ✅ | `LLVM=1 CC=clang`; `insmod.sh` / `unload.sh` |
-| **reload / unload script** | 🟡 | `reload.sh` added but not yet proven end-to-end (Known issues #4) |
+| **reload / unload script** | ✅ | `insmod.sh` delegates to `unload.sh` when already loaded (no reboot); remaining wedge case is a driver teardown hang (Known issues #4) |
 | **Probe / insmod** | ✅ | No hard-freeze when I2C IRQ opt-in ACK is active |
 | **HDMI lock** | ✅ | ITE6805 events; **1080p-max EDID now advertised** (patched at build time) |
 | **Phase 4 pipeline** | ✅ | Boot-time `iTE6805_Hardware_Init()`; MMIO-only `stream_on`; blob owns scaler/CSC |
@@ -76,7 +42,7 @@ The "Phase 4b" README section (below) holds the detailed history + fix notes.
 | **2** — DMA / IRQ | ✅ | V-DESC hook, doorbell `0x304 ← 0x01`, descriptor chain understood |
 | **3** — DMA coherency | ✅ | `q->dev = dev` in vb2; cache sync before handoff |
 | **4** — Stable streaming path | ✅ **BREAKTHROUGH** | No I2C writes at stream time; boot bootstrap; 1080p-max EDID; full frames delivered |
-| **4b** — Picture quality | 🟡 | 1080p lock + full DMA frames + V-DESC IRQ confirmed; TTL color-space fix applied + TTL re-assert deferred task; timing normalized to 1080p60 — **needs a clean retest after reboot** |
+| **4b** — Picture quality | 🟡 | 1080p lock + full DMA frames + V-DESC IRQ confirmed; TTL 444 + deferred re-assert + 1080p60 timing normalization applied, but payload stays constant filler — ingest datapath (`ddr_mode`) is the next suspicion (see Phase 4b) |
 
 ---
 
@@ -170,7 +136,7 @@ Hardware asserts IRQ bit **`0x800`** [I2C complete] continuously. **Fix in `pci_
 hex dump reads `10 80 10 80 …` = UYVY with **Y=128** and U/V=16/0). That is a typical
 “video idle / no pixel data” fill injected by the scaler, not real HDMI content.
 
-**Root cause found this session (Windows-driver decompilation cross-check):**
+**Root cause found (Windows-driver decompilation cross-check):**
 The **TTL output format** of the IT6805 — the parallel bus that carries video to the FPGA —
 was chosen in `ITE6805_LOCK` from `fe_frameinfo->packet_colorspace`. That field is
 **unreliable** (the blob leaves it as `CS_YUV(0)` even when the PS5 is really sending RGB).
@@ -189,31 +155,40 @@ the TTL output format is selected from the live `ite6805_get_colorspace()` value
 `1920x1080p60` (should be `148500 kHz / 60`). Because the ITE6805 reports exactly
 `1920×1080` (not >1920), the old forced-1080p override (`width>1920`) never fired for it.
 
-**Two fixes applied (in `board_v4l2.c`, module rebuilt `cx511h.ko`, 2026-08-01):**
+**Fixes applied (in `board_v4l2.c`, module rebuilt `cx511h.ko`, 2026-08-01).** All timing
+overrides are gated by the **module param `normalize_timing`** (default `1`; toggle at runtime
+via `/sys/module/cx511h/parameters/normalize_timing`, no rebuild):
 
 1. **TTL re-assert deferred task** — `ITE6805_LOCK` fires *before* the AVI info-frame
    negotiation settles, so `ite6805_get_colorspace()`/`get_sampingmode()` return unstable
-   values there (`eff_cs=0`, `sampling=4`). The TTL format choice was therefore moved into
+   values there (`eff_cs=0`, `sampling=4`). The TTL format choice is therefore re-applied in
    the already-scheduled **`check_signal_stable_task`** (~1.5 s after lock) where the values
    are stable: it logs `[cx511h-ttl] check_signal_stable_task: eff_cs=%u sampling=%u
-   -> out_format=0x%02x` and now **confirms `eff_cs=1 sampling=0 → out_format=0x40`** (RGB 444
-   TTL) for the PS5. I2C writes are safe in that task context (NOT in `stream_on`).
+   -> out_format=0x%02x` and confirms `eff_cs=1 sampling=0 → out_format=0x40` (RGB 444 TTL)
+   for the PS5. I2C writes are safe in that task context (NOT in `stream_on`).
 
-2. **1080p60 timing normalizer** (in `stream_on`, before `aver_xilinx_config_video_process`)
-   and an extended `ITE6805_LOCK` override: if input is `1920×1080` but the readback is not
-   valid 1080p60, force `pixel_clock=148500000`, `fps=60`, `clip_size=1920×1080`, `dual_pixel=0`.
+2. **1080p60 timing normalization.** Two places, distinct scope:
+   - In **`ITE6805_LOCK`**, when the input is `1920×1080` but the readback is not valid
+     1080p60, the override forces `width/height=1920×1080`, `framerate=60`, `denominator=1`,
+     `pixel_clock=148500000`, `dual_pixel=0`, `dual_pixel_like=0`, `sampling_mode=0`,
+     `ddr_mode=0`.
+   - In **`stream_on`** (before `aver_xilinx_config_video_process`), a lighter normalizer
+     corrects **only** `pixel_clock=148500000` and `fps=60` when input is `1920×1080` and
+     readback `pclk`/`fps` are off. It deliberately does **not** touch `out_videoformat`,
+     `clip_size`, `dual_pixel`, or `in_ddrmode` — those are derived from the width/height and
+     pclk-based dual-pixel logic above, and touching them (incl. forcing `in_ddrmode`) was
+     correlated with the FPGA ingest producing no V-DESC transfers at all.
    NOTE vendor naming (README #9): **`vactive`=horizontal width, `hactive`=vertical height** —
-   the first version of this fix checked `hactive==1920` and was silently inert; the corrected
-   check is `vactive==1920 && hactive==1080`. Log: `[cx511h-debug] stream_on: normalizing
-   1080p60 timing (was vactive=%u hactive=%u pclk=%u fps=%u)`.
+   so a 1920×1080 input is `vactive=1920 && hactive=1080`.
+   Log: `[cx511h-debug] stream_on: normalizing 1080p60 timing (was vactive=%u hactive=%u pclk=%u fps=%u)`.
 
-**Confirmed this session:**
-- **DMA datapath works end-to-end.** The `[gc573-intercept] V-DESC slot …` hook now shows the
-  FPGA executing transfers: `slot 1: chain ptr 0x308=0x67ce0000 … desc_count 0x310=0x00000007`
-  (0x310=7 matches our 8-frag SG list; 0x308 holds the blob's internal chain address, **not**
-  the frame buffer — see FPGA MMIO reference). This settles the earlier README open question:
-  the blob re-arms desc slots on the *next* V-DESC after stream start, which is why `0x308`
-  reads `0x00000000` right after `enable_video_streaming(TRUE)` and is **not** an error.
+**Confirmed:**
+- **DMA datapath works end-to-end.** The `[gc573-intercept] V-DESC slot …` hook shows the
+  FPGA executing transfers: `slot N: chain ptr 0x308=0x67ce0000 … desc_count 0x310=0x000000NN`
+  (0x310 matches our SG list fragment count; 0x308 holds the blob's internal chain address,
+  **not** the frame buffer — see FPGA MMIO reference). The blob re-arms desc slots on the *next*
+  V-DESC after stream start, which is why `0x308` may read `0x00000000` right after
+  `enable_video_streaming(TRUE)` and is **not** an error.
 - `[cx511h-color] AUTO(src): RGB Limited BT709` (in_colorspacemode=1, in_packetsamplingmode=0).
 
 **Windows-driver context (still relevant):** `FUN_140045168` shows Windows explicitly programs the
@@ -225,24 +200,25 @@ actionable driver-level equivalent.
 - The physical card LED flashes **red** regardless of lock state — cosmetic only, no verified
   GPIO wiring; ignore it. Trust the `dmesg` lock line.
 
-**Wedge / retest caveat (why a clean stream test is still pending):** the last `./insmod.sh`
-run hit the module **wedged** (audio/other holders kept `refcnt` ≥1 → `rmmod -f cx511h` was
-*killed* and `insmod` failed with `Device or resource busy`). The `v4l2-ctl` test then read a
-stale `/tmp/frame.raw` and the `dmesg` came from the *old*, pre-fix module instance — so the
-1080p60 normalizer has **not been exercised yet**. A clean retest requires a reboot (or a
-successful `./unload.sh`), then `sudo ./insmod.sh` + one stream. Re-checking the `unique bytes`
-meter and the `[gc573-intercept]`/`normalizing` logs on that fresh instance is the decisive test.
+**Current blocker (still open):** despite the above (deterministic `out_format=0x40` RGB TTL and
+normalized 1080p60 timing), streamed payload stays constant filler (`unique=2/3`). The colour/
+TTL/timing path is therefore **ruled out as the sole blocker**. A continuous `[gc573-intercept]`
+V-DESC series has not yet been observed during a locked + normalized stream (only single transfer
+events around lock/stream transitions; a session with `in=0x0 ddr=1` showed valid `0x308`,
+locked sessions with `ddr=0` did not). Next suspects to investigate (in order):
 
-**Next steps (do after a clean reload/reboot):**
-1. Reload freshly built `cx511h.ko` (reboot → `sudo ./insmod.sh`), stream once, then grep:
-   `dmesg | rg "normalizing 1080p60|cx511h-color AUTO|cx511h-ttl|gc573-intercept|AVER_LIVE_HEX_DUMP"`
-   and re-check the frame. Expect `normalizing … (was vactive=1920 hactive=1080 pclk=125550)`
-   and `[gc573-intercept]` transfer logs instead of the old `0x308=0` reads.
-2. If still filler with a modern `AVER_LIVE_HEX_DUMP` (frame 100), the remaining suspects are
-   the **scaler/ingest active window** and the **byte-pair order** — probe `0x300` slot-advance
-   across frames, and try `v4l2-ctl -input_format` UYVY vs YUYV (README hex-table).
-3. As a last resort, capture intermediate MMIO at the FPGA input via the existing
-   `debug_pixel_format` (0–3) path (reading `0x308` early is invalid).
+1. The **driver unload hang**: `rmmod` can die with `refcnt=-1 / initstate=going` (module WEDGED)
+   when the teardown path hangs, forcing a reboot despite `unload.sh`'s safe release order. The
+   PCI-remove fallback stays removed (never touches the bus). Fixing this makes iteration cheap.
+2. Lower the `AVER_LIVE_HEX_DUMP` trigger from frame 100 to an early frame to expose the real raw
+   bytes of a locked frame (byte-pair order / scaler ingest vs. content).
+3. Defined A/B on the DMA-ingest datapath: `normalize_timing=0/1` and letting `ddr_mode` pass
+   through unchanged (the LOCK override currently forces `ddr_mode=0`), then observe which combo
+   produces a **continuous** V-DESC series and `unique>50`.
+4. Probe the scaler/ingest **active `clip`/window** and `0x300` slot index advance across frames;
+   try `v4l2-ctl -input_format` UYVY vs YUYV (README hex-table). As a last resort, capture
+   intermediate MMIO at the FPGA input via `debug_pixel_format` (0–3) (reading `0x308` early is
+   invalid).
 
 ---
 
@@ -278,7 +254,7 @@ Source: `driver/board/cx511h/board_v4l2.c` → `cx511h_stream_on()`.
 
 1. **Read-only blob APIs** — `ite6805_get_frameinfo()`, `get_workingmode()`, `get_colorspace()`, `get_sampingmode()` (no register writes from our side)
 2. Build **`vip_cfg`** — physical input dims, V4L2 output, colorspace (`force_input_mode` optional)
-3. **Normalize bogus 1080p timing** — if input is `1920×1080` but readback `pclk`/`fps` are not valid 1080p60, force `pixel_clock=148500000`, `fps=60`, `clip_size=1920×1080`, `dual_pixel=0` (see Phase 4b)
+3. **Normalize bogus 1080p timing** — if input is `1920×1080` but readback `pclk`/`fps` are not valid 1080p60, force `pixel_clock=148500000` and `fps=60` (only those two; gated by `normalize_timing` module param). See Phase 4b.
 4. **`aver_xilinx_enable_video_streaming(FALSE)`** + `msleep(50)`
 5. Re-seal **`vip_cfg`** for downscale path if `fe_frameinfo` > output resolution
 6. **`aver_xilinx_config_video_process(&vip_cfg)`** — blob only; no manual `0x1040`
@@ -368,16 +344,16 @@ sudo ./reload.sh     # unload + insmod the freshly built cx511h.ko
 > `MODULE_STATE_GOING` / `refcnt -1` and forced a reboot. It now only kills/restarts the
 > capture+audio users and runs a clean `rmmod`; if the module is genuinely stuck it says so
 > instead of making it worse.
+>
+> `insmod.sh`, when the module is already loaded, now **delegates to `./unload.sh`** (safe
+> release of capture/ALSA holders + clean rmmod) instead of a blind `rmmod -f`, so reloading
+> after a rebuild works without a reboot in the normal case.
+>
+> ⚠️ **The one remaining reboot case:** if the *driver's own teardown path* hangs, `rmmod` dies
+> with `refcnt=-1 / initstate=going` (module WEDGED) and only a reboot can clear it — even the
+> safe release order can't help. This is a known driver-side bug being investigated (see
+> Phase 4b / Known issues #4). Until it's fixed, a fully wedged module still needs `reboot → sudo ./insmod.sh`.
 
-> ⚠️ **`reload.sh` / `unload.sh` are still work-in-progress — treat as possibly broken.**
-> The rewrite removed the dangerous removal path, but the reload workflow has **not** been
-> proven end-to-end yet:
-> - A first live attempt of `./reload.sh` hit `unload.sh: command not found` (needs `./`;
->   fixed since) and then `insmod: File exists` because the module had never actually been
->   unloaded.
-> - The cleanest verified path is still: **reboot → `sudo ./insmod.sh`**. Audio/PipeWire
->   (and even Discord) may re-grab the CL511H PCM, which can keep `refcnt` at 1 and block
->   `rmmod`/`reload` until the audio holders are stopped.
 
 ### Debug log filter
 
@@ -412,6 +388,7 @@ xxd /tmp/frame.raw | head -4
 |:---|:---:|:---|
 | `edid_force_hpd` | 1 | Pulse HPD after `iTE6805_Hardware_Init()` so the source re-reads the 1080p-max EDID (set 0 to skip) |
 | `force_input_mode` | 0 | 0=auto, 1=YUV422, 2=YUV444, 3=RGB full, 4=RGB limited |
+| `normalize_timing` | 1 | Normalize the unreliable ITE6805 timing to 1080p60 (`pixel_clock=148500000`, `fps=60`). Toggle at runtime via `/sys/module/cx511h/parameters/normalize_timing` (no rebuild) for A/B |
 | `debug_pixel_format` | -1 | -1=auto; 0–3 force YUV byte order |
 | `auto_test_byteorder` | 0 | Cycle formats on stream_on (MMIO peek) |
 | `no_signal_pic` | NULL | Bitmap path when no signal |
@@ -441,11 +418,11 @@ xxd /tmp/frame.raw | head -4
 
 3. **4K metadata split** — `ITE6805_LOCK` forces **1920×1080** into framegrabber for caps; FPGA **`vip_cfg`** uses **physical** `fe_frameinfo` for scaler. Both are intentional. (With the 1080p-max EDID this is now mostly moot, source negotiates 1080p.)
 
-4. **`reload.sh` / `unload.sh` / a wedged module block a clean retest** — the dangerous PCI-remove fallback was removed, but a live reload attempt exposed issues (missing `./`; `insmod File exists`), and on 2026-08-01 `insmod.sh` hit the module **wedged**: audio holders kept `refcnt`≥1, so its `rmmod -f cx511h` was **killed** and the follow-up `insmod` failed with `Device or resource busy` — the module stayed loaded with OLD code, and any `v4l2-ctl` ran against a stale `frame.raw`/old `dmesg`. **A genuine retest needs a reboot → `sudo ./insmod.sh`.** See Build & quick start warning.
+4. **A reload can still wedge the module (reboot needed)** — `insmod.sh` now delegates to `./unload.sh` when the module is already loaded, so the old blind `rmmod -f` (which left the module loaded with OLD code and forced a reboot) is gone. However, if the **driver's own teardown path hangs**, `rmmod` dies with `refcnt=-1 / initstate=going` (module WEDGED) and only a reboot can clear it — even the safe release order can't help. The dangerous PCI-remove fallback remains removed (never touches the bus). Fixing the teardown hang is the priority before further iteration. See Phase 4b ("Current blocker") and Build & quick start warning.
 
 5. **GStreamer scripts** (`gst_1.0_raw_video*.sh`) — legacy / risky; use `v4l2-ctl` or `ffplay`.
 
-6. **Module refcnt pinned** — audio holders (PipeWire / Discord) keep the CL511H PCM open and hold `refcnt` at 1, blocking `rmmod`/`reload`; `insmod.sh`'s auto `rmmod -f` cannot clear a truly wedged module (it gets killed, then `insmod` → `Device or resource busy`). `unload.sh` kills the holders first; if the module stays wedged (`refcnt −1`, `GOING`) only a reboot helps — `unload.sh` no longer tries the dangerous PCI-remove path.
+6. **Module refcnt pinned** — audio holders (PipeWire / Discord) keep the CL511H PCM open and hold `refcnt` at 1, blocking `rmmod`/`reload`. `unload.sh` releases them; `insmod.sh` delegates to it on reload. If the module truly wedges (`refcnt −1`, `GOING` — driver teardown hang) only a reboot helps. The dangerous PCI-remove path stays removed.
 
 7. **Audio** — ALSA PCM registers and looks like a capture device ("CL511H Stereo"), but no captured audio bits are delivered yet.
 
