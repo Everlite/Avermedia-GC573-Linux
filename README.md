@@ -17,37 +17,37 @@ Modernized for recent kernels. **Experimental — development and testing only.*
 
 ---
 
-## Session 2026-08-01 — Stand / wo weiterzumachen  (Resume-Punkt nach Pause)
+## Session 2026-08-01 — status / where to resume  (resume point after the pause)
 
-**Kurz:** DMA liefert volle 1080p-Frames + V-DESC-IRQs, aber der Inhalt bleibt konstanter Filler (`unique=2/3`). Der Farbraum-/TTL-/Timing-Fix ist **widerlegt** als alleiniger Blocker. Der konkrete nächste Verdacht ist der **DMA-Ingest-Datapath / `ddr_mode`**, nicht mehr die TTL-Farbe.
+**TL;DR:** DMA delivers full 1080p frames + V-DESC IRQs, but the payload stays constant filler (`unique=2/3`). The color-space/TTL/timing fix is **ruled out** as the sole blocker. The concrete next suspicion is the **DMA-ingest datapath / `ddr_mode`**, no longer the TTL color format.
 
-**Verifiziert feststeht (bitte nicht erneut beweisen):**
-- 1080p-max EDID + HPD → Source locked `1920x1080p`, `dual=0`, `bypass=0`, volle `4147200 B`-Frames.
-- TTL-Format läuft jetzt deterministisch auf RGB 444 via `check_signal_stable_task`:
-  `[cx511h-ttl] check_signal_stable_task: eff_cs=1 sampling=0 -> out_format=0x40` (wiederholt ~alle 100 ms).
-- `stream_on` normalisiert das (unzuverlässige) ITE6805-Timing auf `pixel_clock=148500000 / fps=60` —
-  **aber nur unter dem neuen Modul-Parameter `normalize_timing=1`** (Default; zur Laufzeit umschaltbar via
-  `/sys/module/cx511h/parameters/normalize_timing`, ohne Rebuild).
-- **Gerade noch nicht sauber reproduziert:** Eine lange, kontinuierliche `[gc573-intercept] V-DESC`-Serie
-  **während eines gelockten + normalisierten Streams**. Die einzigen V-DESCs mit gültigem `0x308`
-  kamen in einer Session mit `in=0x0 pclk=0 ddr=1` (noch ungelockt); gelockte mit `ddr=0` zeigten
-  **keine** fließende Serie. → Nächster A/B-Schritt: `normalize_timing=0` vs `1`, und den `ddr_mode`-
-  Ursprung (Original-Chipwert vs. LOCK-Override erzwingt aktuell `=0`) prüfen.
+**Verified (do not re-prove):**
+- 1080p-max EDID + HPD → source locked `1920x1080p`, `dual=0`, `bypass=0`, full `4147200 B` frames.
+- TTL format now runs deterministically on RGB 444 via `check_signal_stable_task`:
+  `[cx511h-ttl] check_signal_stable_task: eff_cs=1 sampling=0 -> out_format=0x40` (repeats ~every 100 ms).
+- `stream_on` normalizes the (unreliable) ITE6805 timing to `pixel_clock=148500000 / fps=60` —
+  **but only under the new module param `normalize_timing=1`** (default; toggle at runtime via
+  `/sys/module/cx511h/parameters/normalize_timing`, no rebuild).
+- **Not yet cleanly reproduced:** a long, continuous `[gc573-intercept] V-DESC` series **during a
+  locked + normalized stream**. The only V-DESCs with a valid `0x308` came from a session with
+  `in=0x0 pclk=0 ddr=1` (still unlocked); locked sessions with `ddr=0` showed **no** steady series.
+  → Next A/B step: `normalize_timing=0` vs `1`, and check the `ddr_mode` origin (original chip value
+  vs. the LOCK override, which currently forces `=0`).
 
-**Offener Treiber-Bug (Reboot-Falle beim Reload):** `unload.sh`/`insmod.sh` können das Modul sauber
-entladen (schönes Release + Audio-Restore), aber wenn der Treiber-Teardown selbst hängt, stirbt `rmmod`
-mit `refcnt=-1 / initstate=going` (WEDGED) → nur Reboot. Der **PCI-remove**-Pfad ist weiterhin
-entfernt (never touches the bus). Stellen Sie diese Treiber-Seite in den nächsten Iterationen zuerst
-ein (z. B. bekannten `board_remove()`-Hang debug-gen), sonst ist jeder Test teuer.
+**Open driver bug (reboot trap on reload):** `unload.sh`/`insmod.sh` can cleanly unload the module
+(nice release + audio restore), but if the driver teardown itself hangs, `rmmod` dies with
+`refcnt=-1 / initstate=going` (WEDGED) → reboot only. The **PCI-remove** path is still removed
+(never touches the bus). Fix the driver teardown side first in the next iterations (e.g. debug the
+known `board_remove()` hang), otherwise every test is expensive.
 
-**Empfohlener nächster Fokus (nach Pause) — in Reihenfolge:**
-1. Treiber-Unload-Hang beheben (sonst keine günstigen Iterationen).
-2. `AVER_LIVE_HEX_DUMP`-Trigger auf einen früheren Frame (z. B. Frame 1, nicht erst 100) senken, um
-   die echten Rohbytes eines gelockten Frames zu sehen.
-3. Definierter A/B: `normalize_timing=0/1` + `ddr_mode` (Original passieren lassen) → welche Kombi
-   erzeugt eine kontinuierliche V-DESC-Serie und `unique>50`?
+**Recommended next focus (after the pause) — in order:**
+1. Fix the driver unload hang (otherwise there are no cheap iterations).
+2. Lower the `AVER_LIVE_HEX_DUMP` trigger to an early frame (e.g. frame 1, not 100) to see the real
+   raw bytes of a locked frame.
+3. Defined A/B: `normalize_timing=0/1` + let `ddr_mode` pass through → which combo produces a
+   continuous V-DESC series and `unique>50`?
 
-Der README-Abschnitt "Phase 4b" (unten) hält die detaillierte Historie + Fix-Notizen.
+The "Phase 4b" README section (below) holds the detailed history + fix notes.
 
 ---
 
