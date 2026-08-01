@@ -673,6 +673,30 @@ static void cx511h_stream_on(framegrabber_handle_t handle)
         break;
     }
 
+    /* Normalize bogus ITE6805 timing to valid 1080p60 before feeding the FPGA.
+     * The chip reports pclk=125550 / fps=51 for what the PS5 actually sends as
+     * 1920x1080p60.  The blob walls off the DMA ingest (no V-DESC, 0x308 stays
+     * the "not yet armed" pattern) unless it gets clean timing.  These are the
+     * values it consumes via vip_cfg.  NOTE vendor naming: vactive=horizontal
+     * width, hactive=vertical height (1920x1080 -> vactive=1920, hactive=1080). */
+    if (vip_cfg.in_videoformat.vactive == 1920 &&
+        vip_cfg.in_videoformat.hactive == 1080 &&
+        (vip_cfg.pixel_clock < 145000000 ||
+         vip_cfg.in_videoformat.fps != 60)) {
+        printk(KERN_ERR "[cx511h-debug] stream_on: normalizing 1080p60 timing "
+               "(was vactive=%u hactive=%u pclk=%u fps=%u)\n",
+               vip_cfg.in_videoformat.vactive, vip_cfg.in_videoformat.hactive,
+               vip_cfg.pixel_clock, vip_cfg.in_videoformat.fps);
+        vip_cfg.pixel_clock = 148500000;
+        vip_cfg.in_videoformat.fps = 60;
+        vip_cfg.out_videoformat.width = 1920;
+        vip_cfg.out_videoformat.height = 1080;
+        vip_cfg.clip_size.width = 1920;
+        vip_cfg.clip_size.height = 1080;
+        vip_cfg.dual_pixel = 0;
+        vip_cfg.in_ddrmode = 0;
+    }
+
 	
     //enable video bypass
     if (((vip_cfg.in_videoformat.vactive == 4096) && (vip_cfg.out_videoformat.width == 4096)
@@ -1462,6 +1486,41 @@ static void check_signal_stable_task(void *data)
     
     //ite6805_get_frameinfo(ite6805_handle,fe_frameinfo);
     //debug_msg("%s ite6805 detected size %dx%d;framerate %d \n",__func__,fe_frameinfo->width,fe_frameinfo->height,fe_frameinfo->framerate);
+
+    /* TTL color-format re-assert: this task runs in the deferred signal-stable
+     * path (scheduled ~1.5s after LOCK via ITE6805_LOCK), i.e. after the HDMI
+     * AVI info-frame negotiation has finished.  The ITE6805 then reports the
+     * real color space (RGB Limited for the PS5), so we pick the matching TTL
+     * output format here — fixing the wrong YUV/ITU-656 format that the too-early
+     * LOCK callback chose.  I2C is safe in this task context (NOT stream_on). */
+    {
+        handle_t ite6805_handle =
+            board_v4l2_cxt->i2c_chip_handle[CL511H_I2C_CHIP_ITE6805_0];
+        if (ite6805_handle) {
+            U32_T eff_cs = 0;   /* 0=yuv, 1=rgb-limited, 2=rgb-full */
+            U32_T sampling = 1; /* 0=rgb, 1=422, 2=444 */
+            ite6805_out_format_e ttl_fmt;
+
+            ite6805_get_colorspace(ite6805_handle, &eff_cs);
+            ite6805_get_sampingmode(ite6805_handle, &sampling);
+            /* the PS5 sends RGB; trust AVI sampling==0 as well as colorspace */
+            if (eff_cs != 0 || sampling == 0) {
+                ttl_fmt = (fe_frameinfo->pixel_clock > 170000000 ||
+                           fe_frameinfo->dual_pixel_like)
+                              ? ITE6805_OUT_FORMAT_SDR_444_2X24_INTERLEAVE_MODE0
+                              : ITE6805_OUT_FORMAT_SDR_444_24;
+            } else {
+                ttl_fmt = (fe_frameinfo->pixel_clock > 170000000 ||
+                           fe_frameinfo->dual_pixel_like)
+                              ? ITE6805_OUT_FORMAT_SDR_422_2X24_INTERLEAVE_MODE0
+                              : ITE6805_OUT_FORMAT_SDR_ITU656_24_MODE0;
+            }
+            ite6805_set_out_format(ite6805_handle, ttl_fmt);
+            printk(KERN_ERR "[cx511h-ttl] check_signal_stable_task: eff_cs=%u "
+                   "sampling=%u -> out_format=0x%02x\n",
+                   eff_cs, sampling, ttl_fmt);
+        }
+    }
         
     aver_xilinx_get_frameinfo(board_v4l2_cxt->aver_xilinx_handle,&detected_frameinfo,fe_frameinfo->pixel_clock/*0*/); 
     framemode=framegrabber_g_input_framemode(board_v4l2_cxt->fg_handle);
@@ -1547,16 +1606,22 @@ static void cx511h_ite6805_event(void *cxt,ite6805_event_e event)
         
             mesg("%s locked fe %dx%d%c (raw)\n",__func__,fe_frameinfo->width,fe_frameinfo->height,(fe_frameinfo->is_interlace)?'i':'p');
 
-            /* FORCED 1080p OVERRIDE: The ITE6805 EDID RAM still advertises 4K
-             * (EDID is cached in chip). Force any resolution above 1920 wide
-             * down to 1920x1080p60 so the FPGA/DMA pipeline can handle it.
-             * pixel_clock is in Hz (downstream check: >170000000 triggers dual-pixel). */
-            if (fe_frameinfo->width > 1920) {
-                printk(KERN_ERR "[cx511h-debug] FORCING 1080p mode now "
-                       "(was %dx%d pclk=%u dual=%d dpl=%d)\n",
+            /* FORCED 1080p60 OVERRIDE: The ITE6805 timing readback is unreliable
+             * (it reports pclk=126457 / fps=51 for what the PS5 actually sends as
+             * 1920x1080p60).  If the blob is fed those bogus values it refuses to
+             * arm the FPGA DMA ingest (0x308 stays 0) and only constant filler
+             * reaches host memory.  Normalize any 1080p-wide input to the exact
+             * 1080p60 timing so the FPGA/data-path ingests real pixels.
+             * pixel_clock is in Hz (>170000000 would trigger dual-pixel). */
+            if ((fe_frameinfo->width > 1920) ||
+                (fe_frameinfo->width == 1920 && fe_frameinfo->height == 1080 &&
+                 (fe_frameinfo->pixel_clock < 145000000 ||
+                  fe_frameinfo->framerate != 60))) {
+                printk(KERN_ERR "[cx511h-debug] FORCING 1080p60 timing now "
+                       "(was %dx%d pclk=%u fps=%u dual=%d dpl=%d)\n",
                        fe_frameinfo->width, fe_frameinfo->height,
-                       fe_frameinfo->pixel_clock, fe_frameinfo->dual_pixel,
-                       fe_frameinfo->dual_pixel_like);
+                       fe_frameinfo->pixel_clock, fe_frameinfo->framerate,
+                       fe_frameinfo->dual_pixel, fe_frameinfo->dual_pixel_like);
                 fe_frameinfo->width = 1920;
                 fe_frameinfo->height = 1080;
                 fe_frameinfo->is_interlace = 0;
@@ -1600,30 +1665,66 @@ static void cx511h_ite6805_event(void *cxt,ite6805_event_e event)
             
             //aver_xilinx_dual_pixel(board_v4l2_cxt->aver_xilinx_handle,fe_frameinfo->dual_pixel);
      
-            if((fe_frameinfo->pixel_clock>170000000/*150000*/) || (fe_frameinfo->dual_pixel_like ==1))//rr1012
+            /* TTL output format (the parallel bus from the IT6805 to the FPGA
+             * ingest) MUST match the input color space.  The old code keyed
+             * this off fe_frameinfo->packet_colorspace, which the lib leaves at
+             * CS_YUV(0) even when the source is really sending RGB.
+             *
+             * At the first LOCK event the chip has not yet finished AVI
+             * info-frame negotiation, so ite6805_get_colorspace() may still read
+             * 0 (YUV) for an RGB source.  ite6805_get_sampingmode() is the
+             * reliable RGB indicator used by stream_on (0=rgb,1=422,2=444):
+             * if it is 0 the source is RGB regardless of the colorspace getter. */
             {
-                //ite6805_out_format_e out_format;
-                if(fe_frameinfo->packet_colorspace==CS_YUV)
-                    out_format=ITE6805_OUT_FORMAT_SDR_422_2X24_INTERLEAVE_MODE0;//ITE6805_OUT_FORMAT_SDR_422_24_MODE4;//ADV7619_OUT_FORMAT_SDR_422_2X24_INTERLEAVE_MODE0; //1003
+                U32_T eff_colorspace = 0; /* 0=yuv, 1=rgb-limited, 2=rgb-full */
+                U32_T sampling = 1;       /* 0=rgb, 1=422, 2=444 */
+                int is_rgb;
+
+                ite6805_get_colorspace(ite6805_handle, &eff_colorspace);
+                ite6805_get_sampingmode(ite6805_handle, &sampling);
+                /* accept RGB if the colorspace getter says so OR the AVI sampling
+                 * mode says RGB (per-pixel, not 4:2:2/4:4:4 interleaved) */
+                is_rgb = (eff_colorspace != 0) || (sampling == 0);
+
+                if((fe_frameinfo->pixel_clock>170000000/*150000*/) || (fe_frameinfo->dual_pixel_like ==1))//rr1012
+                {
+                    if(!is_rgb) /* YUV */
+                        out_format=ITE6805_OUT_FORMAT_SDR_422_2X24_INTERLEAVE_MODE0;//ITE6805_OUT_FORMAT_SDR_422_24_MODE4;//ADV7619_OUT_FORMAT_SDR_422_2X24_INTERLEAVE_MODE0; //1003
+                    else
+                        out_format=ITE6805_OUT_FORMAT_SDR_444_2X24_INTERLEAVE_MODE0;
+                    ite6805_set_out_format(ite6805_handle,out_format);
+                    //ite6805_set_out_format(board_v4l2_cxt->i2c_chip_handle[CX511H_I2C_CHIP_ITE6805_1],out_format);
+                }
                 else
-                    out_format=ITE6805_OUT_FORMAT_SDR_444_2X24_INTERLEAVE_MODE0;
-                ite6805_set_out_format(ite6805_handle,out_format);
-                //ite6805_set_out_format(board_v4l2_cxt->i2c_chip_handle[CX511H_I2C_CHIP_ITE6805_1],out_format);
+                {
+                    /* low-pclk (forced 1080p) */
+                    if(is_rgb) /* RGB source -> 24-bit RGB TTL */
+                        out_format=ITE6805_OUT_FORMAT_SDR_444_24;
+                    else
+                        out_format=ITE6805_OUT_FORMAT_SDR_ITU656_24_MODE0;
+                    ite6805_set_out_format(ite6805_handle,out_format);
+                    //ite6805_set_out_format(board_v4l2_cxt->i2c_chip_handle[CX511H_I2C_CHIP_ITE6805_1],ITE6805_OUT_FORMAT_SDR_ITU656_24_MODE0);
+                }
+                printk(KERN_ERR "[cx511h-ttl] ITE6805_LOCK: eff_colorspace=%u "
+                       "sampling=%u pclk=%u dual=%d -> out_format=0x%02x\n",
+                       eff_colorspace, sampling, fe_frameinfo->pixel_clock,
+                       fe_frameinfo->dual_pixel_like, out_format);
             }
-            else
-            {
-                out_format=ITE6805_OUT_FORMAT_SDR_ITU656_24_MODE0;
-                ite6805_set_out_format(ite6805_handle,out_format);
-                //ite6805_set_out_format(board_v4l2_cxt->i2c_chip_handle[CX511H_I2C_CHIP_ITE6805_1],ITE6805_OUT_FORMAT_SDR_ITU656_24_MODE0);
-            }
-            //debug_msg("=========== ite6805_set_out_format=%02x\n",out_format);
         }
         //sys_msleep(100);
         //debug_msg("pixelclock %d detected %dx%d%c\n",fe_frameinfo->pixel_clock,detected_frameinfo.width,detected_frameinfo.height,(detected_frameinfo.is_interlace) ?'i':'p');
         framegrabber_s_input_status(board_v4l2_cxt->fg_handle,FRAMEGRABBER_INPUT_STATUS_OK);
         framegrabber_mask_s_status(board_v4l2_cxt->fg_handle,FRAMEGRABBER_STATUS_SIGNAL_LOCKED_BIT,FRAMEGRABBER_STATUS_SIGNAL_LOCKED_BIT);
 
-        //task_model_run_task_after(board_v4l2_cxt->task_model_handle,board_v4l2_cxt->check_signal_task_handle,100000);
+        /* Re-check/tune the TTL color format after the AVI info-frame
+         * negotiation has settled (~1.5s).  At the initial LOCK event the chip
+         * still reports colorspace=0 (YUV) for an RGB source; by the time this
+         * deferred task runs, ite6805_get_colorspace()/get_sampingmode() return
+         * the correct value and check_signal_stable_task() re-applies the right
+         * TTL output format over I2C (allowed in this task context). */
+        task_model_run_task_after(board_v4l2_cxt->task_model_handle,
+                                  board_v4l2_cxt->check_signal_task_handle,
+                                  1500000);
     }
         break;
     case ITE6805_UNLOCK:
