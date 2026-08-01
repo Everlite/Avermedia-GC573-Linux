@@ -129,35 +129,37 @@ KILLED_AUDIO=""
 
 if [ "$MODULE_LOADED" = "yes" ]; then
     echo "cx511h module is already loaded."
+    echo "Delegating to ./unload.sh to safely release capture/audio holders first..."
+    echo ""
 
-    # Find our ALSA card
-    CARD_NUM=$(find_our_card)
-    if [ -n "$CARD_NUM" ]; then
-        echo "Found AVerMedia card at number $CARD_NUM"
+    # unload.sh knows the safe, non-destructive teardown order (STREAMOFF,
+    # release V4L2/ALSA holders, kill the audio stack hard, then clean rmmod).
+    # It NEVER touches the PCI 'remove' file, so a reload cannot wedge the card.
+    ./unload.sh
+    UNLOAD_RC=$?
 
-        # Check and kill blocking processes
-        KILLED_AUDIO=$(kill_blocking_processes "$CARD_NUM")
-
-        # Try to remove the module
-        echo "Removing existing module..."
-        if rmmod cx511h 2>/dev/null; then
-            echo "✓ Old module removed."
+    if lsmod | grep -q '^cx511h '; then
+        echo ""
+        echo "⚠️  cx511h is STILL loaded after ./unload.sh (rc=$UNLOAD_RC)."
+        if [ -f /sys/module/cx511h/initstate ] \
+           && [ "$(</sys/module/cx511h/initstate)" = "going" ] \
+           || { [ -f /sys/module/cx511h/refcnt ] \
+                && [ "$(</sys/module/cx511h/refcnt)" -lt 0 ]; }; then
+            echo "   It is WEDGED (GOING / negative refcnt) and can only be cleared"
+            echo "   by a REBOOT. Please restart and run: sudo ./insmod.sh"
         else
-            echo "Failed to remove module. It may still be in use."
-            echo "Trying force remove..."
-            rmmod -f cx511h 2>/dev/null || {
-                echo "⚠️  Could not remove existing module. Attempting to load anyway..."
-            }
+            echo "   Something still holds it. Try: fuser -v /dev/video* /dev/snd/*"
         fi
-        sleep 1
-    else
-        echo "Could not find AVerMedia ALSA card. Attempting to remove module..."
-        rmmod cx511h 2>/dev/null || true
-        sleep 1
+        exit 2
     fi
+    echo "✓ Old module unloaded cleanly."
 else
     echo "cx511h module is not loaded."
 fi
+echo ""
+echo "Loading a fresh cx511h.ko..."
+# A leftover Audio-restoration block is only needed when we killed audio above;
+# unload.sh restarts audio itself, so nothing more to do here.
 
 # Load dependencies IN ORDER (non-fatal)
 echo "Loading kernel module dependencies..."

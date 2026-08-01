@@ -17,6 +17,40 @@ Modernized for recent kernels. **Experimental — development and testing only.*
 
 ---
 
+## Session 2026-08-01 — Stand / wo weiterzumachen  (Resume-Punkt nach Pause)
+
+**Kurz:** DMA liefert volle 1080p-Frames + V-DESC-IRQs, aber der Inhalt bleibt konstanter Filler (`unique=2/3`). Der Farbraum-/TTL-/Timing-Fix ist **widerlegt** als alleiniger Blocker. Der konkrete nächste Verdacht ist der **DMA-Ingest-Datapath / `ddr_mode`**, nicht mehr die TTL-Farbe.
+
+**Verifiziert feststeht (bitte nicht erneut beweisen):**
+- 1080p-max EDID + HPD → Source locked `1920x1080p`, `dual=0`, `bypass=0`, volle `4147200 B`-Frames.
+- TTL-Format läuft jetzt deterministisch auf RGB 444 via `check_signal_stable_task`:
+  `[cx511h-ttl] check_signal_stable_task: eff_cs=1 sampling=0 -> out_format=0x40` (wiederholt ~alle 100 ms).
+- `stream_on` normalisiert das (unzuverlässige) ITE6805-Timing auf `pixel_clock=148500000 / fps=60` —
+  **aber nur unter dem neuen Modul-Parameter `normalize_timing=1`** (Default; zur Laufzeit umschaltbar via
+  `/sys/module/cx511h/parameters/normalize_timing`, ohne Rebuild).
+- **Gerade noch nicht sauber reproduziert:** Eine lange, kontinuierliche `[gc573-intercept] V-DESC`-Serie
+  **während eines gelockten + normalisierten Streams**. Die einzigen V-DESCs mit gültigem `0x308`
+  kamen in einer Session mit `in=0x0 pclk=0 ddr=1` (noch ungelockt); gelockte mit `ddr=0` zeigten
+  **keine** fließende Serie. → Nächster A/B-Schritt: `normalize_timing=0` vs `1`, und den `ddr_mode`-
+  Ursprung (Original-Chipwert vs. LOCK-Override erzwingt aktuell `=0`) prüfen.
+
+**Offener Treiber-Bug (Reboot-Falle beim Reload):** `unload.sh`/`insmod.sh` können das Modul sauber
+entladen (schönes Release + Audio-Restore), aber wenn der Treiber-Teardown selbst hängt, stirbt `rmmod`
+mit `refcnt=-1 / initstate=going` (WEDGED) → nur Reboot. Der **PCI-remove**-Pfad ist weiterhin
+entfernt (never touches the bus). Stellen Sie diese Treiber-Seite in den nächsten Iterationen zuerst
+ein (z. B. bekannten `board_remove()`-Hang debug-gen), sonst ist jeder Test teuer.
+
+**Empfohlener nächster Fokus (nach Pause) — in Reihenfolge:**
+1. Treiber-Unload-Hang beheben (sonst keine günstigen Iterationen).
+2. `AVER_LIVE_HEX_DUMP`-Trigger auf einen früheren Frame (z. B. Frame 1, nicht erst 100) senken, um
+   die echten Rohbytes eines gelockten Frames zu sehen.
+3. Definierter A/B: `normalize_timing=0/1` + `ddr_mode` (Original passieren lassen) → welche Kombi
+   erzeugt eine kontinuierliche V-DESC-Serie und `unique>50`?
+
+Der README-Abschnitt "Phase 4b" (unten) hält die detaillierte Historie + Fix-Notizen.
+
+---
+
 ## Status
 
 **Kernel:** Builds on **6.19.x–7.x** with matching headers (tested on CachyOS / Clang kernels). No portable prebuilt `.ko` — run `./build.sh LLVM=1 CC=clang` on the target machine.

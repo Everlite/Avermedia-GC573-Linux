@@ -118,8 +118,10 @@ v4l2_streamoff_our_devices() {
     [ -n "$sysfs" ] || continue
     dev="/dev/$(basename "$sysfs")"
     [ -c "$dev" ] || continue
-    echo "  v4l2-ctl --stream-off on $dev"
-    v4l2-ctl -d "$dev" --stream-off 2>/dev/null || true
+    echo "  v4l2-ctl -d $dev --stream-off (best effort)"
+    # Some v4l2-ctl builds print the full usage help if `--stream-off` isn't
+    # supported; redirect stdout to keep the unload output clean.
+    v4l2-ctl -d "$dev" --stream-off >/dev/null 2>&1 || true
   done < <(find_our_video_sysfs_nodes)
 }
 

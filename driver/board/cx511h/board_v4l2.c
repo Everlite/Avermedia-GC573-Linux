@@ -67,6 +67,18 @@ module_param(auto_test_byteorder, int, 0644);
 MODULE_PARM_DESC(auto_test_byteorder,
     "Auto-test: cycle through byte orders 0-3 on stream_on and dump first pixels");
 
+/* Module parameter: normalize the ITE6805's unreliable timing to 1080p60.
+ * 1 (default) = force pixel_clock=148500000 / fps=60 and clean dual_pixel/
+ *               ddr_mode in ITE6805_LOCK mode and stream_on.
+ * 0 = leave the chip-reported timing untouched (for A/B testing whether the
+ *     normalized 1080p60 values block the FPGA DMA ingest).
+ * Change without rebuild:  echo 0 > /sys/module/cx511h/parameters/normalize_timing
+ */
+static int normalize_timing = 1;
+module_param(normalize_timing, int, 0644);
+MODULE_PARM_DESC(normalize_timing,
+    "Normalize ITE6805 timing to 1080p60 (1=on, 0=A/B off)");
+
 static int cx511h_frame_counter = 0;
 
 /* [gc573-intercept] Last V4L2 descriptor-0 DMA address programmed by our
@@ -675,11 +687,15 @@ static void cx511h_stream_on(framegrabber_handle_t handle)
 
     /* Normalize bogus ITE6805 timing to valid 1080p60 before feeding the FPGA.
      * The chip reports pclk=125550 / fps=51 for what the PS5 actually sends as
-     * 1920x1080p60.  The blob walls off the DMA ingest (no V-DESC, 0x308 stays
-     * the "not yet armed" pattern) unless it gets clean timing.  These are the
-     * values it consumes via vip_cfg.  NOTE vendor naming: vactive=horizontal
-     * width, hactive=vertical height (1920x1080 -> vactive=1920, hactive=1080). */
-    if (vip_cfg.in_videoformat.vactive == 1920 &&
+     * 1920x1080p60.  NOTE: correction is deliberately limited to pixel_clock + fps
+     * (the fields the chip misreports).  Do NOT also overwrite out_videoformat,
+     * clip_size, dual_pixel or in_ddrmode here — those are already derived from
+     * out_width/out_height and the pclk-based dual-pixel logic above, and touching
+     * the blob's data-path config (esp. in_ddrmode) correlates with the FPGA
+     * ingest producing no V-DESC transfers at all.  Vendor naming: vactive=
+     * horizontal width, hactive=vertical height (1920x1080 -> 1920/1080). */
+    if (normalize_timing &&
+        vip_cfg.in_videoformat.vactive == 1920 &&
         vip_cfg.in_videoformat.hactive == 1080 &&
         (vip_cfg.pixel_clock < 145000000 ||
          vip_cfg.in_videoformat.fps != 60)) {
@@ -689,12 +705,6 @@ static void cx511h_stream_on(framegrabber_handle_t handle)
                vip_cfg.pixel_clock, vip_cfg.in_videoformat.fps);
         vip_cfg.pixel_clock = 148500000;
         vip_cfg.in_videoformat.fps = 60;
-        vip_cfg.out_videoformat.width = 1920;
-        vip_cfg.out_videoformat.height = 1080;
-        vip_cfg.clip_size.width = 1920;
-        vip_cfg.clip_size.height = 1080;
-        vip_cfg.dual_pixel = 0;
-        vip_cfg.in_ddrmode = 0;
     }
 
 	
@@ -1612,11 +1622,13 @@ static void cx511h_ite6805_event(void *cxt,ite6805_event_e event)
              * arm the FPGA DMA ingest (0x308 stays 0) and only constant filler
              * reaches host memory.  Normalize any 1080p-wide input to the exact
              * 1080p60 timing so the FPGA/data-path ingests real pixels.
-             * pixel_clock is in Hz (>170000000 would trigger dual-pixel). */
-            if ((fe_frameinfo->width > 1920) ||
-                (fe_frameinfo->width == 1920 && fe_frameinfo->height == 1080 &&
-                 (fe_frameinfo->pixel_clock < 145000000 ||
-                  fe_frameinfo->framerate != 60))) {
+             * pixel_clock is in Hz (>170000000 would trigger dual-pixel).
+             * Gated by normalize_timing for A/B testing. */
+            if (normalize_timing &&
+                ((fe_frameinfo->width > 1920) ||
+                 (fe_frameinfo->width == 1920 && fe_frameinfo->height == 1080 &&
+                  (fe_frameinfo->pixel_clock < 145000000 ||
+                   fe_frameinfo->framerate != 60)))) {
                 printk(KERN_ERR "[cx511h-debug] FORCING 1080p60 timing now "
                        "(was %dx%d pclk=%u fps=%u dual=%d dpl=%d)\n",
                        fe_frameinfo->width, fe_frameinfo->height,
