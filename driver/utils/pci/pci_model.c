@@ -618,6 +618,8 @@ static void pci_model_remove(struct pci_dev *pci_dev)
     struct device *dev=&pci_dev->dev;
     cxt_mgr_handle_t cxt_mgr=get_cxt_manager(dev);
     pci_model_cxt_t *pci_cxt = NULL;
+    void __iomem *bar_mmio[MAX_BAR_COUNT] = { NULL };
+    int bar_count = 0;
     int i;
     mesg_debug("%s\n",__func__);
     
@@ -645,18 +647,23 @@ static void pci_model_remove(struct pci_dev *pci_dev)
             // --- FIX --- Always free IRQ vectors if they were allocated
             pci_free_irq_vectors(pci_dev);
             
-            // --- FIX --- Unmap BARs while context is still valid
-            for(i = 0; i < pci_cxt->bar_count; i++)
-            {
-                if (pci_cxt->bar_info[i].mmio)
-                    iounmap(pci_cxt->bar_info[i].mmio);
-            }
+            // --- FIX --- Keep BAR mappings until the board contexts are released:
+            // aver_xilinx_release() still reads FPGA registers during teardown
+            bar_count = pci_cxt->bar_count;
+            for(i = 0; i < bar_count; i++)
+                bar_mmio[i] = pci_cxt->bar_info[i].mmio;
         }
         
         // --- FIX --- Now release context manager (frees pci_cxt memory)
         cxt_manager_release(cxt_mgr);
     }
     
+    for(i = 0; i < bar_count; i++)
+    {
+        if (bar_mmio[i])
+            iounmap(bar_mmio[i]);
+    }
+
     // --- FIX --- PCI cleanup after all context is cleaned up
     pci_release_regions(pci_dev);
     pci_clear_master(pci_dev);
