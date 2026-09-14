@@ -67,6 +67,7 @@ enum
 };
 
 typedef void (*alsa_model_callback_fun_t)(void *data);
+typedef int (*alsa_model_rate_query_t)(void *data);
 
 typedef struct
 {
@@ -83,6 +84,7 @@ typedef void *alsa_model_handle_t;
 
 alsa_model_handle_t alsa_model_init(cxt_mgr_handle_t cxt_mgr,alsa_model_setup_t *alsa_setup_info);
 void alsa_model_register_callback(alsa_model_handle_t handle,alsa_model_callback_e no,alsa_model_callback_fun_t cb_func,void *cxt);
+void alsa_model_register_rate_query(alsa_model_handle_t handle, alsa_model_rate_query_t query, void *cxt);
 void alsa_model_feed_data(alsa_model_handle_t handle, U8_T *buf, SIZE_T length);
 void alsa_model_suspend(alsa_model_handle_t handle);
 void alsa_model_resume(alsa_model_handle_t handle);

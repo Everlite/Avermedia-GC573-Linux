@@ -55,6 +55,8 @@ typedef struct
     struct work_struct trigger_deliver;
 
     alsa_cb_info_t cb_info[ALSA_MODEL_MAX_CB_NO];
+    alsa_model_rate_query_t rate_query;
+    void *rate_query_cxt;
 
 
 } alsa_model_t;
@@ -174,6 +176,19 @@ static int alsa_model_pcm_open(struct snd_pcm_substream *substream)
 
     alsa_cxt->substream = substream;
     runtime->hw = alsa_cxt->hw_parm;
+    if (alsa_cxt->rate_query)
+    {
+        unsigned int rate = alsa_cxt->rate_query(alsa_cxt->rate_query_cxt);
+        unsigned int rate_bit = snd_pcm_rate_to_rate_bit(rate);
+
+        /* The FPGA delivers samples at the source rate, without resampling */
+        if (rate_bit != SNDRV_PCM_RATE_KNOT && (runtime->hw.rates & rate_bit))
+        {
+            runtime->hw.rates = rate_bit;
+            runtime->hw.rate_min = rate;
+            runtime->hw.rate_max = rate;
+        }
+    }
     snd_pcm_hw_constraint_integer(runtime, SNDRV_PCM_HW_PARAM_PERIODS);
     cb_info = &alsa_cxt->cb_info[ALSA_MODEL_OPEN_CB];
     if (cb_info->cb_func)
@@ -276,6 +291,16 @@ static snd_pcm_uframes_t alsa_model_pointer(struct snd_pcm_substream *substream)
 //    printk("%s %d\n",__func__,hwptr);
 
     return hwptr;
+}
+
+void alsa_model_register_rate_query(alsa_model_handle_t handle, alsa_model_rate_query_t query, void *cxt)
+{
+    alsa_model_t *alsa_cxt = handle;
+
+    if (!alsa_cxt)
+        return;
+    alsa_cxt->rate_query_cxt = cxt;
+    alsa_cxt->rate_query = query;
 }
 
 void alsa_model_feed_data(alsa_model_handle_t handle, U8_T *buf, SIZE_T length)

@@ -96,6 +96,23 @@ static void board_alsa_capture_stop(void *data)
     
     aver_xilinx_stop_audio_streaming(board_alsa->aver_xilinx_handle);
 }
+
+/* aver_xilinx_get_audioinfo() measures the incoming audio clock on the FPGA */
+static int board_alsa_query_rate(void *data)
+{
+    board_alsa_cxt_t *board_alsa=data;
+
+    switch (aver_xilinx_get_audioinfo(board_alsa->aver_xilinx_handle))
+    {
+    case 0:
+        return 32000;
+    case 1:
+        return 44100;
+    default:
+        return 48000;
+    }
+}
+
 void board_alsa_init(cxt_mgr_handle_t cxt_mgr)
 {
 	board_alsa_cxt_t *board_alsa=NULL;
@@ -128,8 +145,9 @@ void board_alsa_init(cxt_mgr_handle_t cxt_mgr)
 		if (subsystem_id == 0x5730)
 		    alsa_info.name="AVerMedia CL511H";
 		alsa_info.pcm_count=sizeof(cl511h_pcm_info)/sizeof(alsa_model_pcm_info_t);
-		alsa_info.support_fmt_mask=BIT_ALSA_MODEL_FMT_S16_LE | BIT_ALSA_MODEL_FMT_S24_LE;
-		alsa_info.support_rate_mask=BIT_ALSA_MODEL_RATE_32K|BIT_ALSA_MODEL_RATE_44_1K|BIT_ALSA_MODEL_RATE_48K| BIT_ALSA_MODEL_RATE_96K | BIT_ALSA_MODEL_RATE_192K;
+		/* The blob hands over 16-bit stereo chunks at 32/44.1/48 kHz only */
+		alsa_info.support_fmt_mask=BIT_ALSA_MODEL_FMT_S16_LE;
+		alsa_info.support_rate_mask=BIT_ALSA_MODEL_RATE_32K|BIT_ALSA_MODEL_RATE_44_1K|BIT_ALSA_MODEL_RATE_48K;
 		alsa_info.pcm_info=&cl511h_pcm_info;
                 alsa_info.period_size=7680*4;//12*1024;
                 alsa_info.max_period_num=128;        
@@ -163,6 +181,7 @@ void board_alsa_init(cxt_mgr_handle_t cxt_mgr)
 
         alsa_model_register_callback(board_alsa->alsa_handle,ALSA_MODEL_CAPTURE_START_CB,board_alsa_capture_start,board_alsa);
         alsa_model_register_callback(board_alsa->alsa_handle,ALSA_MODEL_CAPTURE_STOP_CB,board_alsa_capture_stop,board_alsa);
+        alsa_model_register_rate_query(board_alsa->alsa_handle,board_alsa_query_rate,board_alsa);
         cxt_manager_ref_context(aver_xilinx_handle);
 	}while(0);
 	if(err!=BOARD_ALSA_OK)
