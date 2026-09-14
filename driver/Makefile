@@ -87,7 +87,11 @@ clean:
 # After copying, patch the blob's EDID tables (Default_Edid_Block /
 # Fix_Edid_Block) to 1080p-max so sources drop to native 1080p instead of
 # driving the 4K dual-pixel path that currently yields a black frame.
-$(obj)/AverMediaLib_64.o: $(src)/../AverMediaLib_64.a $(src)/patch_edid.py
+#
+# The blob was also built without -mno-red-zone: patch_redzone.py makes its
+# leaf functions reserve their stack frame so interrupts cannot corrupt them.
+$(obj)/AverMediaLib_64.o: $(src)/../AverMediaLib_64.a $(src)/patch_edid.py $(src)/patch_redzone.py
 	cp "$<" "$@"
 	python3 "$(src)/patch_edid.py" "$@"
+	python3 "$(src)/patch_redzone.py" "$@"
 	@echo 'cmd_$@ := cp $< $@' > $(obj)/.AverMediaLib_64.o.cmd
