@@ -64,9 +64,11 @@ MODULE_PARM_DESC(edid_force_hpd, "Pulse HPD after EDID load so the HDMI source r
 /*
  * LED GPIO pin configuration (module parameters)
  * The GC573 has 9 FPGA GPIO pins (0-8). Pin 0 = Reset, Pin 2 = HPD.
- * Default candidate pins for RGB LED: 3 (Red), 4 (Green), 5 (Blue)
+ * Default candidate pins for RGB LED: 3 (Red), 4 (Green)
+ * Pin 5 is NOT a LED: driving it low drops the HDMI input hot-plug, so the
+ * source disconnects right after ITE6805_LOCK and the FPGA sees no frame.
  * Set to -1 to disable a color channel.
- * Adjust via: insmod cx511h.ko led_pin_r=3 led_pin_g=4 led_pin_b=5
+ * Adjust via: insmod cx511h.ko led_pin_r=3 led_pin_g=4
  */
 static int led_pin_r = 3;
 module_param(led_pin_r, int, 0644);
@@ -76,9 +78,9 @@ static int led_pin_g = 4;
 module_param(led_pin_g, int, 0644);
 MODULE_PARM_DESC(led_pin_g, "GPIO pin number for green LED (-1 to disable, default: 4)");
 
-static int led_pin_b = 5;
+static int led_pin_b = -1;
 module_param(led_pin_b, int, 0644);
-MODULE_PARM_DESC(led_pin_b, "GPIO pin number for blue LED (-1 to disable, default: 5)");
+MODULE_PARM_DESC(led_pin_b, "GPIO pin number for blue LED (-1 to disable, default: -1; pin 5 drops HDMI hot-plug)");
 
 int board_init(void);
 void board_exit(void);
