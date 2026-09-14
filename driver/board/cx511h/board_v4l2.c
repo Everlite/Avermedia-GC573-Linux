@@ -72,6 +72,15 @@ MODULE_PARM_DESC(auto_test_byteorder,
  * that frame without a doorbell stalls the descriptor chain for good. */
 static atomic_t cx511h_dma_streaming = ATOMIC_INIT(0);
 
+/* The blob owns the descriptor ring: aver_xilinx_tranfer_desclist() programs
+ * a slot then sets its arm bit with a masked write on 0x304, and
+ * aver_xilinx_irq_func() clears only the completed slot bit and ACKs 0x10.
+ * A plain 0x304 = 0x01 from the board path wipes every armed slot. */
+static int legacy_doorbell = 0;
+module_param(legacy_doorbell, int, 0644);
+MODULE_PARM_DESC(legacy_doorbell,
+    "Also write 0x304=0x01 / 0x10=0x02 from the board path (default: 0, the blob manages the ring)");
+
 /* Module parameter: normalize the ITE6805's unreliable timing to 1080p60.
  * 1 (default) = force pixel_clock=148500000 / fps=60 and clean dual_pixel/
  *               ddr_mode in ITE6805_LOCK mode and stream_on.
@@ -961,10 +970,12 @@ static void cx511h_stream_on(framegrabber_handle_t handle)
              * state at stream start. */
             u32 arm_mask = cx511h_dma_verify_slots(pci_handle);
 
-            pci_model_mmio_write(pci_handle, 0, CX511H_DMA_CTRL_REG,
-                                 CX511H_DMA_RUN_BIT);
-            printk(KERN_ERR "[cx511h-phase2] Initial doorbell sent (0x304=0x01). "
-                   "Verified arm mask would be 0x%02x — NOT applied (safety)\n",
+            if (legacy_doorbell)
+                pci_model_mmio_write(pci_handle, 0, CX511H_DMA_CTRL_REG,
+                                     CX511H_DMA_RUN_BIT);
+            printk(KERN_ERR "[cx511h-phase2] Initial doorbell %s. "
+                   "Ring arm mask read back: 0x%02x\n",
+                   legacy_doorbell ? "sent (0x304=0x01)" : "left to the blob",
                    arm_mask);
         } else {
             printk(KERN_ERR "[cx511h-phase2] ERROR: No valid PCI handle, doorbell not sent!\n");
@@ -1165,7 +1176,7 @@ static void cx511h_vdesc_irq_ack_only(board_v4l2_context_t *board_v4l2_cxt)
 {
     handle_t pci_handle = cx511h_resolve_pci_handle(board_v4l2_cxt);
 
-    if (pci_handle)
+    if (pci_handle && legacy_doorbell)
         pci_model_mmio_write(pci_handle, 0, 0x10, 0x02);
 }
 
@@ -1173,6 +1184,9 @@ static void cx511h_vdesc_irq_ack_only(board_v4l2_context_t *board_v4l2_cxt)
 static void cx511h_dma_handoff_complete(board_v4l2_context_t *board_v4l2_cxt)
 {
     handle_t pci_handle = cx511h_resolve_pci_handle(board_v4l2_cxt);
+
+    if (!legacy_doorbell)
+        return;
 
     if (!pci_handle) {
         printk(KERN_ERR
