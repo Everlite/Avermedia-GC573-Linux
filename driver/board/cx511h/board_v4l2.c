@@ -81,6 +81,11 @@ module_param(legacy_doorbell, int, 0644);
 MODULE_PARM_DESC(legacy_doorbell,
     "Also write 0x304=0x01 / 0x10=0x02 from the board path (default: 0, the blob manages the ring)");
 
+static int dma_debug = 0;
+module_param(dma_debug, int, 0644);
+MODULE_PARM_DESC(dma_debug,
+    "Log every DMA descriptor list programmed in buffer_prepare (default: 0)");
+
 /* Module parameter: normalize the ITE6805's unreliable timing to 1080p60.
  * 1 (default) = force pixel_clock=148500000 / fps=60 and clean dual_pixel/
  *               ddr_mode in ITE6805_LOCK mode and stream_on.
@@ -1379,12 +1384,14 @@ static void cx511h_v4l2_buffer_prepare(v4l2_model_callback_parameter_t *cb_info)
         framebufsize=bytesperline*height; 
         //debug_msg("%s %dx%d framesize %u\n",__func__,width,height,framebufsize);
       //  mesg("buf type %d count %d\n",buffer_info->buf_type,buffer_info->buf_count[0]);
-        printk(KERN_ERR "[cx511h-dma] buffer_prepare: %dx%d bpl=%u framesize=%u buf_count=%d\n",
+        if (dma_debug)
+            printk(KERN_ERR "[cx511h-dma] buffer_prepare: %dx%d bpl=%u framesize=%u buf_count=%d\n",
                width, height, bytesperline, framebufsize, buffer_info->buf_count[0]);
 
         for(i=0,desc=buffer_info->buf_info[0],remain=framebufsize;i<buffer_info->buf_count[0] && remain;i++)
         {
-            printk(KERN_ERR "[cx511h-dma]   desc[%d]: dma_addr=0x%08lx size=0x%lx (%lu) remain=%u\n",
+            if (dma_debug)
+                printk(KERN_ERR "[cx511h-dma]   desc[%d]: dma_addr=0x%08lx size=0x%lx (%lu) remain=%u\n",
                    i, desc[i].addr, desc[i].size, desc[i].size, remain);
 
             if(remain >= desc[i].size)
@@ -1408,14 +1415,16 @@ static void cx511h_v4l2_buffer_prepare(v4l2_model_callback_parameter_t *cb_info)
          * the per-descriptor lengths (entry[0x8] in the blob) are wrong; if
          * Desc0/Desc1 addresses look bogus the FPGA is DMAing into the wrong
          * memory — both produce the zero-buffer "green screen". */
-        printk(KERN_ERR "[gc573-debug] SG Chain: Total Size=0x%lx (Expected 0x3f4800), Count=%d\n",
+        if (dma_debug)
+            printk(KERN_ERR "[gc573-debug] SG Chain: Total Size=0x%lx (Expected 0x3f4800), Count=%d\n",
                total_size, buffer_info->buf_count[0]);
         {
             dma_addr_t a0, a1;
 
             if (buffer_info->buf_count[0] > 0) {
                 a0 = (dma_addr_t)desc[0].addr;
-                printk(KERN_ERR "[gc573-debug] Desc0: Addr=%pad, Size=0x%lx\n",
+                if (dma_debug)
+                    printk(KERN_ERR "[gc573-debug] Desc0: Addr=%pad, Size=0x%lx\n",
                        &a0, desc[0].size);
 
                 /* Stash for the hard-IRQ intercept comparison. */
@@ -1425,12 +1434,14 @@ static void cx511h_v4l2_buffer_prepare(v4l2_model_callback_parameter_t *cb_info)
             }
             if (buffer_info->buf_count[0] > 1) {
                 a1 = (dma_addr_t)desc[1].addr;
-                printk(KERN_ERR "[gc573-debug] Desc1: Addr=%pad, Size=0x%lx\n",
+                if (dma_debug)
+                    printk(KERN_ERR "[gc573-debug] Desc1: Addr=%pad, Size=0x%lx\n",
                        &a1, desc[1].size);
             }
         }
 
-        printk(KERN_ERR "[cx511h-dma] buffer_prepare: activating desclist (xilinx=%p)\n",
+        if (dma_debug)
+            printk(KERN_ERR "[cx511h-dma] buffer_prepare: activating desclist (xilinx=%p)\n",
                board_v4l2_cxt->aver_xilinx_handle);
         aver_xilinx_active_current_desclist(board_v4l2_cxt->aver_xilinx_handle,cx511h_video_buffer_done,board_v4l2_cxt);
 
@@ -1441,7 +1452,7 @@ static void cx511h_v4l2_buffer_prepare(v4l2_model_callback_parameter_t *cb_info)
         {
             static int desc_dump_budget = 8;
 
-            if (desc_dump_budget > 0) {
+            if (dma_debug && desc_dump_budget > 0) {
                 handle_t pci_handle = get_pci_handle_cached(board_v4l2_cxt);
 
                 if (pci_handle) {
