@@ -587,8 +587,8 @@ alsa_model_handle_t alsa_model_init(cxt_mgr_handle_t cxt_mgr, alsa_model_setup_t
             alsa_cxt->hw_parm.period_bytes_max = alsa_cxt->hw_parm.period_bytes_min * alsa_cxt->hw_parm.periods_max;
             alsa_cxt->hw_parm.buffer_bytes_max = alsa_cxt->hw_parm.period_bytes_max;
             /* snd_card->driver name size = 16 */
-            strncpy(card->driver, alsa_setup_info->name, 16);
-            strncpy(card->shortname, alsa_setup_info->name, 32);
+            strscpy(card->driver, alsa_setup_info->name, 16);
+            strscpy(card->shortname, alsa_setup_info->name, 32);
             sprintf(card->longname, "%s", alsa_setup_info->name);
 
             /* device association is handled by snd_card_new above */

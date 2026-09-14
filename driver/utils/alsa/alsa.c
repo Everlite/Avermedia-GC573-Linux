@@ -374,8 +374,8 @@ static struct sagitta_snd_dev *audio_dev_register(struct sagitta_dev *sdev)
     INIT_WORK(&snd_dev->wq_trigger, sagitta_audio_trigger);
 
     /* snd_card->driver name size = 16 */
-    strncpy(card->driver, "Sagitta", 16);
-    strncpy(card->shortname, board->name, 32);
+    strscpy(card->driver, "Sagitta", 16);
+    strscpy(card->shortname, board->name, 32);
     sprintf(card->longname, "%s", board->name);
     
     /* set device dev */

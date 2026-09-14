@@ -272,7 +272,7 @@ i2c_model_bus_handle_t i2c_model_new_bus(i2c_model_handle_t handle,const char *b
         bus->read_func=bus_cfg->i2c_read_func;
         bus->ref_cxt=bus_cfg->ref_cxt;
         bus->bus_data=bus_cfg->bus_data;
-        strncpy(bus->i2c_adap.name,bus_name,sizeof(bus->i2c_adap.name));
+        strscpy(bus->i2c_adap.name,bus_name,sizeof(bus->i2c_adap.name));
         
         bus->i2c_adap.owner= THIS_MODULE;
         bus->i2c_adap.algo=&i2c_model_bus_algo;        	

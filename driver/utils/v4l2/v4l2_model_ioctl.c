@@ -226,12 +226,12 @@ int v4l2_model_ioctl_querycap(struct file *file, void *fh, struct v4l2_capabilit
 
 	if(v4l2m_context)
 	{
-		strncpy(cap->driver, v4l2m_context->device_info.driver_name,sizeof(cap->driver));
+		strscpy(cap->driver, v4l2m_context->device_info.driver_name,sizeof(cap->driver));
 		
 		//if (subsystem_id == 0x5113)
-		    //strncpy(cap->card, v4l2m_context->device_info.card_name_1,sizeof(cap->card));
+		    //strscpy(cap->card, v4l2m_context->device_info.card_name_1,sizeof(cap->card));
 		//else
-		    strncpy(cap->card, v4l2m_context->device_info.card_name,sizeof(cap->card));    
+		    strscpy(cap->card, v4l2m_context->device_info.card_name,sizeof(cap->card));    
         
         sprintf(cap->bus_info, "%s", dev_name(v4l2m_context->dev));
 		if(v4l2m_context->device_info.capabilities)
