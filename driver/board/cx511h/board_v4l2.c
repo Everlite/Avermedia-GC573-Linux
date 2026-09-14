@@ -67,6 +67,11 @@ module_param(auto_test_byteorder, int, 0644);
 MODULE_PARM_DESC(auto_test_byteorder,
     "Auto-test: cycle through byte orders 0-3 on stream_on and dump first pixels");
 
+/* Set before the FPGA starts DMA: the first V-DESC can fire before
+ * framegrabber sets FRAMEGRABBER_STATUS_V4L_START_STREAMING_BIT, and dropping
+ * that frame without a doorbell stalls the descriptor chain for good. */
+static atomic_t cx511h_dma_streaming = ATOMIC_INIT(0);
+
 /* Module parameter: normalize the ITE6805's unreliable timing to 1080p60.
  * 1 (default) = force pixel_clock=148500000 / fps=60 and clean dual_pixel/
  *               ddr_mode in ITE6805_LOCK mode and stream_on.
@@ -230,7 +235,8 @@ static framegrabber_setup_input_info_t cl511h_input_info[] =
 static framegrabber_property_t  cl511h_property={
 		.name="CL511H",
 		.input_setup_info=cl511h_input_info,
-		.support_out_pixfmt_mask=FRAMEGRABBER_PIXFMT_BITMSK, // Re-enable all formats for debugging OBS hang
+		// The FPGA ignores vip_cfg.pixel_format and always delivers YUYV byte order
+		.support_out_pixfmt_mask=FRAMEGRABBER_PIXFMT_YUYV_BIT,
 		//.max_supported_line_width=3840,
 		//.max_supported_line_width=4096,
         .max_frame_size=4096 *2160,
@@ -459,6 +465,14 @@ static void cx511h_stream_on(framegrabber_handle_t handle)
 
     if (!ite6805_handle) {
         printk(KERN_ERR "[cx511h-ttl] ERROR: ite6805_handle is NULL in stream_on!\n");
+        return;
+    }
+
+    /* framegrabber_mask_s_status() calls stream_on again right after
+     * VIDIOC_STREAMON; config_video_process() would then wipe the DMA
+     * descriptor ring programmed by buffer_prepare and stall the stream. */
+    if (atomic_read(&cx511h_dma_streaming)) {
+        printk(KERN_ERR "[cx511h-dma] stream_on: already streaming, keeping the DMA ring\n");
         return;
     }
 
@@ -901,6 +915,7 @@ static void cx511h_stream_on(framegrabber_handle_t handle)
     /* Flush all printk messages to the log buffer so they survive a crash */
     printk(KERN_ERR "[cx511h-dma] stream_on: >>> ENABLING STREAMING NOW <<<\n");
 
+    atomic_set(&cx511h_dma_streaming, 1);
     aver_xilinx_enable_video_streaming(board_v4l2_cxt->aver_xilinx_handle, TRUE);
     printk(KERN_ERR "[cx511h-dma] stream_on: AFTER enable_video_streaming — survived!\n");
     
@@ -965,6 +980,7 @@ static void cx511h_stream_off(framegrabber_handle_t handle)
     
     printk(KERN_ERR "[cx511h-ttl] Stream OFF - Cleaning up...\n");
 
+    atomic_set(&cx511h_dma_streaming, 0);
     aver_xilinx_enable_video_streaming(board_v4l2_cxt->aver_xilinx_handle,FALSE);
 }
 
@@ -1179,6 +1195,9 @@ static bool cx511h_v4l2_streaming_active(board_v4l2_context_t *board_v4l2_cxt)
     if (!board_v4l2_cxt || !board_v4l2_cxt->fg_handle)
         return false;
 
+    if (atomic_read(&cx511h_dma_streaming))
+        return true;
+
     st = framegrabber_g_status(board_v4l2_cxt->fg_handle);
     return (st & FRAMEGRABBER_STATUS_V4L_START_STREAMING_BIT) != 0;
 }
@@ -1334,6 +1353,14 @@ static void cx511h_v4l2_buffer_prepare(v4l2_model_callback_parameter_t *cb_info)
         unsigned long total_size = 0;   /* [gc573-debug] sum of programmed SG sizes */
         
         framegrabber_g_out_framesize(board_v4l2_cxt->fg_handle,&width,&height);
+        if ((width == 0) || (height == 0))
+        {
+            /* No S_FMT yet: a zero-sized frame programs zero-length DMA
+             * descriptors, the FPGA then drops off the PCIe bus. */
+            width = 1920;
+            height = 1080;
+            framegrabber_s_out_framesize(board_v4l2_cxt->fg_handle,width,height);
+        }
         bytesperline=framegrabber_g_out_bytesperline(board_v4l2_cxt->fg_handle);
         framebufsize=bytesperline*height; 
         //debug_msg("%s %dx%d framesize %u\n",__func__,width,height,framebufsize);
@@ -1341,7 +1368,7 @@ static void cx511h_v4l2_buffer_prepare(v4l2_model_callback_parameter_t *cb_info)
         printk(KERN_ERR "[cx511h-dma] buffer_prepare: %dx%d bpl=%u framesize=%u buf_count=%d\n",
                width, height, bytesperline, framebufsize, buffer_info->buf_count[0]);
 
-        for(i=0,desc=buffer_info->buf_info[0],remain=framebufsize;i<buffer_info->buf_count[0];i++)
+        for(i=0,desc=buffer_info->buf_info[0],remain=framebufsize;i<buffer_info->buf_count[0] && remain;i++)
         {
             printk(KERN_ERR "[cx511h-dma]   desc[%d]: dma_addr=0x%08lx size=0x%lx (%lu) remain=%u\n",
                    i, desc[i].addr, desc[i].size, desc[i].size, remain);
@@ -1894,6 +1921,7 @@ void board_v4l2_init(cxt_mgr_handle_t cxt_mgr, int board_id)
 
         ite6805_register_callback(board_v4l2_cxt->i2c_chip_handle[CL511H_I2C_CHIP_ITE6805_0],cx511h_ite6805_event,board_v4l2_cxt);
         framegrabber_start(framegrabber_handle);
+        framegrabber_s_out_framesize(framegrabber_handle,1920,1080);
         cxt_manager_ref_context(aver_xilinx_handle);
 
         /* Set initial LED color: blue = driver loaded, waiting for signal */
