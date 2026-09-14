@@ -271,15 +271,12 @@ int v4l2_model_ioctl_enum_fmt_vid_cap(struct file *file, void *fh, struct v4l2_f
 		{
 		    pixfmt=framegrabber_g_support_pixelfmt_by_index(v4l2m_context->framegrabber_handle,f->index);
 		    //printk("%s..pixfmt=%d.\n",__func__,f->index);
+		    if(pixfmt==NULL)
+			    return -EINVAL;
 		    f->index = index;
 		    f->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-		    strscpy(f->description, pixfmt->name, sizeof(f->description));
-		    f->pixelformat=pixfmt->fourcc;
 		}
-		
-		
-		if(pixfmt==NULL)
-			return -EINVAL;
+
         //printk("%s....pixfmt=%d.\n",__func__,f->index);
 		strscpy(f->description, pixfmt->name, sizeof(f->description));
 		f->pixelformat=pixfmt->fourcc;
