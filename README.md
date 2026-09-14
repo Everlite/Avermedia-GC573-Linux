@@ -7,7 +7,7 @@
 Community-maintained, AI-assisted Linux driver for the AVerMedia GC573 (PCI `1461:0054`, subsystem `1461:5730`).
 Modernized for recent kernels. **Experimental — development and testing only.**
 
-**Last aligned with code:** 2026-08-01 · **Phase 4 stable; Phase 4b (picture) open**
+**Last aligned with code:** 2026-09-15 · **Video (1080p60) and audio capture working**
 
 > [!NOTE]
 > **Vendor blob:** Links against `AverMediaLib_64.a` in the **repository root** (~565 KB). The Makefile copies it to `driver/AverMediaLib_64.o` at build time. Redistribution of the blob may be restricted — see [Legal](#legal--compliance).
@@ -24,25 +24,54 @@ Modernized for recent kernels. **Experimental — development and testing only.*
 | Area | Status | Notes |
 |:---|:---:|:---|
 | **Build / load** | ✅ | `LLVM=1 CC=clang`; `insmod.sh` / `unload.sh` |
-| **reload / unload script** | ✅ | `insmod.sh` delegates to `unload.sh` when already loaded (no reboot); remaining wedge case is a driver teardown hang (Known issues #4) |
+| **reload / unload script** | ✅ | `insmod.sh` delegates to `unload.sh` when already loaded; the teardown page fault that wedged the module is fixed (Phase 5) |
 | **Probe / insmod** | ✅ | No hard-freeze when I2C IRQ opt-in ACK is active |
 | **HDMI lock** | ✅ | ITE6805 events; **1080p-max EDID now advertised** (patched at build time) |
 | **Phase 4 pipeline** | ✅ | Boot-time `iTE6805_Hardware_Init()`; MMIO-only `stream_on`; blob owns scaler/CSC |
 | **V-DESC / DMA IRQ** | ✅ | Hook on `0x10` bit `0x2`; descriptor chain + handoff guards |
 | **DMA to host RAM** | ✅ | `q->dev` binding + `dma_sync_*` on buffer done; full 1920×1080 frames delivered |
-| **Userspace picture** | 🟡 | 1080p lock OK + full frames, but still constant filler (`0x10 0x80`) — see Phase 4b |
-| **Audio** | 🟡 | ALSA capture PCM registers (Card “CL511H Stereo”), recognized by PipeWire/Discord; no captured audio bits |
-| **Daily use** | ❌ | Capture testing only |
+| **Userspace picture** | ✅ | YUYV 1920×1080 at 60 fps, continuous (SMPTE bars captured bit-exact) — see Phase 5 |
+| **Audio** | ✅ | ALSA capture, 16-bit stereo LPCM at the source rate (32/44.1/48 kHz) — see Phase 5 |
+| **Daily use** | 🟡 | Works with `v4l2-ctl` / `ffmpeg`; HDCP sources are masked by design |
 
 ### Development phases
 
 | Phase | Status | Summary |
 |:---|:---:|:---|
 | **1** — RE & bring-up | ✅ | Kernel port, probe, FPGA / ITE6805 attach |
-| **2** — DMA / IRQ | ✅ | V-DESC hook, doorbell `0x304 ← 0x01`, descriptor chain understood |
+| **2** — DMA / IRQ | ✅ | V-DESC hook, descriptor chain understood (the `0x304 ← 0x01` doorbell was later found harmful, see Phase 5) |
 | **3** — DMA coherency | ✅ | `q->dev = dev` in vb2; cache sync before handoff |
 | **4** — Stable streaming path | ✅ **BREAKTHROUGH** | No I2C writes at stream time; boot bootstrap; 1080p-max EDID; full frames delivered |
-| **4b** — Picture quality | 🟡 | 1080p lock + full DMA frames + V-DESC IRQ confirmed; TTL 444 + deferred re-assert + 1080p60 timing normalization applied, but payload stays constant filler — ingest datapath (`ddr_mode`) is the next suspicion (see Phase 4b) |
+| **4b** — Picture quality | ✅ | TTL 444 + deferred re-assert + 1080p60 timing normalization; the remaining filler came from the hot-plug GPIO and the source never locking (see Phase 5) |
+| **5** — Continuous capture & audio | ✅ **BREAKTHROUGH** | Ring owned by the blob, red zone patch, zero-size DMA fix, HDMI audio EDID, ALSA constraints |
+
+---
+
+## Phase 5 — Continuous capture and audio (2026-09)
+
+Tested on kernel 7.2 (Arch, GCC build) in a VFIO passthrough VM, with an HDMI loopback from an
+AMD GPU and SMPTE bars / a 1 kHz tone as references.
+
+| # | Problem | Fix |
+|:---|:---|:---|
+| 1 | `rmmod` page fault in `pci_model_mmio_read()`, module wedged (`refcnt -1`) | BARs unmapped only after `cxt_manager_release()` (`pci_model.c`) |
+| 2 | FPGA GPIO pin 5 ("blue LED") driven low on lock drops the source hot-plug: FPGA sees `size 0x0` | `led_pin_b` defaults to `-1` |
+| 3 | The FPGA ignores `vip_cfg.pixel_format` and always delivers YUYV | Only YUYV is advertised |
+| 4 | `VIDIOC_ENUM_FMT` NULL dereference past the last format | `-EINVAL` before dereferencing |
+| 5 | No `S_FMT` → frame size 0 → zero-length DMA descriptors → the FPGA drops off the PCIe bus (MMIO reads `0xffffffff`, host platform reset) | Default 1920×1080, descriptor loop stops at `remain == 0` |
+| 6 | First V-DESC fires before `START_STREAMING` is set; `framegrabber_mask_s_status()` calls `stream_on` again and `config_video_process()` wipes the ring | `cx511h_dma_streaming` flag, `stream_on` ignored while streaming |
+| 7 | The board path wrote `0x304 = 0x01` after every frame, clearing the slot arm bits set by the blob: capture stalled after a few frames | The blob owns the ring (`legacy_doorbell=0`) |
+| 8 | `AverMediaLib_64.a` built without `-mno-red-zone`: interrupts corrupt 80 leaf functions (oops `0x297 + 0x58`, `0x297` = RFLAGS) | `driver/patch_redzone.py`: `push %rbp; mov %rsp,%rbp` → `enter $0x100,$0`, `pop %rbp` → `leave` |
+| 9 | Injected EDID had no audio flag and no HDMI VSDB: sources treat the card as DVI, no audio | CEA block rewritten (LPCM 2ch 32/44.1/48 kHz, speaker allocation, VSDB) |
+| 10 | ALSA advertised S24 and up to 192 kHz without any rate constraint | S16_LE at 32/44.1/48 kHz, rate locked to the source rate measured by the FPGA |
+| 11 | ~760 kernel log lines per second while streaming | Per-buffer logs behind `dma_debug` |
+
+**Results:** SMPTE bars captured bit-exact (mean absolute error 0.3/255), 6000 frames at 60 fps
+without any oops, 1 kHz tone captured at 48 kHz (THD+N −76 dB, no dropout), combined A/V capture
+with `v4l2-ctl` + ALSA.
+
+**HDCP:** sources that enable HDCP encryption (iPhone, MacBook) get the copy-protection filler
+image. This is intended.
 
 ---
 
@@ -125,7 +154,7 @@ Hardware asserts IRQ bit **`0x800`** [I2C complete] continuously. **Fix in `pci_
 
 ---
 
-## Phase 4b — Picture quality (open — resume here)
+## Phase 4b — Picture quality (historical, resolved in Phase 5)
 
 **Where we are (2026-08-01):** With the 1080p EDID fix the card locks to `1920x1080p`,
 `dual=0`, `bypass=0`, and **full 4,147,200-byte DMA frames** reach userspace
@@ -241,10 +270,14 @@ Missing `q->dev` caused **silent skip** of `dma_sync_*` → CPU read stale zeros
 | `hdmirxwr()` / ITE6805 **writes** during `stream_on` | **Hard-freeze** |
 | Manual `pci_model_mmio_write(0x1040, …)` after blob config | **Corrupt / zero payload** |
 | `0x304 ← 0x07` at `stream_on` (arm slots before ring ready) | **Hard-freeze** |
+| Any board-side write to `0x304` or ACK of `0x10` while streaming | Clears the slot arm bits set by the blob → **capture stalls** |
 | Write V4L2 frame address into `0x308` | Wrong semantics — `0x308` is **chain pointer**, not frame |
+| Capture without a frame size (no `S_FMT` on an old build) | Zero-length DMA descriptors → **FPGA off the bus, host reset** |
+| Linking the blob without `patch_redzone.py` | Random corruption from interrupts |
 | GStreamer helper scripts (`gst_1.0_raw_video*.sh`) | Legacy, risky — use `v4l2-ctl` instead |
 
-**Safe doorbell:** `0x304 ← 0x01` only (run bit, no slot arm at stream start).
+**Ring ownership:** the blob programs and arms the descriptor slots itself; the board path only
+prepares descriptor lists and hands buffers back.
 
 ---
 
@@ -259,10 +292,11 @@ Source: `driver/board/cx511h/board_v4l2.c` → `cx511h_stream_on()`.
 5. Re-seal **`vip_cfg`** for downscale path if `fe_frameinfo` > output resolution
 6. **`aver_xilinx_config_video_process(&vip_cfg)`** — blob only; no manual `0x1040`
 7. `msleep(200)`; optional pixel-format debug (`debug_pixel_format`, `auto_test_byteorder`)
-8. **`aver_xilinx_enable_video_streaming(TRUE)`**
-9. Doorbell **`0x304 ← 0x01`**
+8. Set `cx511h_dma_streaming`, then **`aver_xilinx_enable_video_streaming(TRUE)`** (the blob transfers the ready descriptor lists and sets the run bit)
 
-**Per frame:** V-DESC IRQ → `cx511h_video_buffer_done()` → handoff guard → `dma_sync_*` → `v4l2_model_buffer_done()` → doorbell / IRQ ACK.
+A second `stream_on` while streaming returns immediately.
+
+**Per frame:** V-DESC IRQ → blob `aver_xilinx_irq_func()` (clears the completed slot bit, ACKs `0x10`) → blob video DPC → `cx511h_video_buffer_done()` → handoff guard → `dma_sync_*` → `v4l2_model_buffer_done()`. The blob then transfers the next ready descriptor list.
 
 **`stream_off`:** `aver_xilinx_enable_video_streaming(FALSE)` only.
 
@@ -285,7 +319,12 @@ Source: `driver/board/cx511h/board_v4l2.c` → `cx511h_stream_on()`.
 | **0x10** bit `0x2` | V-DESC complete (video frame done) |
 | **0x10** bit `0x800` | I2C engine (opt-in ACK) |
 | **0x300** `& 7` | Active descriptor slot index |
-| **0x304** bit `0` | Stream run / doorbell — use **`0x01`** |
+| **0x304** bit `0` | Stream run — set by the blob in `enable_video_streaming()` |
+| **0x304** bits `1..4` | Slot arm bits (`1 << (slot + 1)`) — set by `tranfer_desclist()`, cleared by `irq_func()` |
+| **0x10** bit `0x20` | A-DESC complete (audio chunk done) |
+| **0x200..0x21c**, **0x2b4..0x2c0** | Audio DMA setup (`start_audio_streaming()`): chunk size, 2 buffer addresses, channel map |
+| **0x8** bit `0x2` | Audio enable |
+| **0x10a0** | Audio clock period: rate = 100000000 / value (`get_audioinfo()`) |
 | **0x308 + n·0xc** | Descriptor **chain** bus addr (low) — not the frame buffer |
 | **0x30c + n·0xc** | Descriptor chain bus addr (high) |
 | **0x310 + n·0xc** | **Descriptor count** (SG fragments, e.g. `0x7`) — not byte size |
@@ -329,7 +368,8 @@ Wait for `cx511h_ite6805_event locked fe 1920x1080p …` in `dmesg`, then captur
 sudo v4l2-ctl -d /dev/videoX --set-fmt-video=width=1920,height=1080 \
   --stream-mmap=3 --stream-count=1 --stream-to=/tmp/frame.raw
 xxd /tmp/frame.raw | head -4
-ffplay -f v4l2 -input_format uyvy422 -video_size 1920x1080 -framerate 60 /dev/videoX
+ffplay -f v4l2 -input_format yuyv422 -video_size 1920x1080 -framerate 60 /dev/videoX
+ffmpeg -f alsa -ch_layout stereo -sample_rate 48000 -i hw:CL511H -t 5 /tmp/audio.wav
 ```
 
 **Unload / reload without reboot:**
@@ -349,10 +389,8 @@ sudo ./reload.sh     # unload + insmod the freshly built cx511h.ko
 > release of capture/ALSA holders + clean rmmod) instead of a blind `rmmod -f`, so reloading
 > after a rebuild works without a reboot in the normal case.
 >
-> ⚠️ **The one remaining reboot case:** if the *driver's own teardown path* hangs, `rmmod` dies
-> with `refcnt=-1 / initstate=going` (module WEDGED) and only a reboot can clear it — even the
-> safe release order can't help. This is a known driver-side bug being investigated (see
-> Phase 4b / Known issues #4). Until it's fixed, a fully wedged module still needs `reboot → sudo ./insmod.sh`.
+> The teardown page fault that used to wedge the module (`refcnt=-1 / initstate=going`) is fixed
+> (Phase 5, BARs unmapped after the board contexts are released).
 
 
 ### Debug log filter
@@ -393,7 +431,10 @@ xxd /tmp/frame.raw | head -4
 | `auto_test_byteorder` | 0 | Cycle formats on stream_on (MMIO peek) |
 | `no_signal_pic` | NULL | Bitmap path when no signal |
 | `copy_protection_pic` | NULL | Bitmap when content is HDCP-protected. **Insmod name today:** `copy_protetion_pic` — upstream typo in `board_config.c` (missing `c` in *protection*) |
-| `led_pin_r/g/b` | 3/4/5 | GPIO LED pins (-1=off) |
+| `led_pin_r/g` | 3/4 | GPIO LED pins (-1=off) |
+| `led_pin_b` | -1 | Pin 5 is **not** a LED: driving it low drops the HDMI hot-plug |
+| `legacy_doorbell` | 0 | 1 = also write `0x304=0x01` / ACK `0x10` from the board path (stalls capture) |
+| `dma_debug` | 0 | 1 = log every DMA descriptor list programmed in `buffer_prepare` |
 
 ---
 
@@ -407,28 +448,34 @@ xxd /tmp/frame.raw | head -4
 | PCI | `driver/utils/pci/pci_model.c` | MMIO, V-DESC hook, I2C opt-in ACK |
 | V4L2 | `driver/utils/v4l2/` | videobuf2, framegrabber, cache sync |
 | Blob | `AverMediaLib_64.a` | ITE6805, IT6664, aver_xilinx, scaler |
+| Build | `driver/patch_edid.py` | 1080p-max EDID with HDMI audio, written into the blob |
+| Build | `driver/patch_redzone.py` | Makes the blob's leaf functions reserve their stack frame |
 
 ---
 
 ## Known issues (honest list)
 
-1. **Picture is still constant filler** — DMA fully works (full 1920×1080 frames), 1080p lock is correct, the FPGA `[gc573-intercept]` V-DESC hook confirms real DMA transfers, but the content is a constant `0x10 0x80` (Y=128). The video datapath is not feeding real pixels. See **Phase 4b** for the current fixes (TTL 444, 1080p60 timing normalizer) and remaining next steps. **This is the #1 open issue.**
+1. **HDCP content is masked** — when the source enables HDCP encryption (iPhone, MacBook, protected video) the driver delivers the copy-protection filler image. This is intended; use a source that does not encrypt.
 
 2. **No I2C writes while streaming** — by design. Do not re-enable TTL/unmute/streaming I2C blocks without new safety analysis.
 
 3. **4K metadata split** — `ITE6805_LOCK` forces **1920×1080** into framegrabber for caps; FPGA **`vip_cfg`** uses **physical** `fe_frameinfo` for scaler. Both are intentional. (With the 1080p-max EDID this is now mostly moot, source negotiates 1080p.)
 
-4. **A reload can still wedge the module (reboot needed)** — `insmod.sh` now delegates to `./unload.sh` when the module is already loaded, so the old blind `rmmod -f` (which left the module loaded with OLD code and forced a reboot) is gone. However, if the **driver's own teardown path hangs**, `rmmod` dies with `refcnt=-1 / initstate=going` (module WEDGED) and only a reboot can clear it — even the safe release order can't help. The dangerous PCI-remove fallback remains removed (never touches the bus). Fixing the teardown hang is the priority before further iteration. See Phase 4b ("Current blocker") and Build & quick start warning.
+4. **No reconfiguration on a new lock while streaming** — `stream_on` is ignored while streaming (Phase 5, fix 6), so a source changing resolution mid-capture needs the capture to be restarted.
 
 5. **GStreamer scripts** (`gst_1.0_raw_video*.sh`) — legacy / risky; use `v4l2-ctl` or `ffplay`.
 
 6. **Module refcnt pinned** — audio holders (PipeWire / Discord) keep the CL511H PCM open and hold `refcnt` at 1, blocking `rmmod`/`reload`. `unload.sh` releases them; `insmod.sh` delegates to it on reload. If the module truly wedges (`refcnt −1`, `GOING` — driver teardown hang) only a reboot helps. The dangerous PCI-remove path stays removed.
 
-7. **Audio** — ALSA PCM registers and looks like a capture device ("CL511H Stereo"), but no captured audio bits are delivered yet.
+7. **Audio is 16-bit stereo LPCM only** — the capture rate follows the source (32/44.1/48 kHz, measured by the FPGA) and is locked when the PCM is opened; no compressed audio passthrough.
 
 8. **Legacy suspend/resume** — not migrated to `dev_pm_ops`.
 
 9. **`vactive`/`hactive` naming** — vendor convention in `vip_cfg`: **`vactive` = horizontal width**, **`hactive` = vertical height** (not Linux/V4L2 semantics). In `stream_on`, `fe_frameinfo->width` → `vip_cfg.in_videoformat.vactive` and `fe_frameinfo->height` → `vip_cfg.in_videoformat.hactive`. Do not “fix” without checking bypass tables.
+
+10. **1080p max** — the injected EDID advertises 1080p60 as the highest mode, so 4K sources output 1080p.
+
+11. **Vendor blob patched at build time** — `patch_edid.py` (EDID tables) and `patch_redzone.py` (stack frames) run on every build; linking the unpatched blob brings back random interrupt corruption.
 
 ---
 
