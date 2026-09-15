@@ -93,6 +93,46 @@ MODULE_PARM_DESC(dma_debug,
  *     normalized 1080p60 values block the FPGA DMA ingest).
  * Change without rebuild:  echo 0 > /sys/module/cx511h/parameters/normalize_timing
  */
+/* The ITE6805 reports pixel_clock in kHz, but the normalize paths below store
+ * 148500000 (Hz).  Compare in kHz whatever the unit. */
+#define CX511H_DUAL_PIXEL_PCLK_KHZ 170000
+static inline U32_T cx511h_pclk_khz(U32_T pixel_clock)
+{
+    return pixel_clock >= 10000000 ? pixel_clock / 1000 : pixel_clock;
+}
+
+/* The ITE6805 under-reads pixel_clock and framerate by the same factor
+ * (126457 kHz / 51 fps for 1080p60, 253526 kHz / 26 fps for 2160p30).  Rescale
+ * the rate against the nearest standard pixel clock and snap it; a rate left
+ * at 26 makes the FPGA duplicate frames up to ~50 fps. */
+static U32_T cx511h_true_framerate(U32_T framerate, U32_T pixel_clock)
+{
+    static const U32_T std_khz[] = { 25200, 27000, 74250, 148500, 297000, 594000 };
+    static const U32_T std_fps[] = { 24, 25, 30, 50, 60, 100, 120 };
+    U32_T khz = cx511h_pclk_khz(pixel_clock);
+    U32_T ref = 0, scaled, i;
+
+    if (framerate == 0 || khz == 0)
+        return framerate;
+    for (i = 0; i < ARRAY_SIZE(std_khz); i++) {
+        if (khz * 100 >= std_khz[i] * 80 && khz * 100 <= std_khz[i] * 105) {
+            ref = std_khz[i];
+            break;
+        }
+    }
+    if (!ref)
+        return framerate;
+    /* the measured rate is an integer, so 24p can come out as 23 */
+    scaled = (U32_T)(((u64)framerate * ref + khz / 2) / khz);
+    for (i = 0; i < ARRAY_SIZE(std_fps); i++) {
+        U32_T diff = scaled > std_fps[i] ? scaled - std_fps[i] : std_fps[i] - scaled;
+
+        if (diff * 100 <= std_fps[i] * 5)
+            return std_fps[i];
+    }
+    return scaled;
+}
+
 static int normalize_timing = 1;
 module_param(normalize_timing, int, 0644);
 MODULE_PARM_DESC(normalize_timing,
@@ -554,7 +594,8 @@ static void cx511h_stream_on(framegrabber_handle_t handle)
         int needs_downscale = 0;
 
         vip_cfg.in_videoformat.fps = fe_frameinfo->framerate ?
-            fe_frameinfo->framerate : framegrabber_g_input_framerate(board_v4l2_cxt->fg_handle);
+            cx511h_true_framerate(fe_frameinfo->framerate, fe_frameinfo->pixel_clock) :
+            framegrabber_g_input_framerate(board_v4l2_cxt->fg_handle);
         vip_cfg.packet_colorspace = fe_frameinfo->packet_colorspace;
         vip_cfg.in_videoformat.vactive = phy_w;
         vip_cfg.in_videoformat.hactive = phy_h;
@@ -565,7 +606,7 @@ static void cx511h_stream_on(framegrabber_handle_t handle)
         vip_cfg.clip_size.width = phy_w;
         vip_cfg.clip_size.height = phy_h;
 
-        if (fe_frameinfo->pixel_clock > 170000000 || phy_w > 1920 ||
+        if (cx511h_pclk_khz(fe_frameinfo->pixel_clock) > CX511H_DUAL_PIXEL_PCLK_KHZ || phy_w > 1920 ||
             fe_frameinfo->dual_pixel || fe_frameinfo->dual_pixel_like)
             vip_cfg.dual_pixel = 1;
         else
@@ -1567,12 +1608,12 @@ static void check_signal_stable_task(void *data)
             ite6805_get_sampingmode(ite6805_handle, &sampling);
             /* the PS5 sends RGB; trust AVI sampling==0 as well as colorspace */
             if (eff_cs != 0 || sampling == 0) {
-                ttl_fmt = (fe_frameinfo->pixel_clock > 170000000 ||
+                ttl_fmt = (cx511h_pclk_khz(fe_frameinfo->pixel_clock) > CX511H_DUAL_PIXEL_PCLK_KHZ ||
                            fe_frameinfo->dual_pixel_like)
                               ? ITE6805_OUT_FORMAT_SDR_444_2X24_INTERLEAVE_MODE0
                               : ITE6805_OUT_FORMAT_SDR_444_24;
             } else {
-                ttl_fmt = (fe_frameinfo->pixel_clock > 170000000 ||
+                ttl_fmt = (cx511h_pclk_khz(fe_frameinfo->pixel_clock) > CX511H_DUAL_PIXEL_PCLK_KHZ ||
                            fe_frameinfo->dual_pixel_like)
                               ? ITE6805_OUT_FORMAT_SDR_422_2X24_INTERLEAVE_MODE0
                               : ITE6805_OUT_FORMAT_SDR_ITU656_24_MODE0;
@@ -1700,6 +1741,9 @@ static void cx511h_ite6805_event(void *cxt,ite6805_event_e event)
 
 
    
+            fe_frameinfo->framerate = cx511h_true_framerate(fe_frameinfo->framerate,
+                                                            fe_frameinfo->pixel_clock);
+
 //work around for ITE6805 detect issue      
             if ((fe_frameinfo->is_interlace==0) && ((fe_frameinfo->height == 240) || (fe_frameinfo->height == 288)))
             {
@@ -1750,7 +1794,7 @@ static void cx511h_ite6805_event(void *cxt,ite6805_event_e event)
                  * mode says RGB (per-pixel, not 4:2:2/4:4:4 interleaved) */
                 is_rgb = (eff_colorspace != 0) || (sampling == 0);
 
-                if((fe_frameinfo->pixel_clock>170000000/*150000*/) || (fe_frameinfo->dual_pixel_like ==1))//rr1012
+                if((cx511h_pclk_khz(fe_frameinfo->pixel_clock)>CX511H_DUAL_PIXEL_PCLK_KHZ) || (fe_frameinfo->dual_pixel_like ==1))//rr1012
                 {
                     if(!is_rgb) /* YUV */
                         out_format=ITE6805_OUT_FORMAT_SDR_422_2X24_INTERLEAVE_MODE0;//ITE6805_OUT_FORMAT_SDR_422_24_MODE4;//ADV7619_OUT_FORMAT_SDR_422_2X24_INTERLEAVE_MODE0; //1003

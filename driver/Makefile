@@ -90,8 +90,12 @@ clean:
 #
 # The blob was also built without -mno-red-zone: patch_redzone.py makes its
 # leaf functions reserve their stack frame so interrupts cannot corrupt them.
+#
+# GC573_EDID=vendor keeps the vendor 4K60 EDID tables instead.
+GC573_EDID ?= 1080p
+
 $(obj)/AverMediaLib_64.o: $(src)/../AverMediaLib_64.a $(src)/patch_edid.py $(src)/patch_redzone.py
 	cp "$<" "$@"
-	python3 "$(src)/patch_edid.py" "$@"
+	$(if $(filter vendor,$(GC573_EDID)),@echo "[patch-edid] skipped: vendor EDID kept",python3 "$(src)/patch_edid.py" "$@")
 	python3 "$(src)/patch_redzone.py" "$@"
 	@echo 'cmd_$@ := cp $< $@' > $(obj)/.AverMediaLib_64.o.cmd
