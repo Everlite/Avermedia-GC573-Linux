@@ -26,11 +26,12 @@ Modernized for recent kernels. **Experimental — development and testing only.*
 | **Build / load** | ✅ | `LLVM=1 CC=clang`; `insmod.sh` / `unload.sh` |
 | **reload / unload script** | ✅ | `insmod.sh` delegates to `unload.sh` when already loaded; the teardown page fault that wedged the module is fixed (Phase 5) |
 | **Probe / insmod** | ✅ | No hard-freeze when I2C IRQ opt-in ACK is active |
-| **HDMI lock** | ✅ | ITE6805 events; **1080p-max EDID now advertised** (patched at build time) |
+| **HDMI lock** | ✅ | ITE6805 events; 1080p-max EDID by default, vendor 4K60 EDID with `GC573_EDID=vendor` |
 | **Phase 4 pipeline** | ✅ | Boot-time `iTE6805_Hardware_Init()`; MMIO-only `stream_on`; blob owns scaler/CSC |
 | **V-DESC / DMA IRQ** | ✅ | Hook on `0x10` bit `0x2`; descriptor chain + handoff guards |
 | **DMA to host RAM** | ✅ | `q->dev` binding + `dma_sync_*` on buffer done; full 1920×1080 frames delivered |
 | **Userspace picture** | ✅ | YUYV 1920×1080 at 60 fps, continuous (SMPTE bars captured bit-exact) — see Phase 5 |
+| **4K capture** | ✅ | YUYV 3840×2160, 24–60 Hz sources captured at 60 fps (`GC573_EDID=vendor`, `normalize_timing=0`) — see Phase 6 |
 | **Audio** | ✅ | ALSA capture, 16-bit stereo LPCM at the source rate (32/44.1/48 kHz) — see Phase 5 |
 | **Daily use** | 🟡 | Works with `v4l2-ctl` / `ffmpeg`; HDCP sources are masked by design |
 
@@ -44,6 +45,25 @@ Modernized for recent kernels. **Experimental — development and testing only.*
 | **4** — Stable streaming path | ✅ **BREAKTHROUGH** | No I2C writes at stream time; boot bootstrap; 1080p-max EDID; full frames delivered |
 | **4b** — Picture quality | ✅ | TTL 444 + deferred re-assert + 1080p60 timing normalization; the remaining filler came from the hot-plug GPIO and the source never locking (see Phase 5) |
 | **5** — Continuous capture & audio | ✅ **BREAKTHROUGH** | Ring owned by the blob, red zone patch, zero-size DMA fix, HDMI audio EDID, ALSA constraints |
+| **6** — Native 4K | ✅ | Pixel clock unit fix, frame rate correction, vendor EDID build switch |
+
+---
+
+## Phase 6 — Native 4K (2026-09)
+
+Build with `./build.sh GC573_EDID=vendor` to keep the vendor 4K60 EDID tables, and load with
+`normalize_timing=0` so the lock handler does not force 1080p.
+
+| # | Problem | Fix |
+|:---|:---|:---|
+| 1 | The ITE6805 reports `pixel_clock` in kHz, but the dual-pixel and TTL output format decisions compared it with 170000000 Hz: 4K never selected the `2X24_INTERLEAVE` format | `cx511h_pclk_khz()`, compare in kHz whatever the unit |
+| 2 | The ITE6805 under-reads the frame rate by the same factor as the pixel clock (26 fps for 2160p30, 51 for 1080p60) | `cx511h_true_framerate()`, rescaled against the nearest standard pixel clock |
+| 3 | FPGA registers cannot be read from userspace while the driver holds BAR0 | `reg_read` debug parameter |
+
+**Results:** 3840×2160 YUYV sources at 24, 25, 30, 50 and 60 Hz captured at 60 fps (the FPGA repeats
+frames for lower source rates). A 4K60 moving pattern gives 120/120 unique frames. RGB and YCbCr 4:2:0 sources
+have correct colours. The blob does not implement a 4K → 1080p downscale (clip and scaler are
+programmed with the output size), so capture at the source resolution.
 
 ---
 
@@ -372,6 +392,15 @@ ffplay -f v4l2 -input_format yuyv422 -video_size 1920x1080 -framerate 60 /dev/vi
 ffmpeg -f alsa -ch_layout stereo -sample_rate 48000 -i hw:CL511H -t 5 /tmp/audio.wav
 ```
 
+Native 4K:
+
+```bash
+./build.sh LLVM=1 CC=clang GC573_EDID=vendor
+sudo insmod cx511h.ko normalize_timing=0
+sudo v4l2-ctl -d /dev/videoX --set-fmt-video=width=3840,height=2160,pixelformat=YUYV \
+  --stream-mmap=4 --stream-count=60 --stream-to=/tmp/4k.yuyv
+```
+
 **Unload / reload without reboot:**
 
 ```bash
@@ -426,7 +455,7 @@ xxd /tmp/frame.raw | head -4
 |:---|:---:|:---|
 | `edid_force_hpd` | 1 | Pulse HPD after `iTE6805_Hardware_Init()` so the source re-reads the 1080p-max EDID (set 0 to skip) |
 | `force_input_mode` | 0 | 0=auto, 1=YUV422, 2=YUV444, 3=RGB full, 4=RGB limited |
-| `normalize_timing` | 1 | Normalize the unreliable ITE6805 timing to 1080p60 (`pixel_clock=148500000`, `fps=60`). Toggle at runtime via `/sys/module/cx511h/parameters/normalize_timing` (no rebuild) for A/B |
+| `normalize_timing` | 1 | Normalize the unreliable ITE6805 timing to 1080p60 (`pixel_clock=148500000`, `fps=60`). Toggle at runtime via `/sys/module/cx511h/parameters/normalize_timing` (no rebuild). **Set 0 for native 4K** |
 | `debug_pixel_format` | -1 | -1=auto; 0–3 force YUV byte order |
 | `auto_test_byteorder` | 0 | Cycle formats on stream_on (MMIO peek) |
 | `no_signal_pic` | NULL | Bitmap path when no signal |
@@ -435,6 +464,7 @@ xxd /tmp/frame.raw | head -4
 | `led_pin_b` | -1 | Pin 5 is **not** a LED: driving it low drops the HDMI hot-plug |
 | `legacy_doorbell` | 0 | 1 = also write `0x304=0x01` / ACK `0x10` from the board path (stalls capture) |
 | `dma_debug` | 0 | 1 = log every DMA descriptor list programmed in `buffer_prepare` |
+| `reg_read` | — | Write-only: `echo 0x300,0x304 > /sys/module/cx511h/parameters/reg_read` logs those FPGA registers |
 
 ---
 
@@ -459,7 +489,7 @@ xxd /tmp/frame.raw | head -4
 
 2. **No I2C writes while streaming** — by design. Do not re-enable TTL/unmute/streaming I2C blocks without new safety analysis.
 
-3. **4K metadata split** — `ITE6805_LOCK` forces **1920×1080** into framegrabber for caps; FPGA **`vip_cfg`** uses **physical** `fe_frameinfo` for scaler. Both are intentional. (With the 1080p-max EDID this is now mostly moot, source negotiates 1080p.)
+3. **4K metadata split** — `ITE6805_LOCK` forces **1920×1080** into framegrabber for caps; FPGA **`vip_cfg`** uses **physical** `fe_frameinfo` for scaler. Both are intentional. (With the default 1080p-max EDID the source negotiates 1080p; for native 4K use `normalize_timing=0`.)
 
 4. **No reconfiguration on a new lock while streaming** — `stream_on` is ignored while streaming (Phase 5, fix 6), so a source changing resolution mid-capture needs the capture to be restarted.
 
@@ -473,7 +503,7 @@ xxd /tmp/frame.raw | head -4
 
 9. **`vactive`/`hactive` naming** — vendor convention in `vip_cfg`: **`vactive` = horizontal width**, **`hactive` = vertical height** (not Linux/V4L2 semantics). In `stream_on`, `fe_frameinfo->width` → `vip_cfg.in_videoformat.vactive` and `fe_frameinfo->height` → `vip_cfg.in_videoformat.hactive`. Do not “fix” without checking bypass tables.
 
-10. **1080p max** — the injected EDID advertises 1080p60 as the highest mode, so 4K sources output 1080p.
+10. **1080p max by default** — the injected EDID advertises 1080p60 as the highest mode. Build with `GC573_EDID=vendor` for 4K; there is no hardware 4K → 1080p downscale, and the frame rate reported for 25 Hz sources can read 24 (integer measurement).
 
 11. **Vendor blob patched at build time** — `patch_edid.py` (EDID tables) and `patch_redzone.py` (stack frames) run on every build; linking the unpatched blob brings back random interrupt corruption.
 
