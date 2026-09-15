@@ -297,7 +297,7 @@ int board_probe(struct device *dev,unsigned long driver_info)
          */
         if (edid_force_hpd) {
             printk(KERN_ALERT "[cx511h-edid] Forcing HPD re-negotiation "
-                   "(EDID is now 1080p-max)...\n");
+                   "(EDID reloaded)...\n");
             x_IssueHotPlug(ite6805_handle_1, HPD_LOW);
             msleep(400);
             x_IssueHotPlug(ite6805_handle_1, HPD_HIGH);

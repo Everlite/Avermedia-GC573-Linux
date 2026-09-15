@@ -81,6 +81,35 @@ module_param(legacy_doorbell, int, 0644);
 MODULE_PARM_DESC(legacy_doorbell,
     "Also write 0x304=0x01 / 0x10=0x02 from the board path (default: 0, the blob manages the ring)");
 
+/* Debug: echo 0x300,0x304,0x1080 > /sys/module/cx511h/parameters/reg_read
+ * logs each FPGA register through the blob's accessor. */
+static handle_t cx511h_reg_handle;
+
+static int cx511h_reg_read_set(const char *val, const struct kernel_param *kp)
+{
+    char buf[128], *cur, *tok;
+    unsigned int offset, data;
+
+    if (!cx511h_reg_handle)
+        return -ENODEV;
+    strscpy(buf, val, sizeof(buf));
+    cur = strim(buf);
+    while ((tok = strsep(&cur, ", ")) != NULL) {
+        if (!*tok)
+            continue;
+        if (kstrtouint(tok, 0, &offset) || offset & 3)
+            return -EINVAL;
+        aver_xilinx_read_register(cx511h_reg_handle, offset, 4, &data);
+        printk(KERN_INFO "[cx511h-reg] 0x%04x = 0x%08x\n", offset, data);
+    }
+    return 0;
+}
+
+static const struct kernel_param_ops cx511h_reg_read_ops = {
+    .set = cx511h_reg_read_set,
+};
+module_param_cb(reg_read, &cx511h_reg_read_ops, NULL, 0200);
+
 static int dma_debug = 0;
 module_param(dma_debug, int, 0644);
 MODULE_PARM_DESC(dma_debug,
@@ -359,6 +388,7 @@ static void *board_v4l2_alloc()
 
 static void board_v4l2_release(void *cxt)
 {
+    cx511h_reg_handle = NULL;
 	board_v4l2_context_t *board_v4l2_cxt=cxt;
 
 	if(board_v4l2_cxt)
@@ -1938,6 +1968,7 @@ void board_v4l2_init(cxt_mgr_handle_t cxt_mgr, int board_id)
 	    }
             
         board_v4l2_cxt->aver_xilinx_handle=aver_xilinx_handle;
+        cx511h_reg_handle=aver_xilinx_handle;
         i2c_mgr=cxt_manager_get_context(cxt_mgr,I2C_CXT_ID,0);
 	    if(i2c_mgr==NULL)
 	    {
