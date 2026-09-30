@@ -20,6 +20,8 @@ Modernized for recent kernels. **Experimental — development and testing only.*
 >
 > Thanks to [Lou Perret](https://github.com/lou-perret). [#7](https://github.com/Everlite/Avermedia-GC573-Linux/pull/7) and [#8](https://github.com/Everlite/Avermedia-GC573-Linux/pull/8) are what turned "DMA delivers filler" into something you can watch. Audio and native 4K in the tables below are still his measurements; this machine has only confirmed the 1080p picture so far.
 
+![PS5 home screen in OBS via the GC573 V4L2 source, 2026-09-30](docs/obs-ps5-2026-09-30.jpg)
+
 ---
 
 ## Status
