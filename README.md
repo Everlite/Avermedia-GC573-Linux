@@ -7,13 +7,18 @@
 Community-maintained, AI-assisted Linux driver for the AVerMedia GC573 (PCI `1461:0054`, subsystem `1461:5730`).
 Modernized for recent kernels. **Experimental — development and testing only.**
 
-**Last aligned with code:** 2026-09-30 · **Video (1080p60) and audio capture working**
+**Last aligned with code:** 2026-09-30 · **Live 1080p picture confirmed**
 
 > [!NOTE]
 > **Vendor blob:** Links against `AverMediaLib_64.a` in the **repository root** (~565 KB). The Makefile copies it to `driver/AverMediaLib_64.o` at build time. Redistribution of the blob may be restricted — see [Legal](#legal--compliance).
 
 > [!NOTE]
 > Rebuild after every kernel upgrade. `vermagic` must match `uname -r` (`modinfo cx511h`).
+
+> [!IMPORTANT]
+> **2026-09-30 — first picture on the maintainer's machine.** CachyOS 7.2.8, Intel Z690, PS5 with HDCP off. The card locked `1920×1080` YUYV at 60 fps on `/dev/video2`, and OBS 32 showed the PS5 home screen through a V4L2 source. Two captured frames differed and were not the old constant filler.
+>
+> Thanks to [Lou Perret](https://github.com/lou-perret). [#7](https://github.com/Everlite/Avermedia-GC573-Linux/pull/7) and [#8](https://github.com/Everlite/Avermedia-GC573-Linux/pull/8) are what turned "DMA delivers filler" into something you can watch. Audio and native 4K in the tables below are still his measurements; this machine has only confirmed the 1080p picture so far.
 
 ---
 
@@ -30,7 +35,7 @@ Modernized for recent kernels. **Experimental — development and testing only.*
 | **Phase 4 pipeline** | ✅ | Boot-time `iTE6805_Hardware_Init()`; MMIO-only `stream_on`; blob owns scaler/CSC |
 | **V-DESC / DMA IRQ** | ✅ | Hook on `0x10` bit `0x2`; descriptor chain + handoff guards |
 | **DMA to host RAM** | ✅ | `q->dev` binding + `dma_sync_*` on buffer done; full 1920×1080 frames delivered |
-| **Userspace picture** | ✅ | YUYV 1920×1080 at 60 fps, continuous (SMPTE bars captured bit-exact) — see Phase 5 |
+| **Userspace picture** | ✅ | YUYV 1920×1080 at 60 fps. Maintainer: live PS5 image, 2026-09-30. Lou: SMPTE bars bit-exact — see Phase 5 |
 | **4K capture** | ✅ | YUYV 3840×2160, 24–60 Hz sources captured at 60 fps (`GC573_EDID=vendor`, `normalize_timing=0`) — see Phase 6 |
 | **Audio** | ✅ | ALSA capture, 16-bit stereo LPCM at the source rate (32/44.1/48 kHz) — see Phase 5 |
 | **Daily use** | 🟡 | Works with `v4l2-ctl` / `ffmpeg`. HDCP is garbled, and a mid-stream format change (Discord) cuts audio |
@@ -359,14 +364,14 @@ Chain entry (16 bytes): `[0]`/`[1]` target addr, `[2]` size in dwords, `[3]` con
 
 ### Prerequisites
 
-Kernel cmdline (compatibility, usually only needed on some kernels):
+Kernel cmdline. On CachyOS 7.2 (`CONFIG_X86_KERNEL_IBT=y`) this is required, not optional. Without `ibt=off`, `insmod` dies in `init_module` with a control-protection fault (`kernel BUG at arch/x86/kernel/cet.c`).
 
 ```bash
-ibt=off iommu=pt
+ibt=off intel_iommu=on iommu=pt
 ```
 
-- `ibt=off` — blob lacks ENDBR64; the module sets `MODULE_INFO(ibt, "N")` and `-fcf-protection=none`, so this is normally **not** required
-- `iommu=pt` — passthrough IOMMU; keep it if DMA map failures occur, but still need correct **`q->dev`** for vb2 DMA mapping
+- `ibt=off` — the module is built with `-fcf-protection=none` and the vendor blob has no ENDBR64. `MODULE_INFO(ibt, "N")` does not stop the kernel from requiring ENDBR on `init_module`.
+- `intel_iommu=on iommu=pt` — on Intel, `iommu=pt` alone does not turn the IOMMU on. Passthrough mode is what the DMA path expects. AMD can use `iommu=pt` if the IOMMU is already enabled.
 
 ### Build & load
 
@@ -544,4 +549,4 @@ Interoperability-focused community project (EU Directive 2009/24/EC Art. 6). AVe
 Community project, not supported by AVerMedia. Use at your own risk.
 
 **Repository:** [github.com/Everlite/Avermedia-GC573-Linux](https://github.com/Everlite/Avermedia-GC573-Linux)  
-**Maintained by [Everlite](https://github.com/Everlite)** · Thanks to [derrod](https://github.com/derrod) for earlier work.
+**Maintained by [Everlite](https://github.com/Everlite)** · Thanks to [Lou Perret](https://github.com/lou-perret) for the capture and audio work in [#7](https://github.com/Everlite/Avermedia-GC573-Linux/pull/7) and [#8](https://github.com/Everlite/Avermedia-GC573-Linux/pull/8), and to [derrod](https://github.com/derrod) for earlier work.
