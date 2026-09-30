@@ -18,6 +18,7 @@
 #include <linux/string.h>
 #include <linux/slab.h>
 #include <linux/errno.h>
+#include <linux/bug.h>
 #include "board.h"
 #include "cxt_mgr.h"
 #include "framegrabber.h"
@@ -133,7 +134,10 @@ static inline U32_T cx511h_pclk_khz(U32_T pixel_clock)
 /* The ITE6805 under-reads pixel_clock and framerate by the same factor
  * (126457 kHz / 51 fps for 1080p60, 253526 kHz / 26 fps for 2160p30).  Rescale
  * the rate against the nearest standard pixel clock and snap it; a rate left
- * at 26 makes the FPGA duplicate frames up to ~50 fps. */
+ * at 26 makes the FPGA duplicate frames up to ~50 fps.
+ * Lock and stream_on both call this. The chip clock stays under-read, so a
+ * second pass would turn a snapped 60 into 70. A rate that is already one of
+ * the standard steps is left alone. */
 static U32_T cx511h_true_framerate(U32_T framerate, U32_T pixel_clock)
 {
     static const U32_T std_khz[] = { 25200, 27000, 74250, 148500, 297000, 594000 };
@@ -143,6 +147,10 @@ static U32_T cx511h_true_framerate(U32_T framerate, U32_T pixel_clock)
 
     if (framerate == 0 || khz == 0)
         return framerate;
+    for (i = 0; i < ARRAY_SIZE(std_fps); i++) {
+        if (framerate == std_fps[i])
+            return framerate;
+    }
     for (i = 0; i < ARRAY_SIZE(std_khz); i++) {
         if (khz * 100 >= std_khz[i] * 80 && khz * 100 <= std_khz[i] * 105) {
             ref = std_khz[i];
@@ -160,6 +168,20 @@ static U32_T cx511h_true_framerate(U32_T framerate, U32_T pixel_clock)
             return std_fps[i];
     }
     return scaled;
+}
+
+/* Fails in dmesg if a snapped rate is scaled a second time. */
+static void cx511h_framerate_selfcheck(void)
+{
+    static int done;
+
+    if (done)
+        return;
+    done = 1;
+    WARN_ON(cx511h_true_framerate(51, 126457) != 60);
+    WARN_ON(cx511h_true_framerate(60, 126457) != 60);
+    WARN_ON(cx511h_true_framerate(26, 253526) != 30);
+    WARN_ON(cx511h_true_framerate(30, 253526) != 30);
 }
 
 static int normalize_timing = 1;
@@ -1891,6 +1913,7 @@ static void cx511h_ite6805_event(void *cxt,ite6805_event_e event)
 
 void board_v4l2_init(cxt_mgr_handle_t cxt_mgr, int board_id)
 {
+    cx511h_framerate_selfcheck();
     printk(KERN_ERR "DEBUG: EINTRITT IN board_v4l2_init board_id=%d\n", board_id);
     framegrabber_handle_t framegrabber_handle;
     board_v4l2_context_t *board_v4l2_cxt=NULL;

@@ -145,6 +145,9 @@ def main(path):
             total += len(patched)
             print("[patch-redzone] %s: %d functions" % (name, len(patched)))
 
+    if total == 0:
+        raise SystemExit("[patch-redzone] 0 leaf functions patched; refusing to link the blob")
+
     with open(path, "wb") as f:
         f.write(data)
     print("[patch-redzone] %d leaf functions now reserve their stack frame" % total)

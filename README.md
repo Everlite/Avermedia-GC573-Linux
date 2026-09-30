@@ -7,7 +7,7 @@
 Community-maintained, AI-assisted Linux driver for the AVerMedia GC573 (PCI `1461:0054`, subsystem `1461:5730`).
 Modernized for recent kernels. **Experimental — development and testing only.**
 
-**Last aligned with code:** 2026-09-15 · **Video (1080p60) and audio capture working**
+**Last aligned with code:** 2026-09-30 · **Video (1080p60) and audio capture working**
 
 > [!NOTE]
 > **Vendor blob:** Links against `AverMediaLib_64.a` in the **repository root** (~565 KB). The Makefile copies it to `driver/AverMediaLib_64.o` at build time. Redistribution of the blob may be restricted — see [Legal](#legal--compliance).
@@ -33,7 +33,7 @@ Modernized for recent kernels. **Experimental — development and testing only.*
 | **Userspace picture** | ✅ | YUYV 1920×1080 at 60 fps, continuous (SMPTE bars captured bit-exact) — see Phase 5 |
 | **4K capture** | ✅ | YUYV 3840×2160, 24–60 Hz sources captured at 60 fps (`GC573_EDID=vendor`, `normalize_timing=0`) — see Phase 6 |
 | **Audio** | ✅ | ALSA capture, 16-bit stereo LPCM at the source rate (32/44.1/48 kHz) — see Phase 5 |
-| **Daily use** | 🟡 | Works with `v4l2-ctl` / `ffmpeg`; HDCP sources are masked by design |
+| **Daily use** | 🟡 | Works with `v4l2-ctl` / `ffmpeg`. HDCP is garbled, and a mid-stream format change (Discord) cuts audio |
 
 ### Development phases
 
@@ -90,8 +90,8 @@ AMD GPU and SMPTE bars / a 1 kHz tone as references.
 without any oops, 1 kHz tone captured at 48 kHz (THD+N −76 dB, no dropout), combined A/V capture
 with `v4l2-ctl` + ALSA.
 
-**HDCP:** sources that enable HDCP encryption (iPhone, MacBook) get the copy-protection filler
-image. This is intended.
+**HDCP:** not solved. Sources that enable HDCP (iPhone, MacBook) do not get a clean
+copy-protection frame; the picture comes out garbled, split, or green.
 
 ---
 
@@ -485,13 +485,13 @@ xxd /tmp/frame.raw | head -4
 
 ## Known issues (honest list)
 
-1. **HDCP content is masked** — when the source enables HDCP encryption (iPhone, MacBook, protected video) the driver delivers the copy-protection filler image. This is intended; use a source that does not encrypt.
+1. **HDCP is broken** — encrypted sources (iPhone, MacBook, protected video) produce a garbled, split, or green picture. This is not a clean copy-protection mask.
 
 2. **No I2C writes while streaming** — by design. Do not re-enable TTL/unmute/streaming I2C blocks without new safety analysis.
 
 3. **4K metadata split** — `ITE6805_LOCK` forces **1920×1080** into framegrabber for caps; FPGA **`vip_cfg`** uses **physical** `fe_frameinfo` for scaler. Both are intentional. (With the default 1080p-max EDID the source negotiates 1080p; for native 4K use `normalize_timing=0`.)
 
-4. **No reconfiguration on a new lock while streaming** — `stream_on` is ignored while streaming (Phase 5, fix 6), so a source changing resolution mid-capture needs the capture to be restarted.
+4. **No reconfiguration on a new lock while streaming** — `stream_on` is ignored while streaming (Phase 5, fix 6), so a source changing resolution mid-capture needs the capture to be restarted. Discord does this and the audio capture stops; that is still open.
 
 5. **GStreamer scripts** (`gst_1.0_raw_video*.sh`) — legacy / risky; use `v4l2-ctl` or `ffplay`.
 
