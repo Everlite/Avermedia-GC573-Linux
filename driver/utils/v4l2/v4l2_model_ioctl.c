@@ -611,17 +611,14 @@ int v4l2_model_ioctl_g_parm(struct file *file, void *fh,struct v4l2_streamparm *
 	a->parm.capture.timeperframe.numerator = 1;
 	//printk("%s>>>>>>>>>denominator=%d\n",__func__,a->parm.capture.timeperframe.denominator);
 	a->parm.capture.readbuffers  = 1;
-	//a->parm.capture.timeperframe.denominator = framegrabber_g_out_framerate(v4l2m_context->framegrabber_handle);
-	//printk("%s>>>>>>>>>denominator=%d\n",__func__,a->parm.capture.timeperframe.denominator);
-	if ((a->parm.capture.timeperframe.denominator ==0) || (a->parm.capture.timeperframe.denominator >60)) 
 	{
-		a->parm.capture.timeperframe.denominator = framegrabber_g_input_framerate(v4l2m_context->framegrabber_handle);
-		//printk("%s..io_framerate=%d\n",__func__,a->parm.capture.timeperframe.denominator/a->parm.capture.timeperframe.numerator);
-	}else
-	{//
-		//framegrabbe_s_out_framerate(v4l2m_context->framegrabber_handle,a->parm.capture.timeperframe.denominator/a->parm.capture.timeperframe.numerator);
-		
-		//printk("%s..in_framerate=%d\n",__func__,a->parm.capture.timeperframe.denominator/a->parm.capture.timeperframe.numerator);
+		U32_T out_fps = framegrabber_g_out_framerate(v4l2m_context->framegrabber_handle);
+		if (out_fps > 0) {
+			a->parm.capture.timeperframe.denominator = out_fps;
+		} else {
+			U32_T in_fps = framegrabber_g_input_framerate(v4l2m_context->framegrabber_handle);
+			a->parm.capture.timeperframe.denominator = (in_fps > 0) ? in_fps : 60;
+		}
 	}
     
 	return 0;

@@ -91,11 +91,14 @@ clean:
 # The blob was also built without -mno-red-zone: patch_redzone.py makes its
 # leaf functions reserve their stack frame so interrupts cannot corrupt them.
 #
-# GC573_EDID=vendor keeps the vendor 4K60 EDID tables instead.
-GC573_EDID ?= 1080p
+# GC573_EDID=1440p120 injects 1440p120 into vendor EDID (default).
+# GC573_EDID=vendor keeps the vendor EDID untouched.
+# GC573_EDID=1080p injects the legacy 1080p-max EDID.
+GC573_EDID ?= 1440p120
 
-$(obj)/AverMediaLib_64.o: $(src)/../AverMediaLib_64.a $(src)/patch_edid.py $(src)/patch_redzone.py
+$(obj)/AverMediaLib_64.o: $(src)/../AverMediaLib_64.a $(src)/patch_edid.py $(src)/patch_framerate.py $(src)/patch_redzone.py
 	cp "$<" "$@"
-	$(if $(filter vendor,$(GC573_EDID)),@echo "[patch-edid] skipped: vendor EDID kept",python3 "$(src)/patch_edid.py" "$@")
+	$(if $(filter vendor,$(GC573_EDID)),@echo "[patch-edid] skipped: vendor EDID kept",python3 "$(src)/patch_edid.py" "$@" $(GC573_EDID))
+	python3 "$(src)/patch_framerate.py" "$@"
 	python3 "$(src)/patch_redzone.py" "$@"
 	@echo 'cmd_$@ := cp $< $@' > $(obj)/.AverMediaLib_64.o.cmd

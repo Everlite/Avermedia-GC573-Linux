@@ -188,7 +188,7 @@ if [ ! -f "$MODULE_PATH" ]; then
     exit 1
 fi
 
-if insmod "$MODULE_PATH"; then
+if insmod "$MODULE_PATH" "$@"; then
     echo "✓ cx511h module loaded successfully."
 
     # Verify module is actually loaded

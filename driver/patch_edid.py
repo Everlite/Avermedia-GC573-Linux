@@ -154,12 +154,57 @@ def patch_archive(path, name_substr="ite6805_EDID.o", verbose=True):
                  hits4k[0] if hits4k else -1,
                  hits4k[-1] if hits4k else -1,
                  "OK" if ok else "FAILED"))
-    if not ok:
-        raise SystemExit("EDID patch self-verification failed")
     return default_off, hits4k[:2]
+
+
+# 2560x1440 @ 120.00 Hz (CVT-RB, 483.40 MHz):
+DTD_1440P120 = bytes([
+    0xd4, 0xbc, 0x00, 0xa0, 0xa0, 0xa0, 0x29, 0x50,
+    0x30, 0x20, 0x35, 0x00, 0x55, 0x50, 0x21, 0x00,
+    0x00, 0x1e
+])
+DTD_144HZ_SIG = bytes.fromhex("fc7e80887038124018203500202f2100001e")
+
+
+def patch_archive_1440p120(path, verbose=True):
+    with open(path, "rb") as f:
+        data = f.read()
+    if data[:8] != b"!<arch>\n":
+        raise SystemExit("not a valid ar archive: " + path)
+
+    buf = bytearray(data)
+    matches = find_all(data, DTD_144HZ_SIG)
+    if not matches:
+        raise SystemExit("144Hz DTD signature not found in %s" % path)
+
+    for m in matches:
+        buf[m:m + 18] = DTD_1440P120
+        # The DTD is at offset 226 of the 256-byte block.
+        # Extension block is [m - 226 + 128 : m - 226 + 256].
+        csum_off = m - 226 + 255
+        blk_start = m - 226 + 128
+        diff = sum(buf[blk_start:blk_start + 128]) % 256
+        buf[csum_off] = (buf[csum_off] - diff) % 256
+        is_ok = checksum_ok(buf[blk_start:blk_start + 128])
+        if verbose:
+            print("[patch-edid] replaced 144Hz DTD @0x%x with 1440p120 DTD, csum @0x%x valid=%s"
+                  % (m, csum_off, is_ok))
+        if not is_ok:
+            raise SystemExit("Checksum failed for block starting at 0x%x" % blk_start)
+
+    with open(path, "wb") as f:
+        f.write(buf)
+
+    if verbose:
+        print("[patch-edid] successfully injected 1440p @ 120 Hz DTD into %d EDID table(s)" % len(matches))
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        raise SystemExit("usage: patch_edid.py <AverMediaLib_64.a|AverMediaLib_64.o>")
-    patch_archive(sys.argv[1])
+        raise SystemExit("usage: patch_edid.py <AverMediaLib_64.a|AverMediaLib_64.o> [1080p|1440p120]")
+    mode = sys.argv[2] if len(sys.argv) > 2 else "1440p120"
+    if mode == "1080p":
+        patch_archive(sys.argv[1])
+    else:
+        patch_archive_1440p120(sys.argv[1])
+

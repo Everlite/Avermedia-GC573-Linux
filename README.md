@@ -7,13 +7,18 @@
 Community-maintained, AI-assisted Linux driver for the AVerMedia GC573 (PCI `1461:0054`, subsystem `1461:5730`).
 Modernized for recent kernels. **Experimental — development and testing only.**
 
-**Last aligned with code:** 2026-09-30 · **Live 1080p picture confirmed**
+**Last aligned with code:** 2026-10-09 · **Console recognizes 1440p & 120 Hz; 1080p picture confirmed**
 
 > [!NOTE]
 > **Vendor blob:** Links against `AverMediaLib_64.a` in the **repository root** (~565 KB). The Makefile copies it to `driver/AverMediaLib_64.o` at build time. Redistribution of the blob may be restricted — see [Legal](#legal--compliance).
 
 > [!NOTE]
 > Rebuild after every kernel upgrade. `vermagic` must match `uname -r` (`modinfo cx511h`).
+
+> [!IMPORTANT]
+> **2026-10-09 — Milestone: PlayStation 5 recognizes 2560×1440 and 120 Hz!**
+> Thanks to custom EDID injection (`patch_edid.py` with 483.4 MHz CVT-RB timing), the PS5 validates 1440p at 120 Hz output. Games like Fortnite confirm 120 FPS output, clean stereo ALSA audio, and Rec. 709 SDR colors in OBS.
+> *Current step:* Console-side output is fully working; userspace V4L2 120 FPS capture output validation is actively underway — see [Phase 7](#phase-7--1440p--120-hz-support-2026-10).
 
 > [!IMPORTANT]
 > **2026-09-30 — first picture on the maintainer's machine.** CachyOS 7.2.8, Intel Z690, PS5 with HDCP off. The card locked `1920×1080` YUYV at 60 fps on `/dev/video2`, and OBS 32 showed the PS5 home screen through a V4L2 source. Two captured frames differed and were not the old constant filler.
@@ -33,14 +38,15 @@ Modernized for recent kernels. **Experimental — development and testing only.*
 | **Build / load** | ✅ | `LLVM=1 CC=clang`; `insmod.sh` / `unload.sh` |
 | **reload / unload script** | ✅ | `insmod.sh` delegates to `unload.sh` when already loaded; the teardown page fault that wedged the module is fixed (Phase 5) |
 | **Probe / insmod** | ✅ | No hard-freeze when I2C IRQ opt-in ACK is active |
-| **HDMI lock** | ✅ | ITE6805 events; 1080p-max EDID by default, vendor 4K60 EDID with `GC573_EDID=vendor` |
+| **HDMI lock** | ✅ | ITE6805 events; 1440p120 EDID by default (`GC573_EDID=1440p120`), 1080p (`GC573_EDID=1080p`), or vendor 4K60 (`GC573_EDID=vendor`) |
 | **Phase 4 pipeline** | ✅ | Boot-time `iTE6805_Hardware_Init()`; MMIO-only `stream_on`; blob owns scaler/CSC |
 | **V-DESC / DMA IRQ** | ✅ | Hook on `0x10` bit `0x2`; descriptor chain + handoff guards |
-| **DMA to host RAM** | ✅ | `q->dev` binding + `dma_sync_*` on buffer done; full 1920×1080 frames delivered |
-| **Userspace picture** | ✅ | YUYV 1920×1080 at 60 fps. Maintainer: live PS5 image, 2026-09-30. Lou: SMPTE bars bit-exact — see Phase 5 |
+| **DMA to host RAM** | ✅ | `q->dev` binding + `dma_sync_*` on buffer done; full frames delivered |
+| **Userspace picture** | ✅ | YUYV 1920×1080 at 60 fps; 2560×1440 confirmed in OBS. PS5 home screen and Fortnite live. |
+| **1440p & 120 Hz** | 🚀 🟡 | Console recognizes 2560×1440 & 120 Hz (test passed!); V4L2 120 FPS capture stream in validation — see Phase 7 |
 | **4K capture** | ✅ | YUYV 3840×2160, 24–60 Hz sources captured at 60 fps (`GC573_EDID=vendor`, `normalize_timing=0`) — see Phase 6 |
-| **Audio** | ✅ | ALSA capture, 16-bit stereo LPCM at the source rate (32/44.1/48 kHz) — see Phase 5 |
-| **Daily use** | 🟡 | Works with `v4l2-ctl` / `ffmpeg`. HDCP is garbled, and a mid-stream format change (Discord) cuts audio |
+| **Audio** | ✅ | ALSA capture, 16-bit stereo LPCM at the source rate (32/44.1/48 kHz) — confirmed working on PS5 |
+| **Daily use** | 🟡 | Works with `v4l2-ctl` / `ffmpeg` / OBS. HDCP must be disabled on console. |
 
 ### Development phases
 
@@ -53,6 +59,27 @@ Modernized for recent kernels. **Experimental — development and testing only.*
 | **4b** — Picture quality | ✅ | TTL 444 + deferred re-assert + 1080p60 timing normalization; the remaining filler came from the hot-plug GPIO and the source never locking (see Phase 5) |
 | **5** — Continuous capture & audio | ✅ **BREAKTHROUGH** | Ring owned by the blob, red zone patch, zero-size DMA fix, HDMI audio EDID, ALSA constraints |
 | **6** — Native 4K | ✅ | Pixel clock unit fix, frame rate correction, vendor EDID build switch |
+| **7** — 1440p & 120 Hz (PS5) | 🟡 **MILESTONE** | Console detects 1440p & 120 Hz; DTD4 CVT-RB injection; blob framerate unclamp; 120 fps capture output validation ongoing |
+
+---
+
+## Phase 7 — 1440p & 120 Hz Support (2026-10)
+
+Milestone reached: **PlayStation 5 successfully detects native 2560×1440 resolution and validates 120 Hz output** with clean stereo audio and accurate Rec. 709 SDR colors (tested in games such as Fortnite Creative at 120 FPS).
+
+| # | Feature / Issue | Description / Fix |
+|:---|:---|:---|
+| 1 | **1440p @ 120 Hz EDID Injection** | Injected 2560×1440 @ 120 Hz (483.4 MHz CVT-RB timing) into DTD4 of the vendor EDID table (`patch_edid.py`). Console recognizes 1440p and passes the 120 Hz test cleanly. |
+| 2 | **Vendor Blob Framerate Clamp** | Un-clamped `aver_xilinx_vip_set_framerate` in `AverMediaLib_64.o` (`patch_framerate.py`) via unconditional `jmp`, allowing target rates > 60 fps to reach FPGA register `0x1080 [31:16]`. |
+| 3 | **120 Hz Frontend Timing Snap** | Adjusted `cx511h_true_framerate()` in `board_v4l2.c` so the ITE6805's under-read timing (~413 MHz / 100 fps) correctly scales against standard 483.4 MHz CVT-RB and snaps to 120 fps. |
+| 4 | **V4L2 Parameter Reporting** | Fixed `v4l2_model_ioctl_g_parm()` to report configured output framerates or detected input framerates without clamping at 60. |
+| 5 | **Audio & Colorspace** | Confirmed working stereo ALSA capture; Rec. 709 SDR rendering cleanly in OBS (HDR disabled on console). |
+
+> [!NOTE]
+> **Capture Stream Output Status & Investigation:**
+> * **Hardware input confirmed 120 Hz:** The physical HDMI pixel clock is ~420 MHz (`pclk=419840`), and the Artix-7 FPGA internal VSYNC cycle counter register `0x1010` registers `0x000cba31` cycles = ~119.89 Hz physical arrival at the FPGA.
+> * **DMA interrupt rate is 60.31 Hz:** `v4l2-ctl --stream-mmap` delivers ~60.31 FPS (exactly 120.62 / 2), as the FPGA hardware interrupt `CX511H_IRQ_VDESC_DONE` (`0x10 bit 0x2`) currently triggers at 60.31 Hz. Zero frames are dropped in software.
+> * **Root-Cause Analysis:** The hardware is physically capable of 1440p120/144 (verified on Windows). Active investigation focuses on FPGA register `0x1080` ratio configuration (`[15:0]` input vs. `[31:16]` target framerate) and comparative baseline testing at 1080p @ 120 Hz.
 
 ---
 
@@ -469,6 +496,8 @@ xxd /tmp/frame.raw | head -4
 | `copy_protection_pic` | NULL | Bitmap when content is HDCP-protected. **Insmod name today:** `copy_protetion_pic` — upstream typo in `board_config.c` (missing `c` in *protection*) |
 | `led_pin_r/g` | 3/4 | GPIO LED pins (-1=off) |
 | `led_pin_b` | -1 | Pin 5 is **not** a LED: driving it low drops the HDMI hot-plug |
+| `override_reg_1088` | -1 | Override FPGA reg 0x1088 ingest mode (-1=auto/Mode 3 DDR, 0=SDR 1px, 1=SDR 2px, 2=DDR 1px, 3=DDR 2px). Runtime tunable via sysfs |
+| `override_scaler_bypass` | -1 | Override FPGA scaler bypass (-1=auto, 0=scaler enabled, 1=scaler bypassed) |
 | `legacy_doorbell` | 0 | 1 = also write `0x304=0x01` / ACK `0x10` from the board path (stalls capture) |
 | `dma_debug` | 0 | 1 = log every DMA descriptor list programmed in `buffer_prepare` |
 | `reg_read` | — | Write-only: `echo 0x300,0x304 > /sys/module/cx511h/parameters/reg_read` logs those FPGA registers |

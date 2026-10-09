@@ -116,6 +116,20 @@ module_param(dma_debug, int, 0644);
 MODULE_PARM_DESC(dma_debug,
     "Log every DMA descriptor list programmed in buffer_prepare (default: 0)");
 
+/* Module parameter: override FPGA register 0x1088 ingest mode
+ * -1 = blob auto (3 for 1440p), 0 = SDR 1-px, 1 = SDR 2-px, 2 = DDR 1-px, 3 = DDR 2-px */
+static int override_reg_1088 = -1;
+module_param(override_reg_1088, int, 0644);
+MODULE_PARM_DESC(override_reg_1088,
+    "Override FPGA reg 0x1088 ingest mode (-1=auto, 0=SDR 1px, 1=SDR 2px, 2=DDR 1px, 3=DDR 2px)");
+
+/* Module parameter: override FPGA scaler bypass
+ * -1 = blob auto (1 for 1440p), 0 = scaler enabled (bit 7 set), 1 = scaler bypassed (bit 7 clear) */
+static int override_scaler_bypass = -1;
+module_param(override_scaler_bypass, int, 0644);
+MODULE_PARM_DESC(override_scaler_bypass,
+    "Override FPGA scaler bypass (-1=auto, 0=scaler enabled, 1=scaler bypassed)");
+
 /* Module parameter: normalize the ITE6805's unreliable timing to 1080p60.
  * 1 (default) = force pixel_clock=148500000 / fps=60 and clean dual_pixel/
  *               ddr_mode in ITE6805_LOCK mode and stream_on.
@@ -140,8 +154,8 @@ static inline U32_T cx511h_pclk_khz(U32_T pixel_clock)
  * the standard steps is left alone. */
 static U32_T cx511h_true_framerate(U32_T framerate, U32_T pixel_clock)
 {
-    static const U32_T std_khz[] = { 25200, 27000, 74250, 148500, 297000, 594000 };
-    static const U32_T std_fps[] = { 24, 25, 30, 50, 60, 100, 120 };
+    static const U32_T std_khz[] = { 25200, 27000, 74250, 148500, 241500, 297000, 483400, 594000 };
+    static const U32_T std_fps[] = { 24, 25, 30, 50, 60, 120, 144, 240 };
     U32_T khz = cx511h_pclk_khz(pixel_clock);
     U32_T ref = 0, scaled, i;
 
@@ -152,7 +166,7 @@ static U32_T cx511h_true_framerate(U32_T framerate, U32_T pixel_clock)
             return framerate;
     }
     for (i = 0; i < ARRAY_SIZE(std_khz); i++) {
-        if (khz * 100 >= std_khz[i] * 80 && khz * 100 <= std_khz[i] * 105) {
+        if (khz * 100 >= std_khz[i] * 80 && khz * 100 <= std_khz[i] * 92) {
             ref = std_khz[i];
             break;
         }
@@ -182,6 +196,9 @@ static void cx511h_framerate_selfcheck(void)
     WARN_ON(cx511h_true_framerate(60, 126457) != 60);
     WARN_ON(cx511h_true_framerate(26, 253526) != 30);
     WARN_ON(cx511h_true_framerate(30, 253526) != 30);
+    WARN_ON(cx511h_true_framerate(51, 205803) != 60);
+    WARN_ON(cx511h_true_framerate(102, 411856) != 120);
+    WARN_ON(cx511h_true_framerate(100, 413228) != 120);
 }
 
 static int normalize_timing = 1;
@@ -818,8 +835,7 @@ static void cx511h_stream_on(framegrabber_handle_t handle)
     if (normalize_timing &&
         vip_cfg.in_videoformat.vactive == 1920 &&
         vip_cfg.in_videoformat.hactive == 1080 &&
-        (vip_cfg.pixel_clock < 145000000 ||
-         vip_cfg.in_videoformat.fps != 60)) {
+        vip_cfg.in_videoformat.fps <= 55) {
         printk(KERN_ERR "[cx511h-debug] stream_on: normalizing 1080p60 timing "
                "(was vactive=%u hactive=%u pclk=%u fps=%u)\n",
                vip_cfg.in_videoformat.vactive, vip_cfg.in_videoformat.hactive,
@@ -918,6 +934,56 @@ static void cx511h_stream_on(framegrabber_handle_t handle)
     }
 
     aver_xilinx_config_video_process(board_v4l2_cxt->aver_xilinx_handle, &vip_cfg);
+
+    /* Enforce target framerate in FPGA register 0x1080 [31:16] */
+    {
+        unsigned int r1080 = 0;
+        aver_xilinx_read_register(board_v4l2_cxt->aver_xilinx_handle, 0x1080, 4, &r1080);
+        printk(KERN_ERR "[cx511h-fps] FPGA reg 0x1080 = 0x%08x (blob_fps=%u, target_fps=%u)\n",
+               r1080, (r1080 >> 16), vip_cfg.out_videoformat.fps);
+        if (vip_cfg.out_videoformat.fps > 0 && (r1080 >> 16) != vip_cfg.out_videoformat.fps) {
+            r1080 = (r1080 & 0x0000ffff) | ((unsigned int)vip_cfg.out_videoformat.fps << 16);
+            aver_xilinx_write_register(board_v4l2_cxt->aver_xilinx_handle, 0x1080, 4, r1080);
+            printk(KERN_ERR "[cx511h-fps] OVERRIDE: FPGA reg 0x1080 set to 0x%08x (fps %u)\n",
+                   r1080, vip_cfg.out_videoformat.fps);
+        }
+    }
+
+    if (override_reg_1088 >= 0) {
+        aver_xilinx_write_register(board_v4l2_cxt->aver_xilinx_handle, 0x1088, 4, (unsigned int)override_reg_1088);
+        printk(KERN_ERR "[cx511h-fps] OVERRIDE: FPGA reg 0x1088 set to %d\n", override_reg_1088);
+    }
+
+    if (override_scaler_bypass >= 0) {
+        unsigned int r1000 = 0;
+        aver_xilinx_read_register(board_v4l2_cxt->aver_xilinx_handle, 0x1000, 4, &r1000);
+        if (override_scaler_bypass == 0)
+            r1000 |= 0x80;  /* enable scaler */
+        else
+            r1000 &= ~0x80; /* bypass scaler */
+        aver_xilinx_write_register(board_v4l2_cxt->aver_xilinx_handle, 0x1000, 4, r1000);
+        printk(KERN_ERR "[cx511h-fps] OVERRIDE: FPGA reg 0x1000 set to 0x%08x (bypass=%d)\n",
+               r1000, override_scaler_bypass);
+    }
+
+    /* FPGA Register Dump at stream_on */
+    {
+        unsigned int r1000=0, r1004=0, r1008=0, r100c=0, r1010=0, r1040=0, r1080=0, r1088=0, r300=0, r304=0;
+        aver_xilinx_read_register(board_v4l2_cxt->aver_xilinx_handle, 0x1000, 4, &r1000);
+        aver_xilinx_read_register(board_v4l2_cxt->aver_xilinx_handle, 0x1004, 4, &r1004);
+        aver_xilinx_read_register(board_v4l2_cxt->aver_xilinx_handle, 0x1008, 4, &r1008);
+        aver_xilinx_read_register(board_v4l2_cxt->aver_xilinx_handle, 0x100c, 4, &r100c);
+        aver_xilinx_read_register(board_v4l2_cxt->aver_xilinx_handle, 0x1010, 4, &r1010);
+        aver_xilinx_read_register(board_v4l2_cxt->aver_xilinx_handle, 0x1040, 4, &r1040);
+        aver_xilinx_read_register(board_v4l2_cxt->aver_xilinx_handle, 0x1080, 4, &r1080);
+        aver_xilinx_read_register(board_v4l2_cxt->aver_xilinx_handle, 0x1088, 4, &r1088);
+        aver_xilinx_read_register(board_v4l2_cxt->aver_xilinx_handle, 0x300, 4, &r300);
+        aver_xilinx_read_register(board_v4l2_cxt->aver_xilinx_handle, 0x304, 4, &r304);
+        printk(KERN_ERR "[cx511h-regs] STREAMON: 1000=0x%08x 1004=0x%08x 1008=0x%08x 100c=0x%08x 1010=0x%08x\n",
+               r1000, r1004, r1008, r100c, r1010);
+        printk(KERN_ERR "[cx511h-regs] STREAMON: 1040=0x%08x 1080=0x%08x 1088=0x%08x 300=0x%08x 304=0x%08x\n",
+               r1040, r1080, r1088, r300, r304);
+    }
 
     /* SAFETY 3: Settle delay after config — give the FPGA time to latch
      * scaler/DMA settings before we start the stream.
@@ -1353,6 +1419,23 @@ static void cx511h_vdesc_irq_hook(void *data, int slot_index)
     }
 
     cx511h_frame_counter++;
+    if (cx511h_frame_counter == 10 && board_v4l2_cxt->aver_xilinx_handle) {
+        unsigned int r1000=0, r1004=0, r1008=0, r100c=0, r1010=0, r1040=0, r1080=0, r1088=0, r300=0, r304=0;
+        aver_xilinx_read_register(board_v4l2_cxt->aver_xilinx_handle, 0x1000, 4, &r1000);
+        aver_xilinx_read_register(board_v4l2_cxt->aver_xilinx_handle, 0x1004, 4, &r1004);
+        aver_xilinx_read_register(board_v4l2_cxt->aver_xilinx_handle, 0x1008, 4, &r1008);
+        aver_xilinx_read_register(board_v4l2_cxt->aver_xilinx_handle, 0x100c, 4, &r100c);
+        aver_xilinx_read_register(board_v4l2_cxt->aver_xilinx_handle, 0x1010, 4, &r1010);
+        aver_xilinx_read_register(board_v4l2_cxt->aver_xilinx_handle, 0x1040, 4, &r1040);
+        aver_xilinx_read_register(board_v4l2_cxt->aver_xilinx_handle, 0x1080, 4, &r1080);
+        aver_xilinx_read_register(board_v4l2_cxt->aver_xilinx_handle, 0x1088, 4, &r1088);
+        aver_xilinx_read_register(board_v4l2_cxt->aver_xilinx_handle, 0x300, 4, &r300);
+        aver_xilinx_read_register(board_v4l2_cxt->aver_xilinx_handle, 0x304, 4, &r304);
+        printk(KERN_ERR "[cx511h-live] frame 10: 1000=0x%08x 1004=0x%08x 1008=0x%08x 100c=0x%08x 1010=0x%08x\n",
+               r1000, r1004, r1008, r100c, r1010);
+        printk(KERN_ERR "[cx511h-live] frame 10: 1040=0x%08x 1080=0x%08x 1088=0x%08x 300=0x%08x 304=0x%08x\n",
+               r1040, r1080, r1088, r300, r304);
+    }
     if (cx511h_frame_counter == 100) {
         u8 *vaddr = v4l2_model_peek_pending_plane_vaddr(
             board_v4l2_cxt->v4l2_handle, 0);
@@ -1770,10 +1853,8 @@ static void cx511h_ite6805_event(void *cxt,ite6805_event_e event)
              * pixel_clock is in Hz (>170000000 would trigger dual-pixel).
              * Gated by normalize_timing for A/B testing. */
             if (normalize_timing &&
-                ((fe_frameinfo->width > 1920) ||
-                 (fe_frameinfo->width == 1920 && fe_frameinfo->height == 1080 &&
-                  (fe_frameinfo->pixel_clock < 145000000 ||
-                   fe_frameinfo->framerate != 60)))) {
+                (fe_frameinfo->width == 1920 && fe_frameinfo->height == 1080 &&
+                 fe_frameinfo->framerate <= 55)) {
                 printk(KERN_ERR "[cx511h-debug] FORCING 1080p60 timing now "
                        "(was %dx%d pclk=%u fps=%u dual=%d dpl=%d)\n",
                        fe_frameinfo->width, fe_frameinfo->height,
