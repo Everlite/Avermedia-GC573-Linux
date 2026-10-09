@@ -111,6 +111,38 @@ static const struct kernel_param_ops cx511h_reg_read_ops = {
 };
 module_param_cb(reg_read, &cx511h_reg_read_ops, NULL, 0200);
 
+static int cx511h_reg_write_set(const char *val, const struct kernel_param *kp)
+{
+    char buf[128], *cur, *tok;
+    unsigned int offset, data;
+
+    if (!cx511h_reg_handle)
+        return -ENODEV;
+    strscpy(buf, val, sizeof(buf));
+    cur = strim(buf);
+    while ((tok = strsep(&cur, ", ")) != NULL) {
+        char *eq;
+        if (!*tok)
+            continue;
+        eq = strchr(tok, '=');
+        if (!eq)
+            return -EINVAL;
+        *eq = '\0';
+        if (kstrtouint(tok, 0, &offset) || offset & 3)
+            return -EINVAL;
+        if (kstrtouint(eq + 1, 0, &data))
+            return -EINVAL;
+        aver_xilinx_write_register(cx511h_reg_handle, offset, 4, data);
+        printk(KERN_INFO "[cx511h-reg] WRITE: 0x%04x = 0x%08x\n", offset, data);
+    }
+    return 0;
+}
+
+static const struct kernel_param_ops cx511h_reg_write_ops = {
+    .set = cx511h_reg_write_set,
+};
+module_param_cb(reg_write, &cx511h_reg_write_ops, NULL, 0200);
+
 static int dma_debug = 0;
 module_param(dma_debug, int, 0644);
 MODULE_PARM_DESC(dma_debug,
@@ -122,6 +154,13 @@ static int override_reg_1088 = -1;
 module_param(override_reg_1088, int, 0644);
 MODULE_PARM_DESC(override_reg_1088,
     "Override FPGA reg 0x1088 ingest mode (-1=auto, 0=SDR 1px, 1=SDR 2px, 2=DDR 1px, 3=DDR 2px)");
+
+/* Module parameter: override FPGA register 0x103c VIP_FRAME_PERIOD
+ * -1 = auto (148500000 / target_fps), >0 = manual clock cycles */
+static int override_reg_103c = -1;
+module_param(override_reg_103c, int, 0644);
+MODULE_PARM_DESC(override_reg_103c,
+    "Override FPGA reg 0x103c VIP_FRAME_PERIOD (-1=auto 148.5MHz/fps, >0=cycles)");
 
 /* Module parameter: override FPGA scaler bypass
  * -1 = blob auto (1 for 1440p), 0 = scaler enabled (bit 7 set), 1 = scaler bypassed (bit 7 clear) */
@@ -949,6 +988,26 @@ static void cx511h_stream_on(framegrabber_handle_t handle)
         }
     }
 
+    /* Enforce target frame period in FPGA register 0x103c (VIP_FRAME_PERIOD) */
+    {
+        unsigned int r103c = 0;
+        unsigned int target_fps = vip_cfg.out_videoformat.fps;
+        aver_xilinx_read_register(board_v4l2_cxt->aver_xilinx_handle, 0x103c, 4, &r103c);
+        printk(KERN_ERR "[cx511h-fps] FPGA reg 0x103c before: 0x%08x (%u cycles, equiv ~%u fps)\n",
+               r103c, r103c, r103c ? (148500000U / r103c) : 0);
+
+        if (override_reg_103c > 0) {
+            aver_xilinx_write_register(board_v4l2_cxt->aver_xilinx_handle, 0x103c, 4, (unsigned int)override_reg_103c);
+            printk(KERN_ERR "[cx511h-fps] OVERRIDE: FPGA reg 0x103c set to 0x%08x (%d cycles)\n",
+                   override_reg_103c, override_reg_103c);
+        } else if (target_fps > 0) {
+            unsigned int period = 148500000U / target_fps;
+            aver_xilinx_write_register(board_v4l2_cxt->aver_xilinx_handle, 0x103c, 4, period);
+            printk(KERN_ERR "[cx511h-fps] AUTO: FPGA reg 0x103c set to 0x%08x (%u cycles for %u fps)\n",
+                   period, period, target_fps);
+        }
+    }
+
     if (override_reg_1088 >= 0) {
         aver_xilinx_write_register(board_v4l2_cxt->aver_xilinx_handle, 0x1088, 4, (unsigned int)override_reg_1088);
         printk(KERN_ERR "[cx511h-fps] OVERRIDE: FPGA reg 0x1088 set to %d\n", override_reg_1088);
@@ -968,19 +1027,20 @@ static void cx511h_stream_on(framegrabber_handle_t handle)
 
     /* FPGA Register Dump at stream_on */
     {
-        unsigned int r1000=0, r1004=0, r1008=0, r100c=0, r1010=0, r1040=0, r1080=0, r1088=0, r300=0, r304=0;
+        unsigned int r1000=0, r1004=0, r1008=0, r100c=0, r1010=0, r103c=0, r1040=0, r1080=0, r1088=0, r300=0, r304=0;
         aver_xilinx_read_register(board_v4l2_cxt->aver_xilinx_handle, 0x1000, 4, &r1000);
         aver_xilinx_read_register(board_v4l2_cxt->aver_xilinx_handle, 0x1004, 4, &r1004);
         aver_xilinx_read_register(board_v4l2_cxt->aver_xilinx_handle, 0x1008, 4, &r1008);
         aver_xilinx_read_register(board_v4l2_cxt->aver_xilinx_handle, 0x100c, 4, &r100c);
         aver_xilinx_read_register(board_v4l2_cxt->aver_xilinx_handle, 0x1010, 4, &r1010);
+        aver_xilinx_read_register(board_v4l2_cxt->aver_xilinx_handle, 0x103c, 4, &r103c);
         aver_xilinx_read_register(board_v4l2_cxt->aver_xilinx_handle, 0x1040, 4, &r1040);
         aver_xilinx_read_register(board_v4l2_cxt->aver_xilinx_handle, 0x1080, 4, &r1080);
         aver_xilinx_read_register(board_v4l2_cxt->aver_xilinx_handle, 0x1088, 4, &r1088);
         aver_xilinx_read_register(board_v4l2_cxt->aver_xilinx_handle, 0x300, 4, &r300);
         aver_xilinx_read_register(board_v4l2_cxt->aver_xilinx_handle, 0x304, 4, &r304);
-        printk(KERN_ERR "[cx511h-regs] STREAMON: 1000=0x%08x 1004=0x%08x 1008=0x%08x 100c=0x%08x 1010=0x%08x\n",
-               r1000, r1004, r1008, r100c, r1010);
+        printk(KERN_ERR "[cx511h-regs] STREAMON: 1000=0x%08x 1004=0x%08x 1008=0x%08x 100c=0x%08x 1010=0x%08x 103c=0x%08x\n",
+               r1000, r1004, r1008, r100c, r1010, r103c);
         printk(KERN_ERR "[cx511h-regs] STREAMON: 1040=0x%08x 1080=0x%08x 1088=0x%08x 300=0x%08x 304=0x%08x\n",
                r1040, r1080, r1088, r300, r304);
     }

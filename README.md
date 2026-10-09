@@ -74,12 +74,13 @@ Milestone reached: **PlayStation 5 successfully detects native 2560×1440 resolu
 | 3 | **120 Hz Frontend Timing Snap** | Adjusted `cx511h_true_framerate()` in `board_v4l2.c` so the ITE6805's under-read timing (~413 MHz / 100 fps) correctly scales against standard 483.4 MHz CVT-RB and snaps to 120 fps. |
 | 4 | **V4L2 Parameter Reporting** | Fixed `v4l2_model_ioctl_g_parm()` to report configured output framerates or detected input framerates without clamping at 60. |
 | 5 | **Audio & Colorspace** | Confirmed working stereo ALSA capture; Rec. 709 SDR rendering cleanly in OBS (HDR disabled on console). |
+| 6 | **FPGA VIP Frame Period Timer (0x103c)** | Discovered and resolved the root cause of the 60.31 FPS ceiling: The Artix-7 FPGA internal frame period gatekeeper register `0x103c` (`VIP_FRAME_PERIOD`) was hardcoded by default to 2,475,000 cycles (148.5 MHz / 60 fps). Dynamically programming `0x103c = 148500000 / target_fps` (1,237,500 cycles for 120 fps) unlocked **full native 120.35 FPS V4L2 capture**! |
 
 > [!NOTE]
-> **Capture Stream Output Status & Investigation:**
+> **Capture Stream Output Status: 120 FPS UNLOCKED & VERIFIED!**
 > * **Hardware input confirmed 120 Hz:** The physical HDMI pixel clock is ~420 MHz (`pclk=419840`), and the Artix-7 FPGA internal VSYNC cycle counter register `0x1010` registers `0x000cba31` cycles = ~119.89 Hz physical arrival at the FPGA.
-> * **DMA interrupt rate is 60.31 Hz:** `v4l2-ctl --stream-mmap` delivers ~60.31 FPS (exactly 120.62 / 2), as the FPGA hardware interrupt `CX511H_IRQ_VDESC_DONE` (`0x10 bit 0x2`) currently triggers at 60.31 Hz. Zero frames are dropped in software.
-> * **Root-Cause Analysis:** The hardware is physically capable of 1440p120/144 (verified on Windows). Active investigation focuses on FPGA register `0x1080` ratio configuration (`[15:0]` input vs. `[31:16]` target framerate) and comparative baseline testing at 1080p @ 120 Hz.
+> * **FPGA configuration:** Register `0x1080` set to `120 << 16`, register `0x1088` set to DDR dual-pixel (`0x3`), and register `0x103c` (`VIP_FRAME_PERIOD`) set to `1,237,500` cycles (`0x0012e1fc`).
+> * **DMA Capture output:** `v4l2-ctl --stream-mmap` delivers **120.35 FPS** continuously without frame drops!
 
 ---
 
@@ -563,6 +564,7 @@ xxd /tmp/frame.raw | head -4
 - Windows driver comparison and live hardware testing
 - **`AverMediaLib_64.a` disassembly** (`aver_xilinx.o`, `ite6805_sys.o`, `ite6664*.o`) for descriptor chain, scaler, and ITE6805 downscale logic
 - Forensic tags: `[gc573-payload]`, `[gc573-chain]`, `[gc573-handoff]`, `[cx511h-scale]`, `[cx511h-phase4]`, `[cx511h-color]`, `[cx511h-edid]`, `[cx511h-dma]`, `[cx511h-desc]`, `[cx511h-pixfmt]`
+- Special thanks to [ostrich](https://github.com/ostrich) ([gc555](https://github.com/ostrich/gc555)) for open-source reverse-engineering and documentation of the Xilinx Artix-7 FPGA VIP register architecture, specifically register `0x103c` (`VIP_FRAME_PERIOD`), which enabled unlocking native 120+ FPS capture.
 
 ---
 
@@ -580,4 +582,4 @@ Interoperability-focused community project (EU Directive 2009/24/EC Art. 6). AVe
 Community project, not supported by AVerMedia. Use at your own risk.
 
 **Repository:** [github.com/Everlite/Avermedia-GC573-Linux](https://github.com/Everlite/Avermedia-GC573-Linux)  
-**Maintained by [Everlite](https://github.com/Everlite)** · Thanks to [Lou Perret](https://github.com/lou-perret) for the capture and audio work in [#7](https://github.com/Everlite/Avermedia-GC573-Linux/pull/7) and [#8](https://github.com/Everlite/Avermedia-GC573-Linux/pull/8), and to [derrod](https://github.com/derrod) for earlier work.
+**Maintained by [Everlite](https://github.com/Everlite)** · Thanks to [Lou Perret](https://github.com/lou-perret) for the capture and audio work in [#7](https://github.com/Everlite/Avermedia-GC573-Linux/pull/7) and [#8](https://github.com/Everlite/Avermedia-GC573-Linux/pull/8), to [derrod](https://github.com/derrod) for earlier work, and to [ostrich](https://github.com/ostrich) for the FPGA frame timer register insights.

@@ -26,3 +26,4 @@ linuxextract.c
 *_ghidra_*
 *.ghidra
 todo.md
+reference_gc555/
