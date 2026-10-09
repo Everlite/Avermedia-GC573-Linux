@@ -16,9 +16,8 @@ Modernized for recent kernels. **Experimental — development and testing only.*
 > Rebuild after every kernel upgrade. `vermagic` must match `uname -r` (`modinfo cx511h`).
 
 > [!IMPORTANT]
-> **2026-10-09 — Milestone: PlayStation 5 recognizes 2560×1440 and 120 Hz!**
-> Thanks to custom EDID injection (`patch_edid.py` with 483.4 MHz CVT-RB timing), the PS5 validates 1440p at 120 Hz output. Games like Fortnite confirm 120 FPS output, clean stereo ALSA audio, and Rec. 709 SDR colors in OBS.
-> *Current step:* Console-side output is fully working; userspace V4L2 120 FPS capture output validation is actively underway — see [Phase 7](#phase-7--1440p--120-hz-support-2026-10).
+> **2026-10-09 — Milestone: Full 2560×1440 @ 120 FPS capture confirmed & verified!**
+> Thanks to custom EDID injection (`patch_edid.py` with 483.4 MHz CVT-RB timing) and the FPGA VIP frame period timer fix (register `0x103c`), the PS5 outputs native 1440p @ 120 Hz, and V4L2 capture delivers **continuous 120.35 FPS** in games like Fortnite Creative and The Finals with clean stereo ALSA audio and accurate Rec. 709 SDR colors in OBS.
 
 > [!IMPORTANT]
 > **2026-09-30 — first picture on the maintainer's machine.** CachyOS 7.2.8, Intel Z690, PS5 with HDCP off. The card locked `1920×1080` YUYV at 60 fps on `/dev/video2`, and OBS 32 showed the PS5 home screen through a V4L2 source. Two captured frames differed and were not the old constant filler.
@@ -43,10 +42,10 @@ Modernized for recent kernels. **Experimental — development and testing only.*
 | **V-DESC / DMA IRQ** | ✅ | Hook on `0x10` bit `0x2`; descriptor chain + handoff guards |
 | **DMA to host RAM** | ✅ | `q->dev` binding + `dma_sync_*` on buffer done; full frames delivered |
 | **Userspace picture** | ✅ | YUYV 1920×1080 at 60 fps; 2560×1440 confirmed in OBS. PS5 home screen and Fortnite live. |
-| **1440p & 120 Hz** | 🚀 🟡 | Console recognizes 2560×1440 & 120 Hz (test passed!); V4L2 120 FPS capture stream in validation — see Phase 7 |
+| **1440p & 120 Hz** | ✅ 🚀 | Console recognizes 2560×1440 @ 120 Hz; V4L2 capture delivers **120.35 FPS confirmed** — see Phase 7 |
 | **4K capture** | ✅ | YUYV 3840×2160, 24–60 Hz sources captured at 60 fps (`GC573_EDID=vendor`, `normalize_timing=0`) — see Phase 6 |
 | **Audio** | ✅ | ALSA capture, 16-bit stereo LPCM at the source rate (32/44.1/48 kHz) — confirmed working on PS5 |
-| **Daily use** | 🟡 | Works with `v4l2-ctl` / `ffmpeg` / OBS. HDCP must be disabled on console. |
+| **Daily use** | 🟢 | Works with `v4l2-ctl` / `ffmpeg` / OBS. HDCP must be disabled on console. |
 
 ### Development phases
 
@@ -59,13 +58,13 @@ Modernized for recent kernels. **Experimental — development and testing only.*
 | **4b** — Picture quality | ✅ | TTL 444 + deferred re-assert + 1080p60 timing normalization; the remaining filler came from the hot-plug GPIO and the source never locking (see Phase 5) |
 | **5** — Continuous capture & audio | ✅ **BREAKTHROUGH** | Ring owned by the blob, red zone patch, zero-size DMA fix, HDMI audio EDID, ALSA constraints |
 | **6** — Native 4K | ✅ | Pixel clock unit fix, frame rate correction, vendor EDID build switch |
-| **7** — 1440p & 120 Hz (PS5) | 🟡 **MILESTONE** | Console detects 1440p & 120 Hz; DTD4 CVT-RB injection; blob framerate unclamp; 120 fps capture output validation ongoing |
+| **7** — 1440p & 120 Hz (PS5) | ✅ **BREAKTHROUGH** | Console detects 1440p & 120 Hz; DTD4 CVT-RB injection; blob unclamp; FPGA register `0x103c` frame period fix; **120.35 FPS capture confirmed** |
 
 ---
 
 ## Phase 7 — 1440p & 120 Hz Support (2026-10)
 
-Milestone reached: **PlayStation 5 successfully detects native 2560×1440 resolution and validates 120 Hz output** with clean stereo audio and accurate Rec. 709 SDR colors (tested in games such as Fortnite Creative at 120 FPS).
+Milestone reached: **PlayStation 5 successfully detects native 2560×1440 resolution at 120 Hz, and V4L2 captures full 120.35 FPS** with clean stereo audio and accurate Rec. 709 SDR colors (tested in Fortnite Creative and The Finals at 120 FPS).
 
 | # | Feature / Issue | Description / Fix |
 |:---|:---|:---|
