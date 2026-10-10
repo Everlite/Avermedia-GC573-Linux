@@ -10,7 +10,7 @@
 
 **EverLive** is an all-in-one Linux console gaming suite and native open-source driver ecosystem for the **AVerMedia Live Gamer 4K (GC573)** (PCI `1461:0054`, Subsystem `1461:5730`) and **Live Gamer BOLT (GC555)** (`1461:5550`).
 
-With **EverLive**, you can play PlayStation 5, Xbox Series X, or Nintendo Switch directly on your Linux desktop (Wayland & X11) at **true 1440p @ 120 FPS** with **sub-frame latency (< 3 ms)** — featuring synchronized surround audio, real-time in-game volume controls, and desktop application launcher integration without having to switch HDMI cables on your monitor.
+With **EverLive**, you can play PlayStation 5, Xbox Series X, or Nintendo Switch directly on your Linux desktop (Wayland & X11) at **true 1440p @ 120 FPS** with **ultra-low render pipeline latency (~1–3 ms)** — featuring synchronized surround audio, real-time in-game volume controls, and desktop application launcher integration without having to switch HDMI cables on your monitor.
 
 ---
 
@@ -32,7 +32,7 @@ cd EverLive
 ### What the installer handles automatically:
 1. **Auto-Detects Your Distribution:** Automatically identifies your package manager (`pacman` on Arch/CachyOS/Manjaro, `apt` on Ubuntu/Debian/Mint/Pop!_OS, or `dnf` on Fedora/Nobara) and installs any missing build headers or libraries.
 2. **Compiles Driver & Display App:** Builds the clean `open_gc573` kernel module and compiles the high-performance C direct display engine (`everlive_display`).
-3. **DKMS Protection Against Kernel Updates:** If DKMS is available, it registers the module so that future Linux kernel updates will automatically recompile the driver in the background — your setup will never break after a system update.
+3. **DKMS Support for Kernel Updates:** If DKMS is installed on your system, it registers the module so that supported Linux kernel updates automatically rebuild the driver in the background.
 4. **No Root Privileges Needed to Play (udev):** Sets up `/etc/udev/rules.d/70-everlive.rules` with `TAG+="uaccess"`. Normal desktop users get immediate read/write access to capture video and audio without ever needing `sudo`.
 5. **Start Menu Integration:** Installs the desktop launcher into your application menu (KDE Plasma, GNOME, etc.).
 
@@ -46,13 +46,13 @@ After installation, simply launch the game screen from your application menu (**
 ## Highlights & Verified Capabilities
 
 - **2560×1440 @ 120 FPS Verified on PlayStation 5:** 120.35 Hz HDMI 2.0 capture verified on real PS5 hardware (*The Finals*, *Fortnite 120Hz Mode*, PS5 Dashboard).
-- **Sub-Frame Input Latency (< 3 ms Lag):** Built-in native C direct rendering engine (`everlive_display`) maps V4L2 DMA buffers directly to GPU textures (SDL2 unthrottled presentation / Wayland tearing). No demuxer, no frame buffering, no video player lag.
-- **Synchronized 8-Channel Surround Audio:** Captures console uncompressed 8-channel 48 kHz LPCM HDMI audio and streams it to your headset or speakers via PipeWire with **10 ms latency**.
+- **Sub-Frame Direct Render Pipeline (~1–3 ms internal latency):** Built-in native C direct rendering engine (`everlive_display`) maps V4L2 DMA buffers directly to GPU textures (SDL2 unthrottled presentation / Wayland tearing). Measured buffer-to-display pass takes ~1–3 ms (excluding physical monitor panel response and controller input).
+- **Synchronized 8-Channel Surround Audio:** Captures console uncompressed 8-channel 48 kHz LPCM HDMI audio and streams it to your headset or speakers via a low-latency PipeWire pulse sink connection (configured with `PULSE_LATENCY_MSEC=10`).
 - **In-Game HUD & Live Volume Control:**
   - Adjust volume anytime during gameplay using the **mouse wheel**.
   - Interactive on-screen HUD volume slider in the top-left corner + mute button.
   - Hotkeys: <kbd>F11</kbd> for borderless fullscreen, <kbd>m</kbd> for mute, <kbd>Tab</kbd> for live performance and jitter stats.
-- **100% Blob-Free Option:** The primary driver `open_gc573` is 100% open-source (**GPL-2.0**), contains no proprietary `.a` binaries, and compiles cleanly on Linux kernels 6.19 through 7.x.
+- **100% Blob-Free Driver:** The primary driver `open_gc573` is 100% open-source (**GPL-2.0**), contains no proprietary `.a` binaries, and compiles cleanly on modern Linux kernels 6.19 through 7.x.
 
 ---
 
@@ -119,14 +119,14 @@ The following controls are available inside the game window:
 ## ⚠️ Performance Note: Frame Pacing, Jitter & Work in Progress
 
 > [!NOTE]
-> **EverLive is an active work in progress.** While 1440p @ 120 FPS is fully functional and playable with sub-3ms display latency, it is **not yet 100% perfect**:
+> **EverLive is an active work in progress.** While 1440p @ 120 FPS is fully functional and playable with ~1–3 ms internal pipeline latency, it is **not yet 100% perfect**:
 >
 > - **Occasional Jitter & Micro-Stutter:** Depending on desktop compositor activity (KDE Wayland / GNOME), background CPU load, and GPU presentation timing, slight frame pacing jitter (typically 1–10 ms variance) can occasionally occur.
 > - **Fluctuating 120 FPS Cadence:** The capture hardware's native HDMI clock runs at ~120.35 Hz. If your monitor is configured for a fixed refresh rate without Variable Refresh Rate (VRR), minor cadence mismatches can cause subtle micro-stutter during fast camera sweeps.
 > - **Active Development:** We are continuously optimizing the FPGA DMA queue depth, buffer recycling intervals, and Wayland presentation synchronization to achieve completely flat frame pacing. Improvements are actively being worked on!
 >
-> **Tips for the best gaming experience:**
-> 1. **Enable VRR / Adaptive Sync:** In your desktop display settings (e.g. KDE Plasma *System Settings -> Display -> Adaptive Sync -> Always*), enable VRR so your display seamlessly syncs to incoming capture frames.
+> **Tips to optimize your gaming experience:**
+> 1. **Try VRR / Adaptive Sync:** Depending on your GPU driver, desktop compositor, and display firmware (e.g. KDE Plasma *System Settings -> Display -> Adaptive Sync -> Always*), enabling VRR can noticeably smooth out pacing variance by dynamically adapting the panel refresh rate to incoming capture frames. *(Note: Effectiveness depends on your compositor's tearing/presentation implementation).*
 > 2. **Set Monitor to ≥ 120 Hz:** Ensure your Linux desktop refresh rate is set to 120 Hz or higher. Displaying a 120 FPS capture stream on a 60 Hz monitor will inevitably drop frames.
 > 3. **Wayland Tearing:** EverLive automatically enables `SDL_VIDEO_WAYLAND_TEARING=1` for unthrottled, zero-delay presentation.
 
@@ -134,9 +134,12 @@ The following controls are available inside the game window:
 
 ## Hardware and Kernel Compatibility
 
-- **Capture Card:** AVerMedia Live Gamer 4K (GC573) / Live Gamer BOLT (GC555)
-- **PCI IDs:** `1461:0054`, Subsystem `1461:5730` (GC573 PCIe) or `1461:5550` (GC555 Thunderbolt)
-- **Linux Kernels:** Fully compatible with Linux 6.19 through 7.x (tested on CachyOS Linux 7.2.8 & Arch Linux).
+| Device | Interface | PCI Subsystem | Support Status | Notes |
+|:---|:---|:---:|:---:|:---|
+| **AVerMedia Live Gamer 4K (GC573)** | PCIe Gen2 x4 | `1461:5730` | **Verified on Hardware** | Daily driver testing on PlayStation 5 (1440p120, 1080p, 4K60) on CachyOS / Arch Linux. |
+| **AVerMedia Live Gamer BOLT (GC555)** | Thunderbolt 3 | `1461:5550` | **Architecturally Supported** | Code logic inherited from ostrich's clean-room driver; not yet physically tested by Everlite. Testers welcome! |
+
+- **Linux Kernels:** Compatible with Linux 6.19 through 7.x (tested on CachyOS Linux 7.2.9 & Arch Linux).
 - **Desktop Environments:** Wayland (KDE Plasma 6, GNOME) and X11.
 
 ---
