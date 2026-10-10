@@ -116,14 +116,17 @@ The following controls are available inside the game window:
 
 ---
 
-## ⚠️ Performance Note: Frame Pacing, Jitter & Work in Progress
+## ⚠️ Known Issues & Work in Progress
 
 > [!NOTE]
 > **EverLive is an active work in progress.** While 1440p @ 120 FPS is fully functional and playable with ~1–3 ms internal pipeline latency, it is **not yet 100% perfect**:
 >
+> - **HDMI Signal Loss on Game Switch (Known Bug):** When launching or closing games that dynamically change the console's video mode or refresh rate (e.g. switching between the 60 Hz PS5 home menu and a 120 Hz game like *The Finals*), the IT6805 HDMI receiver may occasionally fail to re-lock onto the changed TMDS clock.
+>   - **Workaround:** Briefly unplug and re-plug the HDMI cable into the capture card or console to trigger an HDMI Hot-Plug (HPD) handshake.
+>   - **Fix in Progress:** An automatic driver-side software HPD reset is being developed to handle mode switches seamlessly without physical cable replugging.
 > - **Occasional Jitter & Micro-Stutter:** Depending on desktop compositor activity (KDE Wayland / GNOME), background CPU load, and GPU presentation timing, slight frame pacing jitter (typically 1–10 ms variance) can occasionally occur.
 > - **Fluctuating 120 FPS Cadence:** The capture hardware's native HDMI clock runs at ~120.35 Hz. If your monitor is configured for a fixed refresh rate without Variable Refresh Rate (VRR), minor cadence mismatches can cause subtle micro-stutter during fast camera sweeps.
-> - **Active Development:** We are continuously optimizing the FPGA DMA queue depth, buffer recycling intervals, and Wayland presentation synchronization to achieve completely flat frame pacing. Improvements are actively being worked on!
+> - **Active Development:** We are continuously optimizing the FPGA DMA queue depth, buffer recycling intervals, and Wayland presentation synchronization to achieve completely flat frame pacing.
 >
 > **Tips to optimize your gaming experience:**
 > 1. **Try VRR / Adaptive Sync:** Depending on your GPU driver, desktop compositor, and display firmware (e.g. KDE Plasma *System Settings -> Display -> Adaptive Sync -> Always*), enabling VRR can noticeably smooth out pacing variance by dynamically adapting the panel refresh rate to incoming capture frames. *(Note: Effectiveness depends on your compositor's tearing/presentation implementation).*
@@ -155,7 +158,12 @@ The following controls are available inside the game window:
 - Ensure audio is not muted inside the EverLive window (press <kbd>m</kbd> or scroll the mouse wheel up).
 - In your KDE/GNOME audio settings under "Applications", ensure the stream **`gc573-audio`** is active and unmuted.
 
-#### 3. How do I uninstall EverLive?
+#### 3. Signal lost after launching or closing a game (Mode / Rate Switch)
+- **Symptom:** Screen turns black or loses signal when switching between the 60 Hz console menu and a 120 Hz game mode (e.g. *The Finals*).
+- **Immediate Workaround:** Briefly unplug and re-insert the HDMI cable into the console or capture card to trigger an HDMI Hot-Plug Detect (HPD) renegotiation.
+- **Explanation:** Consoles switch HDMI TMDS clock frequencies when launching high-refresh modes. An automatic driver-level re-lock handler is currently in development to resolve this in software without cable replugging.
+
+#### 4. How do I uninstall EverLive?
 Run the uninstaller inside the repository directory:
 ```bash
 sudo ./uninstall.sh
