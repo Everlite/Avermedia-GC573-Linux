@@ -1,5 +1,9 @@
 # open_gc573 — Blob-Free Open Source Linux Driver for AVerMedia Live Gamer 4K (GC573)
 
+[![Driver](https://img.shields.io/badge/driver-open__gc573-2e7d32.svg)](#)
+[![License](https://img.shields.io/badge/license-GPL--2.0--only-blue.svg)](#licensing--attribution)
+[![AI Assisted](https://img.shields.io/badge/code-heavily%20AI%20assisted-ff69b4.svg)](#)
+
 A fully open-source, blob-free Linux kernel driver (V4L2 + ALSA) for the **AVerMedia Live Gamer 4K GC573** (`1461:0054`, Subsystem `1461:5730`) and **AVerMedia Live Gamer BOLT GC555** (`1461:0054`, Subsystem `1461:5550`).
 
 Unlike the proprietary vendor driver package, `open_gc573` requires **no binary blobs** (`aver_xilinx.o` / `ite6805.o`) to build or load. It compiles directly against modern Linux kernels using pure C and standard kernel frameworks (`videobuf2-dma-sg`, `v4l2-dv-timings`, `sound/pcm`).
