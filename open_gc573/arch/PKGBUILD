@@ -1,17 +1,17 @@
-# Maintainer: ostrich <570911+ostrich@users.noreply.github.com>
-
-pkgname=gc555-dkms-git
-_pkgname=gc555
+# Original author (gc555): ostrich <570911+ostrich@users.noreply.github.com>
+# Maintainer (GC573 port): Everlite
+pkgname=open-gc573-dkms-git
+_pkgname=open_gc573
 pkgver=r0.g0000000
 pkgrel=1
-pkgdesc='Linux driver for the AVerMedia Live Gamer BOLT GC555'
+pkgdesc='Blob-free Linux kernel driver for AVerMedia Live Gamer 4K GC573 & BOLT GC555'
 arch=('any')
-url='https://github.com/ostrich/gc555'
+url='https://github.com/Everlite/EverLive'
 license=('GPL-2.0-only')
 depends=('dkms')
 makedepends=('git')
-provides=('gc555-dkms')
-conflicts=('gc555-dkms')
+provides=('open-gc573-dkms' 'gc555-dkms')
+conflicts=('open-gc573-dkms')
 source=("$_pkgname::git+$url.git"
         'dkms.conf')
 b2sums=('SKIP'

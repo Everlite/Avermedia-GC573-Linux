@@ -1,4 +1,12 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * open_gc573 - Native Linux driver for AVerMedia Live Gamer 4K GC573 & BOLT GC555
+ *
+ * Derived from the gc555 driver authored by ostrich (https://github.com/ostrich/gc555).
+ * Adapted, extended for GC573 PCIe, and maintained by Everlite and contributors (2026).
+ *
+ * Licensed under the GNU General Public License version 2 (GPL-2.0-only).
+ */
 #ifndef GC555_H
 #define GC555_H
 

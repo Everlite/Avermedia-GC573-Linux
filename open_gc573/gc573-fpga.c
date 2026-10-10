@@ -1,4 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Derived from gc555 driver by ostrich (GPL-2.0-only).
+ * Modified for GC573 PCIe Artix-7 FPGA VIP clocking by Everlite & contributors (2026).
+ */
 
 #include <linux/bitops.h>
 #include <linux/delay.h>

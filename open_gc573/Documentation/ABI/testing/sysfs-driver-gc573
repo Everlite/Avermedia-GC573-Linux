@@ -1,6 +1,6 @@
 What:		/sys/bus/pci/devices/.../input_edid
-Date:		July 2026
-Contact:	https://github.com/ostrich/gc555/issues
+Date:		October 2026
+Contact:	https://github.com/Everlite/EverLive/issues
 Description:
 		Read-only binary EDID image currently advertised by the GC573
 		HDMI input to the connected source.

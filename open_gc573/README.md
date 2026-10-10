@@ -82,3 +82,7 @@ v4l2-ctl --stream-mmap --stream-count=240 -d /dev/videoX
   - PCI Subsystem `1461:5730` GC573 support and soft-failing LED detection.
   - Native 2560×1440 @ 120 Hz CVT-RB EDID injection and RGB Limited color pipeline validation.
   - FPGA `VIP_FRAME_PERIOD` (0x103c) / `VIP_PIXEL_MODE` (0x1088) tuning for unthrottled 120 FPS capture.
+
+### Disclaimers & Trademark Notice
+- **Trademarks:** AVerMedia, Live Gamer 4K, and Live Gamer BOLT are trademarks of AVerMedia Technologies, Inc. This independent project is not affiliated with or endorsed by AVerMedia.
+- **Warranty:** Distributed under the GNU General Public License v2 without warranties of any kind. Use at your own risk.

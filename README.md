@@ -167,8 +167,10 @@ sudo ./uninstall.sh
 | **EverLive Gaming Suite** | `tools/everlive/`, `play.sh`, `install.sh` | **MIT** | Copyright © 2026 Everlite. Direct C display renderer and Qt control center. |
 | **Legacy Blob Archive** | `legacy/cx511h_blob/` | **Mixed** | Wrapper: MIT / `AverMediaLib_64.a`: Proprietary (AVerMedia Technologies, Inc.). Isolated in the legacy archive. |
 
-> [!NOTE]
-> AVerMedia and Live Gamer 4K are registered trademarks of AVerMedia Technologies, Inc. This independent community project is not affiliated with or endorsed by AVerMedia.
+### Disclaimers & Trademark Notice
+
+- **Trademarks:** AVerMedia, Live Gamer 4K (GC573), and Live Gamer BOLT (GC555) are trademarks or registered trademarks of AVerMedia Technologies, Inc. PlayStation, PS4, and PS5 are registered trademarks of Sony Interactive Entertainment Inc. All product names, trademarks, and registered trademarks are property of their respective owners and are used solely for hardware identification and compatibility purposes. This independent open-source project is not affiliated with, authorized, maintained, sponsored, or endorsed by AVerMedia Technologies, Inc., Sony, or any of their affiliates.
+- **Warranty:** This software and documentation are provided "AS IS", without warranty of any kind, express or implied, including but not limited to the warranties of merchantability, fitness for a particular purpose, and non-infringement. In no event shall the authors or contributors be liable for any claim, damages, or other liability arising from the use of this software. Register tuning, EDID flashing, and kernel driver interactions are performed at your own risk.
 
 ---
 

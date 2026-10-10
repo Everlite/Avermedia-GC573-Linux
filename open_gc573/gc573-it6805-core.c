@@ -1,4 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Derived from gc555 driver by ostrich (GPL-2.0-only).
+ * Modified for GC573 dual-pixel DDR & 1440p120 ITE6805 timings by Everlite & contributors (2026).
+ */
 
 #include <linux/atomic.h>
 #include <linux/bitops.h>
