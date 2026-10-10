@@ -55,6 +55,18 @@ After installation, simply launch the game screen from your application menu (**
 
 ---
 
+## Video Demonstration (PS5 Gameplay & Latency)
+
+Live gameplay capture demonstration of **THE FINALS** on PlayStation 5 played through EverLive on Linux desktop:
+
+https://github.com/Everlite/EverLive/raw/main/docs/thefinals_demo.mp4
+
+[![THE FINALS Latency Demonstration](docs/thefinals_demo_poster.jpg)](https://github.com/Everlite/EverLive/raw/main/docs/thefinals_demo.mp4)
+
+*(Click the player or preview image above to view the gameplay demonstration)*
+
+---
+
 ## Architecture
 
 ```mermaid
