@@ -71,15 +71,15 @@ https://github.com/Everlite/EverLive/raw/main/docs/thefinals_demo.mp4
 
 ```mermaid
 flowchart LR
-  ps5[PS5 / Console / HDMI Source] -->|HDMI 2.0 1440p120| gc573[AVerMedia GC573]
-  gc573 -->|PCIe SG-DMA Video| v4l2[/dev/video2]
-  gc573 -->|PCIe SG-DMA Audio| alsa[hw:CARD=A4K,DEV=0]
+  ps5["PS5 / Console / HDMI Source"] -->|HDMI 2.0 1440p120| gc573["AVerMedia GC573"]
+  gc573 -->|PCIe SG-DMA Video| v4l2["/dev/video2"]
+  gc573 -->|PCIe SG-DMA Audio| alsa["hw:CARD=A4K,DEV=0"]
   
-  v4l2 -->|Zero-Copy DMA mmap| renderer[EverLive Display Engine<br/>SDL2 Direct Texture Upload<br/>Latency: 1-3 ms]
-  renderer -->|Unthrottled Tearing / VRR| screen[Monitor / 120 Hz Desktop]
+  v4l2 -->|Zero-Copy DMA mmap| renderer["EverLive Display Engine<br/>SDL2 Direct Texture Upload<br/>Latency: 1-3 ms"]
+  renderer -->|Unthrottled Tearing / VRR| screen["Monitor / 120 Hz Desktop"]
   
-  alsa -->|48 kHz 8ch LPCM| pw[PipeWire Audio Bridge<br/>Latency: 10 ms]
-  pw -->|Auto SIMD Downmix| speakers[Headset / Speakers]
+  alsa -->|48 kHz 8ch LPCM| pw["PipeWire Audio Bridge<br/>Latency: 10 ms"]
+  pw -->|Auto SIMD Downmix| speakers["Headset / Speakers"]
 ```
 
 ---
