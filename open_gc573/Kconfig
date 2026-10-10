@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+config VIDEO_GC573
+	tristate "AVerMedia Live Gamer 4K GC573 support"
+	depends on PCI && VIDEO_DEV && I2C && SND
+	depends on LEDS_CLASS_MULTICOLOR || LEDS_CLASS_MULTICOLOR=n
+	select REGMAP_I2C
+	select VIDEOBUF2_DMA_SG
+	select SND_PCM
+	help
+	  This is a Video4Linux2 and ALSA driver for the AVerMedia Live
+	  Gamer 4K GC573 and the Live Gamer BOLT GC555.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called open_gc573.

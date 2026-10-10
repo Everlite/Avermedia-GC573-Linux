@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+obj-m += open_gc573.o
+
+open_gc573-y := gc573-core.o gc573-bridge.o gc573-fpga.o gc573-link.o \
+	gc573-i2c.o gc573-edid.o \
+	gc573-dma.o gc573-video-dma.o gc573-video.o gc573-audio.o \
+	gc573-it6664-core.o \
+	gc573-it6664-tx.o \
+	gc573-it6805-core.o
+
+ifneq ($(filter y m,$(CONFIG_LEDS_CLASS_MULTICOLOR)),)
+open_gc573-y += gc573-led.o
+ccflags-y += -DGC555_HAS_LED_CLASS
+endif

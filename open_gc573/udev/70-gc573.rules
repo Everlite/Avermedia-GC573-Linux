@@ -1,0 +1,15 @@
+SUBSYSTEM=="video4linux", KERNEL=="video*", \
+  ATTR{index}=="0", SUBSYSTEMS=="pci", ATTRS{vendor}=="0x1461", \
+  ATTRS{device}=="0x0054", ATTRS{subsystem_vendor}=="0x1461", \
+  ATTRS{subsystem_device}=="0x5730", ATTRS{serial_number}=="?*", \
+  ENV{ID_BUS}="pci", \
+  ENV{ID_SERIAL}="AVerMedia_Live_Gamer_4K_GC573_$attr{serial_number}", \
+  SYMLINK+="v4l/by-id/$env{ID_BUS}-$env{ID_SERIAL}-video-index$attr{index}"
+
+SUBSYSTEM=="video4linux", KERNEL=="video*", \
+  ATTR{index}=="0", SUBSYSTEMS=="pci", ATTRS{vendor}=="0x1461", \
+  ATTRS{device}=="0x0054", ATTRS{subsystem_vendor}=="0x1461", \
+  ATTRS{subsystem_device}=="0x5550", ATTRS{serial_number}=="?*", \
+  ENV{ID_BUS}="pci", \
+  ENV{ID_SERIAL}="AVerMedia_Live_Gamer_BOLT_GC555_$attr{serial_number}", \
+  SYMLINK+="v4l/by-id/$env{ID_BUS}-$env{ID_SERIAL}-video-index$attr{index}"

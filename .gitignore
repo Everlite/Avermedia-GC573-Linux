@@ -27,4 +27,7 @@ linuxextract.c
 *.ghidra
 todo.md
 reference_gc555/
-open_gc573/
+
+# Compiled display binaries
+tools/everlive/everlive_display
+tools/everlive/gc573_display

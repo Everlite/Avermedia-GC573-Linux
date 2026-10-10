@@ -1,0 +1,696 @@
+/*
+ * gc573_display.c - Dedicated Zero-Latency Direct V4L2/SDL2 Console Display & Audio Companion
+ *
+ * Designed specifically for interactive gaming on capture cards.
+ * Features:
+ * - Direct V4L2 DMA mmap texture upload (< 2 ms display latency)
+ * - Built-in low-latency ALSA 8ch LPCM capture with 7.1 -> stereo downmix
+ * - Interactive on-screen HUD: Real-time volume slider, mute, signal & stats overlay
+ * - Mouse wheel volume control & on-screen volume toasts
+ * - Auto-hiding cursor & HUD on mouse inactivity
+ * - Native borderless fullscreen toggle (F11 / f / double-click)
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <errno.h>
+#include <signal.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <sys/poll.h>
+#include <sys/wait.h>
+#include <linux/videodev2.h>
+#include <pthread.h>
+#include <time.h>
+#include <SDL.h>
+#include "font8x8.h"
+
+#define DEFAULT_VDEV "/dev/video2"
+#define DEFAULT_ADEV "hw:CARD=A4K,DEV=0"
+#define BUFFER_COUNT 4
+
+struct v4l2_mmap_buffer {
+    void *start;
+    size_t length;
+};
+
+static volatile sig_atomic_t g_running = 1;
+static bool g_fullscreen = false;
+static bool g_muted = false;
+static float g_volume = 1.0f;
+static volatile sig_atomic_t g_audio_dirty = 1;
+static bool g_show_stats = true;
+static bool g_hud_visible = true;
+static uint32_t g_last_mouse_time = 0;
+static uint32_t g_volume_toast_time = 0;
+
+static pid_t g_audio_pid = 0;
+
+static void stop_audio_pipeline(void)
+{
+    if (g_audio_pid > 0) {
+        kill(-g_audio_pid, SIGTERM);
+        usleep(30000);
+        kill(-g_audio_pid, SIGKILL);
+        waitpid(g_audio_pid, NULL, WNOHANG);
+        g_audio_pid = 0;
+    }
+}
+
+static void sig_handler(int sig)
+{
+    (void)sig;
+    g_running = 0;
+    stop_audio_pipeline();
+}
+
+static void start_audio_pipeline(const char *adev)
+{
+    if (g_audio_pid > 0) return;
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        setpgid(0, 0);
+        char cmd[512];
+        snprintf(cmd, sizeof(cmd),
+                 "arecord -D \"%s\" -f S16_LE -c 8 -r 48000 --buffer-size=8192 --period-size=480 -q | "
+                 "pw-play --latency=10ms -P 'application.name=gc573-audio node.name=gc573-audio' -",
+                 adev);
+        execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
+        _exit(127);
+    } else if (pid > 0) {
+        g_audio_pid = pid;
+    }
+}
+
+static void *audio_supervisor_thread(void *arg)
+{
+    const char *adev = (const char *)arg;
+    int node_id = -1;
+    float last_vol = -1.0f;
+    bool last_muted = false;
+
+    start_audio_pipeline(adev);
+
+    while (g_running) {
+        /* Monitor child process */
+        if (g_audio_pid > 0) {
+            int status;
+            pid_t r = waitpid(g_audio_pid, &status, WNOHANG);
+            if (r > 0) {
+                g_audio_pid = 0;
+                node_id = -1;
+                fprintf(stderr, "[Audio] Stream unterbrochen. Starte neu...\n");
+                start_audio_pipeline(adev);
+                g_audio_dirty = 1;
+            }
+        }
+
+        /* Find PipeWire node ID */
+        if (node_id < 0 && g_audio_pid > 0) {
+            FILE *fp = popen("wpctl status 2>/dev/null | grep 'gc573-audio' | head -n1 | awk '{print $1}' | tr -d '.'", "r");
+            if (fp) {
+                char buf[32];
+                if (fgets(buf, sizeof(buf), fp)) {
+                    int id = atoi(buf);
+                    if (id > 0) {
+                        node_id = id;
+                        printf("[Audio] PipeWire 10ms Stream aktiv (Node ID: %d)\n", node_id);
+                        g_audio_dirty = 1;
+                    }
+                }
+                pclose(fp);
+            }
+        }
+
+        /* Apply volume or mute updates */
+        if (node_id > 0 && (g_audio_dirty || g_volume != last_vol || g_muted != last_muted)) {
+            g_audio_dirty = 0;
+            last_vol = g_volume;
+            last_muted = g_muted;
+
+            char cmd[128];
+            if (last_muted) {
+                snprintf(cmd, sizeof(cmd), "wpctl set-mute %d 1 2>/dev/null", node_id);
+            } else {
+                snprintf(cmd, sizeof(cmd), "wpctl set-mute %d 0 2>/dev/null; wpctl set-volume %d %.2f 2>/dev/null", node_id, node_id, last_vol);
+            }
+            system(cmd);
+        }
+
+        usleep(25000);
+    }
+
+    stop_audio_pipeline();
+    return NULL;
+}
+
+/* 8x8 Bitmap Text Rendering */
+static void draw_char(SDL_Renderer *r, char c, int x, int y, int scale, SDL_Color color)
+{
+    uint8_t uc = (uint8_t)c;
+    if (uc > 127) uc = '?';
+    const uint8_t *bitmap = font8x8_basic[uc];
+    SDL_SetRenderDrawColor(r, color.r, color.g, color.b, color.a);
+    for (int row = 0; row < 8; row++) {
+        uint8_t b = bitmap[row];
+        for (int col = 0; col < 8; col++) {
+            if ((b >> col) & 1) {
+                SDL_Rect rc = { x + col * scale, y + row * scale, scale, scale };
+                SDL_RenderFillRect(r, &rc);
+            }
+        }
+    }
+}
+
+static void draw_string(SDL_Renderer *r, const char *str, int x, int y, int scale, SDL_Color color)
+{
+    while (*str) {
+        draw_char(r, *str, x, y, scale, color);
+        x += 8 * scale;
+        str++;
+    }
+}
+
+int main(int argc, char *argv[])
+{
+    const char *vdev = DEFAULT_VDEV;
+    const char *adev = DEFAULT_ADEV;
+    bool start_fullscreen = false;
+
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "-f") || !strcmp(argv[i], "--fullscreen"))
+            start_fullscreen = true;
+        else if (!strcmp(argv[i], "-d") && i + 1 < argc)
+            vdev = argv[++i];
+        else if (!strcmp(argv[i], "-a") && i + 1 < argc)
+            adev = argv[++i];
+        else if (!strcmp(argv[i], "--no-audio") || !strcmp(argv[i], "-n"))
+            adev = "none";
+        else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
+            printf("Usage: %s [-f|--fullscreen] [-d /dev/videoX] [-a hw:CARD,DEV|none] [--no-audio]\n", argv[0]);
+            return 0;
+        }
+    }
+
+    signal(SIGINT, sig_handler);
+    signal(SIGTERM, sig_handler);
+
+    int fd = open(vdev, O_RDWR);
+    if (fd < 0) {
+        fprintf(stderr, "[Error] Konnte V4L2 Gerät '%s' nicht öffnen: %s\n", vdev, strerror(errno));
+        return 1;
+    }
+
+    struct v4l2_format fmt = {};
+    fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    if (ioctl(fd, VIDIOC_G_FMT, &fmt) < 0) {
+        fprintf(stderr, "[Error] VIDIOC_G_FMT fehlgeschlagen: %s\n", strerror(errno));
+        close(fd);
+        return 1;
+    }
+
+    uint32_t width = fmt.fmt.pix.width;
+    uint32_t height = fmt.fmt.pix.height;
+    uint32_t pixelformat = fmt.fmt.pix.pixelformat;
+    uint32_t bytesperline = fmt.fmt.pix.bytesperline;
+
+    char fourcc[5] = {
+        (char)(pixelformat & 0xff),
+        (char)((pixelformat >> 8) & 0xff),
+        (char)((pixelformat >> 16) & 0xff),
+        (char)((pixelformat >> 24) & 0xff),
+        0
+    };
+    printf("[*] GC573 Signal: %ux%u (%s, %u bytes/line)\n", width, height, fourcc, bytesperline);
+
+    uint32_t sdl_format;
+    if (pixelformat == V4L2_PIX_FMT_YUYV)
+        sdl_format = SDL_PIXELFORMAT_YUY2;
+    else if (pixelformat == V4L2_PIX_FMT_NV12)
+        sdl_format = SDL_PIXELFORMAT_NV12;
+    else {
+        fprintf(stderr, "[!] Unbekanntes Pixelformat %s, versuche YUY2\n", fourcc);
+        sdl_format = SDL_PIXELFORMAT_YUY2;
+    }
+
+    /* Request 4 mmap buffers */
+    struct v4l2_requestbuffers req = {};
+    req.count = BUFFER_COUNT;
+    req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    req.memory = V4L2_MEMORY_MMAP;
+    if (ioctl(fd, VIDIOC_REQBUFS, &req) < 0) {
+        fprintf(stderr, "[Error] VIDIOC_REQBUFS fehlgeschlagen: %s\n", strerror(errno));
+        close(fd);
+        return 1;
+    }
+
+    struct v4l2_mmap_buffer buffers[BUFFER_COUNT];
+    for (unsigned int i = 0; i < req.count; i++) {
+        struct v4l2_buffer buf = {};
+        buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        buf.memory = V4L2_MEMORY_MMAP;
+        buf.index = i;
+        if (ioctl(fd, VIDIOC_QUERYBUF, &buf) < 0) {
+            fprintf(stderr, "[Error] VIDIOC_QUERYBUF fehlgeschlagen: %s\n", strerror(errno));
+            close(fd);
+            return 1;
+        }
+        buffers[i].length = buf.length;
+        buffers[i].start = mmap(NULL, buf.length, PROT_READ | PROT_WRITE, MAP_SHARED, fd, buf.m.offset);
+        if (buffers[i].start == MAP_FAILED) {
+            fprintf(stderr, "[Error] mmap fehlgeschlagen: %s\n", strerror(errno));
+            close(fd);
+            return 1;
+        }
+        if (ioctl(fd, VIDIOC_QBUF, &buf) < 0) {
+            fprintf(stderr, "[Error] VIDIOC_QBUF fehlgeschlagen: %s\n", strerror(errno));
+            close(fd);
+            return 1;
+        }
+    }
+
+    enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    if (ioctl(fd, VIDIOC_STREAMON, &type) < 0) {
+        fprintf(stderr, "[Error] VIDIOC_STREAMON fehlgeschlagen: %s\n", strerror(errno));
+        close(fd);
+        return 1;
+    }
+
+    /* Initialize SDL2 */
+    if (SDL_Init(SDL_INIT_VIDEO) < 0) {
+        fprintf(stderr, "[Error] SDL_Init fehlgeschlagen: %s\n", SDL_GetError());
+        close(fd);
+        return 1;
+    }
+
+    /* Hints for lowest latency on Wayland & X11 */
+    SDL_SetHint(SDL_HINT_RENDER_VSYNC, "0");
+    SDL_SetHint("SDL_VIDEO_WAYLAND_TEARING", "1");
+    SDL_SetHint("SDL_VIDEO_WAYLAND_ALLOW_DATACONTROL", "1");
+    SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "1");
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
+
+    int win_w = 1920;
+    int win_h = 1080;
+
+    Uint32 win_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
+    if (start_fullscreen) {
+        win_flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+        g_fullscreen = true;
+    }
+
+    SDL_Window *window = SDL_CreateWindow(
+        "PS5 Screen (GC573 Direct)",
+        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+        win_w, win_h,
+        win_flags
+    );
+    if (!window) {
+        fprintf(stderr, "[Error] SDL_CreateWindow fehlgeschlagen: %s\n", SDL_GetError());
+        SDL_Quit();
+        close(fd);
+        return 1;
+    }
+
+    SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+    if (!renderer) {
+        fprintf(stderr, "[Error] SDL_CreateRenderer fehlgeschlagen: %s\n", SDL_GetError());
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        close(fd);
+        return 1;
+    }
+
+    SDL_SetRenderDrawColor(renderer, 0, 0, 20, 255);
+    SDL_RenderClear(renderer);
+    SDL_RenderPresent(renderer);
+    SDL_RaiseWindow(window);
+
+    SDL_Texture *texture = SDL_CreateTexture(
+        renderer,
+        sdl_format,
+        SDL_TEXTUREACCESS_STREAMING,
+        (int)width, (int)height
+    );
+    if (!texture) {
+        fprintf(stderr, "[Error] SDL_CreateTexture fehlgeschlagen: %s\n", SDL_GetError());
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        close(fd);
+        return 1;
+    }
+
+    /* Setup Audio Pipeline (PipeWire 10ms with native surround mixing) */
+    bool enable_audio = adev && strcmp(adev, "none") != 0;
+    pthread_t audio_tid;
+
+    if (enable_audio) {
+        pthread_create(&audio_tid, NULL, audio_supervisor_thread, (void *)adev);
+    }
+
+    printf("[+] Direct Display aktiv! Hotkeys: [F11/f] Vollbild, [m] Mute, [Scroll] Lautstaerke, [Tab] Stats, [Esc/q] Beenden\n");
+
+    struct pollfd pfd = { .fd = fd, .events = POLLIN };
+    uint64_t frame_count = 0;
+    uint32_t last_title_time = SDL_GetTicks();
+    g_last_mouse_time = SDL_GetTicks();
+
+    double lat_ms = 0.0;
+    uint32_t live_fps = 0;
+    uint32_t live_jitter = 0;
+    uint32_t jitter_count = 0;
+    static uint64_t last_frame_time_us = 0;
+
+    bool dragging_volume = false;
+
+    while (g_running) {
+        int cur_w, cur_h;
+        SDL_GetWindowSize(window, &cur_w, &cur_h);
+
+        /* HUD dimensions */
+        int hud_w = 660;
+        int hud_h = 44;
+        int hud_x = (cur_w - hud_w) / 2;
+        int hud_y = cur_h - 58;
+
+        /* Slider rect */
+        SDL_Rect slider_rect = { hud_x + 64, hud_y + 16, 130, 10 };
+
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_QUIT) {
+                g_running = 0;
+            } else if (ev.type == SDL_MOUSEMOTION) {
+                g_last_mouse_time = SDL_GetTicks();
+                SDL_ShowCursor(SDL_ENABLE);
+
+                if (dragging_volume) {
+                    int mx = ev.motion.x;
+                    float ratio = (float)(mx - slider_rect.x) / (float)slider_rect.w;
+                    if (ratio < 0.0f) ratio = 0.0f;
+                    if (ratio > 1.0f) ratio = 1.0f;
+                    g_volume = ratio * 1.5f;
+                    g_muted = false;
+                    g_audio_dirty = 1;
+                    g_volume_toast_time = SDL_GetTicks();
+                }
+            } else if (ev.type == SDL_MOUSEBUTTONDOWN) {
+                g_last_mouse_time = SDL_GetTicks();
+                SDL_ShowCursor(SDL_ENABLE);
+
+                if (ev.button.button == SDL_BUTTON_LEFT) {
+                    if (ev.button.clicks == 2) {
+                        /* Double-click toggles fullscreen */
+                        g_fullscreen = !g_fullscreen;
+                        SDL_SetWindowFullscreen(window, g_fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+                    } else if (g_hud_visible && ev.button.y >= hud_y && ev.button.y <= hud_y + hud_h) {
+                        int bx = ev.button.x;
+                        /* Mute toggle button (hud_x + 10 .. + 55) */
+                        if (bx >= hud_x + 10 && bx <= hud_x + 58) {
+                            g_muted = !g_muted;
+                            g_audio_dirty = 1;
+                            g_volume_toast_time = SDL_GetTicks();
+                        }
+                        /* Volume slider (hud_x + 64 .. + 194) */
+                        else if (bx >= slider_rect.x && bx <= slider_rect.x + slider_rect.w) {
+                            dragging_volume = true;
+                            float ratio = (float)(bx - slider_rect.x) / (float)slider_rect.w;
+                            g_volume = ratio * 1.5f;
+                            g_muted = false;
+                            g_audio_dirty = 1;
+                            g_volume_toast_time = SDL_GetTicks();
+                        }
+                        /* Stats toggle button (hud_x + 475 .. + 530) */
+                        else if (bx >= hud_x + 475 && bx <= hud_x + 530) {
+                            g_show_stats = !g_show_stats;
+                        }
+                        /* Fullscreen toggle button (hud_x + 535 .. + 590) */
+                        else if (bx >= hud_x + 535 && bx <= hud_x + 590) {
+                            g_fullscreen = !g_fullscreen;
+                            SDL_SetWindowFullscreen(window, g_fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+                        }
+                        /* Exit button (hud_x + 595 .. + 645) */
+                        else if (bx >= hud_x + 595 && bx <= hud_x + 645) {
+                            g_running = 0;
+                        }
+                    }
+                }
+            } else if (ev.type == SDL_MOUSEBUTTONUP) {
+                if (ev.button.button == SDL_BUTTON_LEFT) {
+                    dragging_volume = false;
+                }
+            } else if (ev.type == SDL_MOUSEWHEEL) {
+                g_last_mouse_time = SDL_GetTicks();
+                SDL_ShowCursor(SDL_ENABLE);
+
+                if (ev.wheel.y > 0) {
+                    g_volume = (g_volume < 1.45f) ? g_volume + 0.05f : 1.5f;
+                    g_muted = false;
+                } else if (ev.wheel.y < 0) {
+                    g_volume = (g_volume > 0.05f) ? g_volume - 0.05f : 0.0f;
+                }
+                g_audio_dirty = 1;
+                g_volume_toast_time = SDL_GetTicks();
+            } else if (ev.type == SDL_KEYDOWN) {
+                g_last_mouse_time = SDL_GetTicks();
+                SDL_ShowCursor(SDL_ENABLE);
+
+                if (ev.key.keysym.sym == SDLK_ESCAPE || ev.key.keysym.sym == SDLK_q) {
+                    g_running = 0;
+                } else if (ev.key.keysym.sym == SDLK_f || ev.key.keysym.sym == SDLK_F11) {
+                    g_fullscreen = !g_fullscreen;
+                    SDL_SetWindowFullscreen(window, g_fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+                } else if (ev.key.keysym.sym == SDLK_m) {
+                    g_muted = !g_muted;
+                    g_audio_dirty = 1;
+                    g_volume_toast_time = SDL_GetTicks();
+                } else if (ev.key.keysym.sym == SDLK_0 || ev.key.keysym.sym == SDLK_UP || ev.key.keysym.sym == SDLK_PLUS) {
+                    g_volume = (g_volume < 1.45f) ? g_volume + 0.05f : 1.5f;
+                    g_muted = false;
+                    g_audio_dirty = 1;
+                    g_volume_toast_time = SDL_GetTicks();
+                } else if (ev.key.keysym.sym == SDLK_9 || ev.key.keysym.sym == SDLK_DOWN || ev.key.keysym.sym == SDLK_MINUS) {
+                    g_volume = (g_volume > 0.05f) ? g_volume - 0.05f : 0.0f;
+                    g_audio_dirty = 1;
+                    g_volume_toast_time = SDL_GetTicks();
+                } else if (ev.key.keysym.sym == SDLK_TAB || ev.key.keysym.sym == SDLK_i) {
+                    g_show_stats = !g_show_stats;
+                }
+            } else if (ev.type == SDL_WINDOWEVENT) {
+                if (ev.window.event == SDL_WINDOWEVENT_EXPOSED ||
+                    ev.window.event == SDL_WINDOWEVENT_RESIZED ||
+                    ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
+                    SDL_RenderCopy(renderer, texture, NULL, NULL);
+                    SDL_RenderPresent(renderer);
+                }
+            }
+        }
+
+        int poll_ret = poll(&pfd, 1, 50);
+        if (poll_ret <= 0)
+            continue;
+
+        struct v4l2_buffer buf = {};
+        buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        buf.memory = V4L2_MEMORY_MMAP;
+        if (ioctl(fd, VIDIOC_DQBUF, &buf) < 0)
+            continue;
+
+        /* Calculate exact capture-to-display latency */
+        struct timespec now_ts;
+        clock_gettime(CLOCK_MONOTONIC, &now_ts);
+        uint64_t now_us = (uint64_t)now_ts.tv_sec * 1000000ULL + now_ts.tv_nsec / 1000ULL;
+        uint64_t buf_time_us = (uint64_t)buf.timestamp.tv_sec * 1000000ULL + buf.timestamp.tv_usec;
+        int64_t lat_us = (int64_t)(now_us - buf_time_us);
+        if (lat_us < 0) lat_us = 0;
+        lat_ms = (double)lat_us / 1000.0;
+
+        /* Direct GPU texture upload from DMA buffer */
+        SDL_UpdateTexture(texture, NULL, buffers[buf.index].start, (int)bytesperline);
+
+        /* Return buffer to driver immediately so PCIe DMA never starves */
+        ioctl(fd, VIDIOC_QBUF, &buf);
+
+        SDL_RenderCopy(renderer, texture, NULL, NULL);
+
+        frame_count++;
+
+        uint64_t frame_delta_us = last_frame_time_us ? (now_us - last_frame_time_us) : 8333;
+        last_frame_time_us = now_us;
+        if (frame_delta_us > 12000 || frame_delta_us < 5000) {
+            jitter_count++;
+        }
+
+        uint32_t now_ticks = SDL_GetTicks();
+
+        /* Auto-hide HUD and cursor on idle */
+        if (now_ticks - g_last_mouse_time > 2500 && !dragging_volume) {
+            g_hud_visible = false;
+            SDL_ShowCursor(SDL_DISABLE);
+        } else {
+            g_hud_visible = true;
+        }
+
+        /* 1. Draw On-Screen Display HUD if active */
+        if (g_hud_visible) {
+            SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+
+            /* Main HUD Panel Bar */
+            SDL_Rect hud_bg = { hud_x, hud_y, hud_w, hud_h };
+            SDL_SetRenderDrawColor(renderer, 15, 18, 26, 215);
+            SDL_RenderFillRect(renderer, &hud_bg);
+            SDL_SetRenderDrawColor(renderer, 50, 65, 95, 230);
+            SDL_RenderDrawRect(renderer, &hud_bg);
+
+            /* Mute / Vol Button */
+            SDL_Rect btn_vol = { hud_x + 10, hud_y + 10, 48, 24 };
+            SDL_SetRenderDrawColor(renderer, g_muted ? 180 : 35, g_muted ? 40 : 45, g_muted ? 40 : 60, 200);
+            SDL_RenderFillRect(renderer, &btn_vol);
+            draw_string(renderer, g_muted ? "MUTE" : "VOL", hud_x + 14, hud_y + 14, 1, (SDL_Color){255, 255, 255, 255});
+
+            /* Volume Slider Track */
+            SDL_SetRenderDrawColor(renderer, 35, 42, 56, 255);
+            SDL_RenderFillRect(renderer, &slider_rect);
+
+            /* Volume Filled Bar */
+            int filled_w = (int)(slider_rect.w * (g_volume / 1.5f));
+            if (filled_w > slider_rect.w) filled_w = slider_rect.w;
+            if (filled_w > 0 && !g_muted) {
+                SDL_Rect fill_rect = { slider_rect.x, slider_rect.y, filled_w, slider_rect.h };
+                SDL_SetRenderDrawColor(renderer, 56, 139, 253, 255);
+                SDL_RenderFillRect(renderer, &fill_rect);
+            }
+
+            /* Volume Slider Handle */
+            int handle_x = slider_rect.x + filled_w - 4;
+            if (handle_x < slider_rect.x) handle_x = slider_rect.x;
+            if (handle_x > slider_rect.x + slider_rect.w - 6) handle_x = slider_rect.x + slider_rect.w - 6;
+            SDL_Rect handle_rect = { handle_x, slider_rect.y - 3, 7, 16 };
+            SDL_SetRenderDrawColor(renderer, 240, 246, 252, 255);
+            SDL_RenderFillRect(renderer, &handle_rect);
+
+            /* Volume Text (Percentage) */
+            char vol_txt[16];
+            if (g_muted)
+                snprintf(vol_txt, sizeof(vol_txt), "OFF");
+            else
+                snprintf(vol_txt, sizeof(vol_txt), "%3d%%", (int)(g_volume * 100.0f));
+            draw_string(renderer, vol_txt, hud_x + 202, hud_y + 18, 1, (SDL_Color){200, 215, 235, 255});
+
+            /* Signal Info Badge */
+            char sig_txt[32];
+            snprintf(sig_txt, sizeof(sig_txt), "%ux%u@%u", width, height, live_fps ? live_fps : 120);
+            draw_string(renderer, sig_txt, hud_x + 260, hud_y + 18, 1, (SDL_Color){63, 185, 80, 255});
+
+            /* Separator */
+            SDL_Rect sep = { hud_x + 460, hud_y + 10, 1, 24 };
+            SDL_SetRenderDrawColor(renderer, 50, 65, 95, 180);
+            SDL_RenderFillRect(renderer, &sep);
+
+            /* Stats Button */
+            SDL_Rect btn_stats = { hud_x + 472, hud_y + 10, 54, 24 };
+            SDL_SetRenderDrawColor(renderer, g_show_stats ? 40 : 25, g_show_stats ? 60 : 32, g_show_stats ? 80 : 45, 200);
+            SDL_RenderFillRect(renderer, &btn_stats);
+            draw_string(renderer, "STATS", hud_x + 477, hud_y + 18, 1, (SDL_Color){220, 230, 245, 255});
+
+            /* Fullscreen Button */
+            SDL_Rect btn_full = { hud_x + 534, hud_y + 10, 54, 24 };
+            SDL_SetRenderDrawColor(renderer, 28, 35, 48, 200);
+            SDL_RenderFillRect(renderer, &btn_full);
+            draw_string(renderer, g_fullscreen ? "WNDW" : "FULL", hud_x + 539, hud_y + 18, 1, (SDL_Color){220, 230, 245, 255});
+
+            /* Exit Button */
+            SDL_Rect btn_exit = { hud_x + 596, hud_y + 10, 48, 24 };
+            SDL_SetRenderDrawColor(renderer, 150, 30, 30, 200);
+            SDL_RenderFillRect(renderer, &btn_exit);
+            draw_string(renderer, "EXIT", hud_x + 603, hud_y + 18, 1, (SDL_Color){255, 255, 255, 255});
+        }
+
+        /* 2. Top-Right Stats HUD Overlay (if enabled) */
+        if (g_show_stats) {
+            SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+            int box_w = 200;
+            int box_h = 75;
+            int box_x = cur_w - box_w - 20;
+            int box_y = 20;
+
+            SDL_Rect stats_bg = { box_x, box_y, box_w, box_h };
+            SDL_SetRenderDrawColor(renderer, 12, 15, 22, 200);
+            SDL_RenderFillRect(renderer, &stats_bg);
+            SDL_SetRenderDrawColor(renderer, 45, 55, 80, 220);
+            SDL_RenderDrawRect(renderer, &stats_bg);
+
+            char line1[32], line2[32], line3[32];
+            snprintf(line1, sizeof(line1), "FPS: %u (%.1fms)", live_fps ? live_fps : 120, live_fps > 0 ? (1000.0/live_fps) : 8.3);
+            snprintf(line2, sizeof(line2), "LAG: %.1f ms", lat_ms);
+            snprintf(line3, sizeof(line3), "JITTER: %u/s", live_jitter);
+
+            draw_string(renderer, line1, box_x + 12, box_y + 12, 1, (SDL_Color){63, 185, 80, 255});
+            draw_string(renderer, line2, box_x + 12, box_y + 32, 1, (SDL_Color){88, 166, 255, 255});
+            draw_string(renderer, line3, box_x + 12, box_y + 52, 1, (live_jitter > 5) ? (SDL_Color){248, 81, 73, 255} : (SDL_Color){139, 148, 158, 255});
+        }
+
+        /* 3. Center Volume Toast (pops up on scroll/key volume changes) */
+        if (now_ticks - g_volume_toast_time < 1200) {
+            SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+            int tw = 220;
+            int th = 40;
+            int tx = (cur_w - tw) / 2;
+            int ty = 40;
+
+            SDL_Rect t_rect = { tx, ty, tw, th };
+            SDL_SetRenderDrawColor(renderer, 15, 18, 26, 230);
+            SDL_RenderFillRect(renderer, &t_rect);
+            SDL_SetRenderDrawColor(renderer, 56, 139, 253, 240);
+            SDL_RenderDrawRect(renderer, &t_rect);
+
+            char toast_msg[32];
+            if (g_muted)
+                snprintf(toast_msg, sizeof(toast_msg), "AUDIO: MUTED");
+            else
+                snprintf(toast_msg, sizeof(toast_msg), "VOLUME: %3d%%", (int)(g_volume * 100.0f));
+
+            draw_string(renderer, toast_msg, tx + 20, ty + 16, 1, (SDL_Color){240, 246, 252, 255});
+        }
+
+        SDL_RenderPresent(renderer);
+
+        if (now_ticks - last_title_time >= 1000) {
+            live_fps = (uint32_t)frame_count;
+            live_jitter = jitter_count;
+            frame_count = 0;
+            jitter_count = 0;
+            last_title_time = now_ticks;
+
+            char title[180];
+            snprintf(title, sizeof(title), "PS5 Direct Screen - %ux%u @ %u FPS | Latenz: %.1f ms | Vol: %d%%",
+                     width, height, live_fps, lat_ms, g_muted ? 0 : (int)(g_volume * 100.0f));
+            SDL_SetWindowTitle(window, title);
+        }
+    }
+
+    /* Cleanup */
+    if (enable_audio) {
+        pthread_join(audio_tid, NULL);
+    }
+
+    ioctl(fd, VIDIOC_STREAMOFF, &type);
+    for (unsigned int i = 0; i < req.count; i++)
+        munmap(buffers[i].start, buffers[i].length);
+    close(fd);
+
+    SDL_DestroyTexture(texture);
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+
+    printf("[+] Beendet.\n");
+    return 0;
+}

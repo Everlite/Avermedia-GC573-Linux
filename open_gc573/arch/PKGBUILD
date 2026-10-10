@@ -1,0 +1,40 @@
+# Maintainer: ostrich <570911+ostrich@users.noreply.github.com>
+
+pkgname=gc555-dkms-git
+_pkgname=gc555
+pkgver=r0.g0000000
+pkgrel=1
+pkgdesc='Linux driver for the AVerMedia Live Gamer BOLT GC555'
+arch=('any')
+url='https://github.com/ostrich/gc555'
+license=('GPL-2.0-only')
+depends=('dkms')
+makedepends=('git')
+provides=('gc555-dkms')
+conflicts=('gc555-dkms')
+source=("$_pkgname::git+$url.git"
+        'dkms.conf')
+b2sums=('SKIP'
+        'da9319e27f18a11486134e80616f05dd642cb66e044a4a49eef573cccc92cef59ec3bf0b94c4485c2488c569450a6ae23a3d020f38440cf6d1081c93c3b59492')
+
+pkgver() {
+  cd "$_pkgname"
+  printf 'r%s.g%s' "$(git rev-list --count HEAD)" \
+    "$(git rev-parse --short=7 HEAD)"
+}
+
+package() {
+  local file
+  local src="$srcdir/$_pkgname"
+  local dest="$pkgdir/usr/src/$_pkgname-$pkgver"
+
+  install -d "$dest"
+  install -m0644 "$src"/{COPYING,Kbuild,Kconfig,Makefile} "$dest/"
+  while IFS= read -r file; do
+    install -Dm0644 "$src/$file" "$dest/$file"
+  done < <(git -C "$src" ls-files -- '*.c' '*.h')
+  install -Dm0644 "$src/udev/70-gc573.rules" \
+    "$pkgdir/usr/lib/udev/rules.d/70-gc573.rules"
+  sed "s/@PACKAGE_VERSION@/$pkgver/" "$srcdir/dkms.conf" \
+    > "$dest/dkms.conf"
+}

@@ -1,0 +1,22 @@
+# Kernel module build products
+*.ko
+*.mod
+*.mod.c
+*.o
+*.order
+*.symvers
+.*.cmd
+.tmp_versions/
+Module.symvers
+modules.order
+
+# Local editor and analysis products
+*~
+.cache/
+compile_commands.json
+
+# Arch package build products
+/arch/gc555/
+/arch/pkg/
+/arch/src/
+/arch/*.pkg.tar.*
