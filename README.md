@@ -23,7 +23,7 @@ With **EverLive**, you can play PlayStation 5, Xbox Series X, or Nintendo Switch
 Open a terminal and run:
 
 ```bash
-git clone https://github.com/Everlite/Avermedia-GC573-Linux.git EverLive
+git clone https://github.com/Everlite/EverLive.git
 cd EverLive
 ./install.sh
 ```
