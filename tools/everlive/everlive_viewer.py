@@ -245,18 +245,10 @@ class GameStreamer:
                 info["resolution"] = f"{w}x{h}"
                 info["framerate"] = f"{fps} Hz"
         except Exception:
-            # Fallback check via current format
-            try:
-                fmt_out = subprocess.check_output(
-                    ["v4l2-ctl", "-d", self.vdev, "-V"],
-                    stderr=subprocess.DEVNULL, timeout=0.5
-                ).decode()
-                dim_m = re.search(r"Width/Height\s*:\s*(\d+)/(\d+)", fmt_out)
-                if dim_m:
-                    info["resolution"] = f"{dim_m.group(1)}x{dim_m.group(2)}"
-                    info["locked"] = True
-            except Exception:
-                pass
+            # Kein aktiver HDMI-Signal-Lock über DV-Timings vorhanden
+            info["locked"] = False
+            info["resolution"] = "Kein HDMI-Signal erkannt"
+            info["framerate"] = ""
 
         return info
 
@@ -276,7 +268,7 @@ class GameStreamer:
             height = preset["height"]
             fps = preset["fps"]
             fmt = preset["fmt"]
-            # Apply to V4L2 device
+            # Apply fixed preset to V4L2 device
             try:
                 subprocess.run(
                     ["v4l2-ctl", "-d", self.vdev, f"--set-fmt-video=width={width},height={height},pixelformat={fmt}"],
@@ -284,6 +276,15 @@ class GameStreamer:
                 )
             except Exception as e:
                 print(f"[*] Hinweis beim Setzen des Formats: {e}")
+        else:
+            # Auto (HDMI Signal): Hardware DV-Timings vom HDMI-Signal abfragen und anwenden (z.B. 4K 3840x2160)
+            try:
+                subprocess.run(
+                    ["v4l2-ctl", "-d", self.vdev, "--set-dv-bt-timings", "query"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2.0
+                )
+            except Exception:
+                pass
 
         script_dir = os.path.dirname(os.path.abspath(__file__))
         native_bin = os.path.join(script_dir, "everlive_display")
@@ -705,7 +706,10 @@ def main():
     if args.cli or not HAS_QT:
         print("[*] Starte PS5 Gaming Screen im Low-Latency-Modus...")
         info = streamer.get_signal_info()
-        print(f"[*] Signal: {info['resolution']} {info['framerate']}")
+        print(f"[*] Signal: {info['resolution']} {info['framerate']}".strip())
+        if not info["locked"]:
+            print("[!] Warnung: Es wurde aktuell kein aktives HDMI-Signal auf der GC573 erkannt.")
+            print("    Bitte prüfen, ob die Quelle eingeschaltet ist und ein Bild ausgibt.")
         if not streamer.start(preset_name=args.preset, fullscreen=args.fullscreen, volume=args.volume):
             sys.exit(1)
         print("[+] Fenster geöffnet. Drücke 'q' im Fenster oder Strg+C zum Beenden.")

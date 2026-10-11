@@ -40,16 +40,21 @@ chmod 0666 /sys/bus/pci/drivers/open_gc573/*/led_mode 2>/dev/null || true
 echo "[+] open_gc573 erfolgreich geladen!"
 
 echo "[*] Warte auf HDMI-Signal-Lock (max. 5s)..."
+SIGNAL_FOUND=0
 for _ in $(seq 1 25); do
     VDEV="$(for d in /sys/class/video4linux/video*; do
         [[ "$(readlink -f "$d/device/driver")" == */open_gc573 ]] && echo "/dev/$(basename "$d")"
     done | head -n 1 || true)"
     if [[ -n "${VDEV}" ]] && v4l2-ctl -d "${VDEV}" --query-dv-timings >/dev/null 2>&1; then
         echo "[+] Signal erkannt auf ${VDEV}"
+        SIGNAL_FOUND=1
         break
     fi
     sleep 0.2
 done
+if [[ "${SIGNAL_FOUND}" -eq 0 ]]; then
+    echo "[!] Hinweis: Bisher kein HDMI-Signal-Lock erkannt (Quelle aus oder Handshake ausstehend)."
+fi
 echo ""
 echo "=== PCI Treiber Zuordnung ==="
 lspci -k -d 1461: || true

@@ -258,6 +258,15 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    /* Query hardware DV timings from HDMI receiver and apply to capture device */
+    struct v4l2_dv_timings dv = {};
+    if (ioctl(fd, VIDIOC_QUERY_DV_TIMINGS, &dv) == 0) {
+        if (ioctl(fd, VIDIOC_S_DV_TIMINGS, &dv) == 0) {
+            printf("[*] GC573 HDMI Signal synchronisiert: %ux%u\n",
+                   dv.bt.width, dv.bt.height);
+        }
+    }
+
     struct v4l2_format fmt = {};
     fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     if (ioctl(fd, VIDIOC_G_FMT, &fmt) < 0) {
@@ -328,7 +337,16 @@ int main(int argc, char *argv[])
 
     enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     if (ioctl(fd, VIDIOC_STREAMON, &type) < 0) {
-        fprintf(stderr, "[Error] VIDIOC_STREAMON fehlgeschlagen: %s\n", strerror(errno));
+        if (errno == ENOLINK) {
+            fprintf(stderr, "\n[Error] VIDIOC_STREAMON fehlgeschlagen: Kein aktives HDMI-Signal (ENOLINK: Link has been severed).\n");
+            fprintf(stderr, "        Der HDMI-Receiver der GC573 hat noch keinen Signal-Lock von der Videoquelle erhalten.\n");
+            fprintf(stderr, "        Bitte prüfen:\n");
+            fprintf(stderr, "        - Ist die Bildquelle (z.B. RetroTINK-4K / Konsole) eingeschaltet und sendet Bild?\n");
+            fprintf(stderr, "        - Ist das HDMI-Kabel am GC573 HDMI-IN (Eingang) angeschlossen?\n");
+            fprintf(stderr, "        - Tipp: Einmal das HDMI-Kabel kurz ab- und wieder anstecken, um den Handshake neu auszulösen.\n\n");
+        } else {
+            fprintf(stderr, "[Error] VIDIOC_STREAMON fehlgeschlagen: %s\n", strerror(errno));
+        }
         close(fd);
         return 1;
     }
