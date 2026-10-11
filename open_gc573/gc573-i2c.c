@@ -13,19 +13,18 @@
 
 #include "gc573.h"
 
-#define GC555_I2C_BUS_STRIDE		0x40
 #define GC555_REG_INTERRUPT_STATUS	0x010
 #define GC555_REG_INTERRUPT_ENABLE	0x01c
-#define GC555_I2C_REG_DIVISOR		0x180
-#define GC555_I2C_REG_ADDRESS		0x184
-#define GC555_I2C_REG_SUBADDR_LEN	0x188
-#define GC555_I2C_REG_WIDTH		0x18c
-#define GC555_I2C_REG_SUBADDR		0x190
-#define GC555_I2C_REG_COUNT		0x194
-#define GC555_I2C_REG_TX_FIFO		0x198
-#define GC555_I2C_REG_RX_FIFO		0x19c
-#define GC555_I2C_REG_COMMAND		0x1a0
-#define GC555_I2C_REG_STATUS		0x1a4
+#define GC555_I2C_REG_DIVISOR		0x00
+#define GC555_I2C_REG_ADDRESS		0x04
+#define GC555_I2C_REG_SUBADDR_LEN	0x08
+#define GC555_I2C_REG_WIDTH		0x0c
+#define GC555_I2C_REG_SUBADDR		0x10
+#define GC555_I2C_REG_COUNT		0x14
+#define GC555_I2C_REG_TX_FIFO		0x18
+#define GC555_I2C_REG_RX_FIFO		0x1c
+#define GC555_I2C_REG_COMMAND		0x20
+#define GC555_I2C_REG_STATUS		0x24
 
 #define GC555_I2C_COMMAND_WRITE		0x4
 #define GC555_I2C_COMMAND_READ		0x8
@@ -37,7 +36,36 @@
 #define GC555_I2C_MAX_ATTEMPTS		4
 #define GC555_I2C_POLL_COUNT		2000
 #define GC555_I2C_MAX_DATA_LEN		U8_MAX
-#define GC555_I2C_IRQ(bus)		BIT(11 + (bus))
+
+static inline u32 gc555_i2c_bus_base(unsigned int bus)
+{
+	switch (bus) {
+	case GC555_I2C_BUS_PRIMARY:
+		return 0x0180;
+	case GC555_I2C_BUS_SECONDARY:
+		return 0x01c0;
+	case GC555_I2C_BUS_TERTIARY:
+		return 0x0120;
+	default:
+		return 0x0180;
+	}
+}
+
+static inline u32 gc555_i2c_bus_irq(unsigned int bus)
+{
+	switch (bus) {
+	case GC555_I2C_BUS_PRIMARY:
+		return BIT(11);
+	case GC555_I2C_BUS_SECONDARY:
+		return BIT(12);
+	case GC555_I2C_BUS_TERTIARY:
+		return BIT(13);
+	default:
+		return 0;
+	}
+}
+
+#define GC555_I2C_IRQ(bus)		gc555_i2c_bus_irq(bus)
 
 struct gc555_i2c_bus {
 	struct i2c_adapter adapter;
@@ -160,7 +188,7 @@ static int gc555_i2c_attempt(struct gc555_dev *gc555, unsigned int bus,
 			     unsigned int data_len)
 {
 	struct gc555_i2c_bus *i2c_bus = &gc555->i2c->buses[bus];
-	u32 base = bus * GC555_I2C_BUS_STRIDE;
+	u32 base = gc555_i2c_bus_base(bus);
 	u32 slave = addr << 1;
 	u8 status = 0;
 	unsigned int i;
@@ -272,8 +300,8 @@ u32 gc555_i2c_irq(struct gc555_dev *gc555, u32 irq_status)
 	for (i = 0; i < GC555_I2C_BUS_COUNT; i++) {
 		struct gc555_i2c_bus *bus = &i2c->buses[i];
 		unsigned long flags;
-		u32 irq_bit = GC555_I2C_IRQ(i);
-		u32 base = i * GC555_I2C_BUS_STRIDE;
+		u32 irq_bit = gc555_i2c_bus_irq(i);
+		u32 base = gc555_i2c_bus_base(i);
 		u8 status = 0;
 		bool wake = false;
 

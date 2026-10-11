@@ -12,7 +12,32 @@ import subprocess
 import time
 import argparse
 import re
+import json
 from typing import Optional, Tuple, Dict
+
+CONFIG_DIR = os.path.expanduser("~/.config/everlive")
+CONFIG_FILE = os.path.join(CONFIG_DIR, "settings.json")
+
+
+def load_settings() -> dict:
+    if os.path.isfile(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def save_settings(data: dict):
+    try:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        cur = load_settings()
+        cur.update(data)
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(cur, f, indent=2)
+    except Exception:
+        pass
 
 # PySide6 is optional when run with --cli
 try:
@@ -39,6 +64,80 @@ PRESETS = {
     "1920x1080 @ 60 FPS":  {"width": 1920, "height": 1080, "fps": 60,  "fmt": "YUYV"},
     "3840x2160 @ 60 FPS":  {"width": 3840, "height": 2160, "fps": 60,  "fmt": "YUYV"},
 }
+
+LED_MODES = {
+    "🌑 Aus (Dunkel)": 0,
+    "🔵 Blau (Standard)": 1,
+    "🟢 Grün": 2,
+    "🔴 Rot": 3,
+    "🔷 Cyan / Türkis": 4,
+    "🟣 Magenta / Lila": 5,
+    "🟡 Gelb": 6,
+    "⚪ Weiß": 7,
+}
+
+LED_NAME_MAP = {
+    "0": 0, "off": 0, "aus": 0, "dark": 0,
+    "1": 1, "blue": 1, "blau": 1,
+    "2": 2, "green": 2, "gruen": 2, "grün": 2,
+    "3": 3, "red": 3, "rot": 3,
+    "4": 4, "cyan": 4, "tuerkis": 4, "türkis": 4,
+    "5": 5, "magenta": 5, "lila": 5, "purple": 5,
+    "6": 6, "yellow": 6, "gelb": 6,
+    "7": 7, "white": 7, "weiss": 7, "weiß": 7,
+}
+
+
+def find_led_sysfs_path() -> Optional[str]:
+    """Locates the open_gc573 sysfs led_mode attribute."""
+    import glob
+    candidates = glob.glob("/sys/bus/pci/drivers/open_gc573/*/led_mode")
+    if candidates and os.path.exists(candidates[0]):
+        return candidates[0]
+    return None
+
+
+def read_led_mode() -> int:
+    """Reads current LED mode from kernel driver."""
+    path = find_led_sysfs_path()
+    if path:
+        try:
+            with open(path, "r") as f:
+                return int(f.read().strip())
+        except Exception:
+            pass
+    return -1
+
+
+def write_led_mode(mode: int) -> bool:
+    """Applies new LED mode to hardware in real-time and persists it."""
+    path = find_led_sysfs_path()
+    if not path:
+        return False
+    success = False
+    try:
+        with open(path, "w") as f:
+            f.write(f"{mode}\n")
+        success = True
+    except PermissionError:
+        # Fallback to pkexec if user permissions not granted yet
+        try:
+            p = subprocess.run(
+                ["pkexec", "tee", path],
+                input=f"{mode}\n".encode(),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5.0
+            )
+            success = (p.returncode == 0)
+        except Exception:
+            success = False
+    except Exception:
+        success = False
+
+    if success:
+        save_settings({"led_mode": mode})
+    return success
 
 
 class GameStreamer:
@@ -267,7 +366,7 @@ if HAS_QT:
 
         def init_ui(self):
             self.setWindowTitle("🎮 GC573 PS5 Gaming Screen")
-            self.setMinimumSize(460, 380)
+            self.setMinimumSize(480, 430)
 
             # Modern Dark Theme Stylesheet
             self.setStyleSheet("""
@@ -380,9 +479,47 @@ if HAS_QT:
             res_layout.addWidget(self.combo_presets, 1)
             settings_layout.addLayout(res_layout)
 
+            # Restore saved user preferences
+            saved_cfg = load_settings()
+            saved_led = saved_cfg.get("led_mode")
+            if saved_led is not None and isinstance(saved_led, int):
+                curr = read_led_mode()
+                if curr >= 0 and curr != saved_led:
+                    write_led_mode(saved_led)
+
+            if "preset" in saved_cfg and saved_cfg["preset"] in PRESETS:
+                self.combo_presets.setCurrentText(saved_cfg["preset"])
+            self.combo_presets.currentIndexChanged.connect(
+                lambda: save_settings({"preset": self.combo_presets.currentText()})
+            )
+
+            # LED Lighting Combo (RGB On-the-Fly Control)
+            led_layout = QHBoxLayout()
+            lbl_led = QLabel("LED Beleuchtung:")
+            self.combo_led = QComboBox()
+            for name, val in LED_MODES.items():
+                self.combo_led.addItem(name, val)
+
+            curr_mode = read_led_mode()
+            if curr_mode >= 0:
+                idx = self.combo_led.findData(curr_mode)
+                if idx >= 0:
+                    self.combo_led.setCurrentIndex(idx)
+            else:
+                self.combo_led.setEnabled(False)
+                self.combo_led.setToolTip("Kein open_gc573 LED-Knoten in sysfs gefunden")
+
+            self.combo_led.currentIndexChanged.connect(self.on_led_mode_changed)
+            led_layout.addWidget(lbl_led)
+            led_layout.addWidget(self.combo_led, 1)
+            settings_layout.addLayout(led_layout)
+
             # Fullscreen Checkbox
             self.chk_fullscreen = QCheckBox("Direkt im Vollbildmodus starten (F11 zum Umschalten)")
-            self.chk_fullscreen.setChecked(False)
+            self.chk_fullscreen.setChecked(bool(saved_cfg.get("fullscreen", False)))
+            self.chk_fullscreen.toggled.connect(
+                lambda v: save_settings({"fullscreen": v})
+            )
             settings_layout.addWidget(self.chk_fullscreen)
 
             # Volume Slider
@@ -390,10 +527,14 @@ if HAS_QT:
             lbl_vol = QLabel("Lautstärke:")
             self.slider_vol = QSlider(Qt.Horizontal)
             self.slider_vol.setRange(0, 150)
-            self.slider_vol.setValue(100)
-            self.lbl_vol_val = QLabel("100%")
+            initial_vol = int(saved_cfg.get("volume", 1.0) * 100)
+            self.slider_vol.setValue(initial_vol)
+            self.lbl_vol_val = QLabel(f"{initial_vol}%")
             self.lbl_vol_val.setFixedWidth(40)
             self.slider_vol.valueChanged.connect(lambda v: self.lbl_vol_val.setText(f"{v}%"))
+            self.slider_vol.valueChanged.connect(
+                lambda v: save_settings({"volume": v / 100.0})
+            )
             vol_layout.addWidget(lbl_vol)
             vol_layout.addWidget(self.slider_vol, 1)
             vol_layout.addWidget(self.lbl_vol_val)
@@ -448,6 +589,13 @@ if HAS_QT:
                 self.streamer.stop()
                 self.set_ui_stopped()
 
+        def on_led_mode_changed(self, index: int):
+            mode = self.combo_led.currentData()
+            if mode is not None:
+                success = write_led_mode(mode)
+                if not success:
+                    print(f"[!] LED Modus {mode} konnte nicht gesetzt werden (Berechtigung?).")
+
         def set_ui_stopped(self):
             self.btn_toggle.setText("🎮 PS5 Fenster starten")
             self.btn_toggle.setObjectName("btnPlay")
@@ -464,7 +612,27 @@ def main():
     parser.add_argument("-p", "--preset", default="Auto (HDMI Signal)", choices=list(PRESETS.keys()), help="Auflösungs-Preset")
     parser.add_argument("--cli", action="store_true", help="Startet direkt ohne Einstellungsfenster")
     parser.add_argument("-v", "--volume", type=float, default=1.0, help="Lautstärke (0.0 bis 1.5)")
+    parser.add_argument("--led", type=str, default=None,
+                        help="GC573 LED Beleuchtung sofort ändern (0-7 oder off/blue/green/red/cyan/magenta/yellow/white)")
     args = parser.parse_args()
+
+    if args.led is not None:
+        key = args.led.lower().strip()
+        val = LED_NAME_MAP.get(key)
+        if val is None:
+            try:
+                val = int(key)
+            except ValueError:
+                pass
+        if val is not None and 0 <= val <= 7:
+            if write_led_mode(val):
+                print(f"[+] GC573 LED Beleuchtung erfolgreich auf Modus {val} gesetzt.")
+            else:
+                print(f"[!] Fehler beim Setzen der GC573 LED auf Modus {val}.")
+        else:
+            print(f"[!] Ungültiger LED Modus '{args.led}'. Gültig: {list(LED_NAME_MAP.keys())}")
+        if not args.cli and not any(arg in sys.argv for arg in ["-f", "--fullscreen", "-p", "--preset"]):
+            sys.exit(0)
 
     streamer = GameStreamer()
 

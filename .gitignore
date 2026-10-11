@@ -35,3 +35,8 @@ tools/everlive/gc573_display
 
 # Raw uncompressed video dumps
 20261010_131220.mp4
+
+# Windows driver installers / executables
+*.exe
+GC573_Drv_x64_V2.2802.64.107_WHQL_Install.exe
+win_driver/

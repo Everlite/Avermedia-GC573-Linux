@@ -3,6 +3,7 @@
 [![EverLive](https://img.shields.io/badge/project-EverLive-8a2be2.svg)](#)
 [![Status](https://img.shields.io/badge/status-1440p120%20verified%20%26%20playable-brightgreen.svg)](#current-status)
 [![open_gc573](https://img.shields.io/badge/driver-open__gc573%20(100%25%20blob--free)-2e7d32.svg)](#native-open_gc573-driver)
+[![RGB Control](https://img.shields.io/badge/RGB%20Control-On--the--Fly%20Hardware%20MMIO-blueviolet.svg)](#-hardware-rgb-led-lighting-on-the-fly-control)
 [![Gaming Suite](https://img.shields.io/badge/suite-direct%20display%20%2B%20pipewire%20audio-blue.svg)](#everlive-gaming-suite-playsh)
 [![Kernel](https://img.shields.io/badge/kernel-tested%206.19%20--%207.x%20(CachyOS%2FArch)-2e7d32.svg)](#hardware-and-kernel-compatibility)
 [![AI Assisted](https://img.shields.io/badge/code-heavily%20AI%20assisted-ff69b4.svg)](#transparency--ai-assistance)
@@ -33,7 +34,7 @@ cd EverLive
 1. **Auto-Detects Your Distribution:** Automatically identifies your package manager (`pacman` on Arch/CachyOS/Manjaro, `apt` on Ubuntu/Debian/Mint/Pop!_OS, or `dnf` on Fedora/Nobara) and installs any missing build headers or libraries.
 2. **Compiles Driver & Display App:** Builds the clean `open_gc573` kernel module and compiles the high-performance C direct display engine (`everlive_display`).
 3. **DKMS Support for Kernel Updates:** If DKMS is installed on your system, it registers the module so that supported Linux kernel updates automatically rebuild the driver in the background.
-4. **No Root Privileges Needed to Play (udev):** Sets up `/etc/udev/rules.d/70-everlive.rules` with `TAG+="uaccess"`. Normal desktop users get immediate read/write access to capture video and audio without ever needing `sudo`.
+4. **No Root Privileges Needed to Play (udev):** Sets up `/etc/udev/rules.d/70-everlive.rules` with `TAG+="uaccess"`. Normal desktop users get immediate read/write access to capture video, audio, and on-the-fly RGB controls without ever needing `sudo`.
 5. **Start Menu Integration:** Installs the desktop launcher into your application menu (KDE Plasma, GNOME, etc.).
 
 After installation, simply launch the game screen from your application menu (**EverLive**) or run:
@@ -48,6 +49,11 @@ After installation, simply launch the game screen from your application menu (**
 - **2560×1440 @ 120 FPS Verified on PlayStation 5:** 120.35 Hz HDMI 2.0 capture verified on real PS5 hardware (*The Finals*, *Fortnite 120Hz Mode*, PS5 Dashboard).
 - **Sub-Frame Direct Render Pipeline (~1–3 ms internal latency):** Built-in native C direct rendering engine (`everlive_display`) maps V4L2 DMA buffers directly to GPU textures (SDL2 unthrottled presentation / Wayland tearing). Measured buffer-to-display pass takes ~1–3 ms (excluding physical monitor panel response and controller input).
 - **Synchronized 8-Channel Surround Audio:** Captures console uncompressed 8-channel 48 kHz LPCM HDMI audio and streams it to your headset or speakers via a low-latency PipeWire pulse sink connection (configured with `PULSE_LATENCY_MSEC=10`).
+- **Hardware RGB LED Control & Live Switching (Breakthrough):**
+  - **Cracked Factory Blinking Loop:** Reverse-engineered the Artix-7 FPGA MMIO lighting engine (BAR 0 `0x0800`–`0x086c` and script RAM `0x2008`), permanently solving the card's annoying factory red blinking on Linux without requiring Windows software.
+  - **Zero Stream Interruption:** Reprogramming LED registers executes asynchronously via hardware MMIO in microseconds. You can switch colors **on the fly during active 120 FPS PS5 gameplay without a single dropped frame, stutter, or stream restart** (tested & verified live on PS5).
+  - **8 Hardware Profiles:** Off (Dark), Solid Blue, Green, Red, Cyan, Magenta, Yellow, and White.
+  - **Boot Persistence:** Configurable via `/etc/modprobe.d/open_gc573.conf` so the card boots in your favorite color or completely dark right from kernel load.
 - **In-Game HUD & Live Volume Control:**
   - Adjust volume anytime during gameplay using the **mouse wheel**.
   - Interactive on-screen HUD volume slider in the top-left corner + mute button.
@@ -113,6 +119,44 @@ The following controls are available inside the game window:
 | <kbd>Esc</kbd> or <kbd>q</kbd> | Exit game window |
 
 *Note: The mouse cursor and HUD automatically fade out after 2.5 seconds of inactivity so your view remains completely unobstructed.*
+
+---
+
+## 💡 Hardware RGB LED Lighting (On-the-Fly Control)
+
+On Windows, the GC573 requires proprietary background software to stop its unconfigured factory state (infinitely blinking red). On Linux, this previously left the card perpetually blinking inside the PC case.
+
+Through reverse-engineering of the official firmware and FPGA MMIO register space, **EverLive includes full native control over the Artix-7 hardware RGB sequencer**:
+
+### Key Advantages
+* **Zero Gameplay Interruption:** Changing lighting modes executes via microsecond hardware MMIO register writes without re-negotiating HDMI links, resetting the DMA ring, or dropping frames. Tested and verified live on PlayStation 5 during active 1440p @ 120 FPS gameplay sessions.
+* **8 Hardware Profiles:** 
+  - `0`: 🌑 **Off (Dark)** — Complete silence, all LEDs shut down inside the PC case.
+  - `1`: 🔵 **Solid Blue** (Default / Normal operation)
+  - `2`: 🟢 **Solid Green**
+  - `3`: 🔴 **Solid Red**
+  - `4`: 🔷 **Cyan / Turquoise**
+  - `5`: 🟣 **Magenta / Purple**
+  - `6`: 🟡 **Yellow**
+  - `7`: ⚪ **White**
+* **Real-Time GUI Switching:** Select your preferred color anytime directly from the EverLive settings panel.
+* **Instant Command-Line Control:**
+  ```bash
+  python3 tools/everlive/everlive_viewer.py --led off
+  python3 tools/everlive/everlive_viewer.py --led blue
+  python3 tools/everlive/everlive_viewer.py --led magenta
+  ```
+
+### Boot Persistence (Silence Blinking at Startup)
+To ensure the card boots up silently in your favorite color immediately upon Linux kernel initialization — **without needing to open EverLive**:
+
+```bash
+# Example: Card remains completely dark upon boot:
+echo "options open_gc573 led_mode=0" | sudo tee /etc/modprobe.d/open_gc573.conf
+
+# Example: Card illuminates in solid blue upon boot:
+echo "options open_gc573 led_mode=1" | sudo tee /etc/modprobe.d/open_gc573.conf
+```
 
 ---
 

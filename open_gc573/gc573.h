@@ -66,6 +66,7 @@ enum gc555_video_dma_completion {
 enum gc555_i2c_bus_id {
 	GC555_I2C_BUS_PRIMARY,
 	GC555_I2C_BUS_SECONDARY,
+	GC555_I2C_BUS_TERTIARY,
 	GC555_I2C_BUS_COUNT,
 };
 
@@ -318,6 +319,8 @@ int gc555_led_init(struct gc555_dev *gc555);
 void gc555_led_cleanup(struct gc555_dev *gc555);
 void gc555_led_suspend(struct gc555_dev *gc555);
 int gc555_led_resume(struct gc555_dev *gc555);
+int gc555_led_get_mode(struct gc555_dev *gc555);
+int gc555_led_set_mode(struct gc555_dev *gc555, int mode);
 #else
 static inline int gc555_led_init(struct gc555_dev *gc555)
 {
@@ -333,6 +336,16 @@ static inline void gc555_led_suspend(struct gc555_dev *gc555)
 }
 
 static inline int gc555_led_resume(struct gc555_dev *gc555)
+{
+	return 0;
+}
+
+static inline int gc555_led_get_mode(struct gc555_dev *gc555)
+{
+	return 0;
+}
+
+static inline int gc555_led_set_mode(struct gc555_dev *gc555, int mode)
 {
 	return 0;
 }

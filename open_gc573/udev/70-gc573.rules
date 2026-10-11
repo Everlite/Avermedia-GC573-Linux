@@ -8,8 +8,10 @@ SUBSYSTEM=="video4linux", KERNEL=="video*", \
 
 SUBSYSTEM=="video4linux", KERNEL=="video*", \
   ATTR{index}=="0", SUBSYSTEMS=="pci", ATTRS{vendor}=="0x1461", \
-  ATTRS{device}=="0x0054", ATTRS{subsystem_vendor}=="0x1461", \
-  ATTRS{subsystem_device}=="0x5550", ATTRS{serial_number}=="?*", \
+  ATTRS{device}=="0x0054", ATTRS{subsystem_vendor}=="0x5550", ATTRS{serial_number}=="?*", \
   ENV{ID_BUS}="pci", \
   ENV{ID_SERIAL}="AVerMedia_Live_Gamer_BOLT_GC555_$attr{serial_number}", \
   SYMLINK+="v4l/by-id/$env{ID_BUS}-$env{ID_SERIAL}-video-index$attr{index}"
+
+# Allow regular users to control RGB LED lighting on the fly
+SUBSYSTEM=="pci", ATTRS{vendor}=="0x1461", ATTRS{device}=="0x0054", TEST=="led_mode", RUN+="/bin/chmod 0666 /sys%p/led_mode"

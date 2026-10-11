@@ -34,6 +34,9 @@ modprobe snd-pcm || true
 echo "[*] Lade neuen open_gc573 Treiber (${MODULE})..."
 insmod "${MODULE}"
 
+# Sysfs RGB LED Zugriff für Benutzer ohne Root-Rechte freigeben
+chmod 0666 /sys/bus/pci/drivers/open_gc573/*/led_mode 2>/dev/null || true
+
 echo "[+] open_gc573 erfolgreich geladen!"
 
 echo "[*] Warte auf HDMI-Signal-Lock (max. 5s)..."

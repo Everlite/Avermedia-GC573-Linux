@@ -29,8 +29,8 @@
 
 #define GC555_BRIDGE_MIN_REG_SIZE	(GC555_BRIDGE_REG_LAST + sizeof(u32))
 #define GC555_BRIDGE_RESET_MASK		(BIT(0) | BIT(8) | BIT(9))
-#define GC555_BRIDGE_IRQ_STATUS_MASK	0x1fff
-#define GC555_BRIDGE_GC555_IRQ_ENABLE	0x1b33
+#define GC555_BRIDGE_IRQ_STATUS_MASK	((u32)(0x1fff | BIT(13)))
+#define GC555_BRIDGE_GC555_IRQ_ENABLE	((u32)(0x1b33 | BIT(13)))
 #define GC555_BRIDGE_GC555_IRQ_MIN_VERSION	0x19081601
 #define GC555_BRIDGE_I2C_BUS_KHZ	400U
 #define GC555_BRIDGE_I2C_CLOCK_KHZ	125000U
@@ -311,7 +311,16 @@ static int gc555_bridge_init_controller(struct gc555_dev *gc555)
 	if (ret)
 		return ret;
 
-	ret = gc555_bridge_set_gpio(gc555, 3, true, 100);
+	/* GC573: GPIO 3 = Red LED, GPIO 4 = Green LED. Default both to off. */
+	ret = gc555_bridge_set_gpio(gc555, 3, false, 0);
+	if (ret)
+		return ret;
+	ret = gc555_bridge_set_gpio(gc555, 4, false, 0);
+	if (ret)
+		return ret;
+
+	/* GC573: Stop FPGA RGB LED hardware sequencer (MMIO 0x804 = 0) */
+	ret = gc555_bridge_write(gc555, 0x0804, 0);
 	if (ret)
 		return ret;
 
@@ -333,6 +342,9 @@ static int gc555_bridge_init_controller(struct gc555_dev *gc555)
 		return ret;
 	ret = gc555_bridge_write(gc555, GC555_BRIDGE_REG_I2C1_DIVISOR,
 				 divisor);
+	if (ret)
+		return ret;
+	ret = gc555_bridge_write(gc555, 0x00120, divisor);
 	if (ret)
 		return ret;
 
