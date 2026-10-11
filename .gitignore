@@ -27,6 +27,7 @@ linuxextract.c
 *.ghidra
 todo.md
 reference_gc555/
+reference_gc570d/
 
 # Compiled display binaries
 tools/everlive/everlive_display
