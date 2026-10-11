@@ -5,6 +5,7 @@
 #include <linux/led-class-multicolor.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
+#include <linux/pci.h>
 #include <linux/slab.h>
 #include <linux/workqueue.h>
 
@@ -344,8 +345,8 @@ int gc555_led_set_mode(struct gc555_dev *gc555, int mode)
 	led = gc555->led;
 	mutex_lock(&led->lock);
 
-	/* If GC555 IS31FL3731 I2C controller is present */
-	if (led->client) {
+	/* If GC555 IS31FL3731 I2C controller is present (GC555 Live Gamer BOLT only) */
+	if (led->client && gc555->pdev->subsystem_device == GC555_PCI_SUBDEVICE_ID) {
 		if (mode == 0) {
 			gc555_bridge_set_gpio(gc555, 9, true, 5);
 			gc555_led_select_page(led, GC555_LED_FUNCTION_PAGE);
@@ -386,9 +387,8 @@ int gc555_led_set_mode(struct gc555_dev *gc555, int mode)
 static struct i2c_client *gc555_led_probe_client(struct gc555_dev *gc555)
 {
 	static const enum gc555_i2c_bus_id candidate_buses[] = {
-		GC555_I2C_BUS_TERTIARY,
 		GC555_I2C_BUS_SECONDARY,
-		GC555_I2C_BUS_PRIMARY,
+		GC555_I2C_BUS_TERTIARY,
 	};
 	struct i2c_adapter *adapter;
 	struct i2c_client *client;
@@ -440,19 +440,28 @@ int gc555_led_init(struct gc555_dev *gc555)
 	INIT_DELAYED_WORK(&led->update_work, gc555_led_update_work);
 	gc555->led = led;
 
-	led->client = gc555_led_probe_client(gc555);
-	if (IS_ERR(led->client)) {
-		/* GC573 uses FPGA MMIO registers rather than IS31FL3731 I2C */
-		led->client = NULL;
-	} else {
-		ret = gc555_led_hw_init(led);
-		if (ret) {
-			i2c_unregister_device(led->client);
-			led->client = NULL;
+	/*
+	 * Hardware differentiation:
+	 * - GC555 (Live Gamer BOLT, external TB3): has IS31FL3731 I2C LED controller on GPIO 9.
+	 * - GC573 (Live Gamer 4K, PCIe): has FPGA MMIO LED registers (0x0800-0x086c).
+	 *   Do NOT probe I2C or toggle GPIO 9 on GC573 as GPIO 9 is connected to IT6664 HDMI logic!
+	 */
+	if (gc555->pdev->subsystem_device == GC555_PCI_SUBDEVICE_ID) {
+		led->client = gc555_led_probe_client(gc555);
+		if (!IS_ERR(led->client)) {
+			ret = gc555_led_hw_init(led);
+			if (ret) {
+				i2c_unregister_device(led->client);
+				led->client = NULL;
+			} else {
+				led->running = true;
+				gc555_led_register_pixels(led);
+			}
 		} else {
-			led->running = true;
-			gc555_led_register_pixels(led);
+			led->client = NULL;
 		}
+	} else {
+		led->client = NULL;
 	}
 
 	/* Apply configured LED mode at driver load (FPGA MMIO & I2C) */

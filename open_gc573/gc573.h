@@ -15,6 +15,12 @@
 #include <linux/mutex.h>
 #include <linux/types.h>
 
+#define GC555_PCI_VENDOR_ID		0x1461
+#define GC555_PCI_DEVICE_ID		0x0054
+#define GC555_PCI_SUBVENDOR_ID		0x1461
+#define GC555_PCI_SUBDEVICE_ID		0x5550
+#define GC573_PCI_SUBDEVICE_ID		0x5730
+
 struct device;
 struct i2c_adapter;
 struct pci_dev;
