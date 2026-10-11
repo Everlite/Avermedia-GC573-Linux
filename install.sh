@@ -51,6 +51,13 @@ detect_and_install_deps() {
         ! command -v pw-play >/dev/null 2>&1 && MISSING_PKGS+=(pipewire)
         ! command -v wpctl >/dev/null 2>&1 && MISSING_PKGS+=(wireplumber)
         
+        # Clang/LLVM Prüfen falls Kernel mit Clang gebaut wurde (z.B. CachyOS)
+        if grep -q '^CONFIG_CC_IS_CLANG=y' "/usr/lib/modules/$(uname -r)/build/.config" 2>/dev/null || grep -iq 'clang' /proc/version 2>/dev/null; then
+            ! command -v clang >/dev/null 2>&1 && MISSING_PKGS+=(clang)
+            ! command -v lld >/dev/null 2>&1 && MISSING_PKGS+=(lld)
+            ! command -v llvm-ar >/dev/null 2>&1 && MISSING_PKGS+=(llvm)
+        fi
+        
         if [ ${#MISSING_PKGS[@]} -gt 0 ]; then
             echo -e "${YELLOW}[!] Fehlende Pakete gefunden: ${MISSING_PKGS[*]}${NC}"
             read -p "Sollen diese Pakete jetzt automatisch via pacman installiert werden? (j/N) " -n 1 -r
@@ -71,6 +78,10 @@ detect_and_install_deps() {
         ! command -v pw-play >/dev/null 2>&1 && MISSING_PKGS+=(pipewire-bin)
         ! command -v wpctl >/dev/null 2>&1 && MISSING_PKGS+=(wireplumber)
         
+        if grep -q '^CONFIG_CC_IS_CLANG=y' "/lib/modules/$(uname -r)/build/.config" 2>/dev/null || grep -iq 'clang' /proc/version 2>/dev/null; then
+            ! command -v clang >/dev/null 2>&1 && MISSING_PKGS+=(clang lld llvm)
+        fi
+        
         if [ ${#MISSING_PKGS[@]} -gt 0 ]; then
             echo -e "${YELLOW}[!] Fehlende Pakete gefunden: ${MISSING_PKGS[*]}${NC}"
             apt-get update && apt-get install -y "${MISSING_PKGS[@]}"
@@ -83,6 +94,10 @@ detect_and_install_deps() {
         ! command -v arecord >/dev/null 2>&1 && MISSING_PKGS+=(alsa-utils)
         ! command -v pw-play >/dev/null 2>&1 && MISSING_PKGS+=(pipewire-utils)
         ! command -v wpctl >/dev/null 2>&1 && MISSING_PKGS+=(wireplumber)
+        
+        if grep -q '^CONFIG_CC_IS_CLANG=y' "/usr/src/kernels/$(uname -r)/.config" 2>/dev/null || grep -iq 'clang' /proc/version 2>/dev/null; then
+            ! command -v clang >/dev/null 2>&1 && MISSING_PKGS+=(clang lld llvm)
+        fi
         
         if [ ${#MISSING_PKGS[@]} -gt 0 ]; then
             echo -e "${YELLOW}[!] Fehlende Pakete gefunden: ${MISSING_PKGS[*]}${NC}"
@@ -125,8 +140,8 @@ PACKAGE_VERSION="1.0.0"
 BUILT_MODULE_NAME[0]="open_gc573"
 DEST_MODULE_LOCATION[0]="/updates/open_gc573"
 AUTOINSTALL="yes"
-CLEAN="make clean"
-MAKE[0]="make -C \${kernel_source_dir} M=\${dkms_tree}/\${PACKAGE_NAME}/\${PACKAGE_VERSION}/build modules"
+CLEAN="make -C \${dkms_tree}/\${PACKAGE_NAME}/\${PACKAGE_VERSION}/build KDIR=\${kernel_source_dir} clean"
+MAKE[0]="make -C \${dkms_tree}/\${PACKAGE_NAME}/\${PACKAGE_VERSION}/build KDIR=\${kernel_source_dir} modules"
 EOF
     dkms remove -m everlive -v 1.0.0 --all 2>/dev/null || true
     dkms add -m everlive -v 1.0.0 2>/dev/null || true
