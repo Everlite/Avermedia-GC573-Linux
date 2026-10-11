@@ -28,11 +28,57 @@
 #include <pthread.h>
 #include <time.h>
 #include <SDL.h>
+#include <glob.h>
 #include "font8x8.h"
 
-#define DEFAULT_VDEV "/dev/video2"
-#define DEFAULT_ADEV "hw:CARD=A4K,DEV=0"
 #define BUFFER_COUNT 4
+
+static const char *detect_vdev(void)
+{
+    static char buf[64];
+    glob_t g;
+    if (glob("/sys/bus/pci/drivers/open_gc573/*/video4linux/video*", 0, NULL, &g) == 0 && g.gl_pathc > 0) {
+        char *base = strrchr(g.gl_pathv[0], '/');
+        if (base) {
+            snprintf(buf, sizeof(buf), "/dev/%s", base + 1);
+            globfree(&g);
+            if (access(buf, F_OK) == 0)
+                return buf;
+        }
+        globfree(&g);
+    }
+    if (access("/dev/video2", F_OK) == 0) return "/dev/video2";
+    if (access("/dev/video0", F_OK) == 0) return "/dev/video0";
+    if (access("/dev/video1", F_OK) == 0) return "/dev/video1";
+    return "/dev/video0";
+}
+
+static const char *detect_adev(void)
+{
+    static char buf[64];
+    FILE *f = fopen("/proc/asound/cards", "r");
+    if (f) {
+        char line[256];
+        while (fgets(line, sizeof(line), f)) {
+            if (strstr(line, "GC573") || strstr(line, "Live Gamer 4K") || strstr(line, "A4K")) {
+                char *open_br = strchr(line, '[');
+                char *close_br = strchr(line, ']');
+                if (open_br && close_br && close_br > open_br) {
+                    *close_br = '\0';
+                    char *id = open_br + 1;
+                    while (*id == ' ') id++;
+                    char *end = id + strlen(id) - 1;
+                    while (end > id && *end == ' ') *end-- = '\0';
+                    snprintf(buf, sizeof(buf), "hw:CARD=%s,DEV=0", id);
+                    fclose(f);
+                    return buf;
+                }
+            }
+        }
+        fclose(f);
+    }
+    return "hw:CARD=A4K,DEV=0";
+}
 
 struct v4l2_mmap_buffer {
     void *start;
@@ -179,8 +225,8 @@ static void draw_string(SDL_Renderer *r, const char *str, int x, int y, int scal
 
 int main(int argc, char *argv[])
 {
-    const char *vdev = DEFAULT_VDEV;
-    const char *adev = DEFAULT_ADEV;
+    const char *vdev = NULL;
+    const char *adev = NULL;
     bool start_fullscreen = false;
 
     for (int i = 1; i < argc; i++) {
@@ -197,6 +243,11 @@ int main(int argc, char *argv[])
             return 0;
         }
     }
+
+    if (!vdev)
+        vdev = detect_vdev();
+    if (!adev)
+        adev = detect_adev();
 
     signal(SIGINT, sig_handler);
     signal(SIGTERM, sig_handler);
@@ -306,7 +357,7 @@ int main(int argc, char *argv[])
     }
 
     SDL_Window *window = SDL_CreateWindow(
-        "PS5 Screen (GC573 Direct)",
+        "EverLive - Console Gaming Screen",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         win_w, win_h,
         win_flags
@@ -670,7 +721,7 @@ int main(int argc, char *argv[])
             last_title_time = now_ticks;
 
             char title[180];
-            snprintf(title, sizeof(title), "PS5 Direct Screen - %ux%u @ %u FPS | Latenz: %.1f ms | Vol: %d%%",
+            snprintf(title, sizeof(title), "EverLive - %ux%u @ %u FPS | Latenz: %.1f ms | Vol: %d%%",
                      width, height, live_fps, lat_ms, g_muted ? 0 : (int)(g_volume * 100.0f));
             SDL_SetWindowTitle(window, title);
         }

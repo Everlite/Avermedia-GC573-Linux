@@ -53,8 +53,64 @@ except ImportError:
     HAS_QT = False
 
 
-DEFAULT_VDEV = "/dev/video2"
-DEFAULT_ADEV = "hw:CARD=A4K,DEV=0"
+def find_gc573_vdev() -> str:
+    """Auto-detects the V4L2 device node for open_gc573."""
+    import glob
+    # 1. Check open_gc573 driver binding in sysfs
+    for cand in sorted(glob.glob("/sys/bus/pci/drivers/open_gc573/*/video4linux/video*")):
+        vdev_name = os.path.basename(cand)
+        dev_path = f"/dev/{vdev_name}"
+        if os.path.exists(dev_path):
+            return dev_path
+
+    # 2. Check /sys/class/video4linux/*/device/driver symlink
+    for d in sorted(glob.glob("/sys/class/video4linux/video*")):
+        try:
+            driver_link = os.path.realpath(os.path.join(d, "device", "driver"))
+            if os.path.basename(driver_link) == "open_gc573":
+                dev_path = f"/dev/{os.path.basename(d)}"
+                if os.path.exists(dev_path):
+                    return dev_path
+        except Exception:
+            pass
+
+    # 3. Check /sys/class/video4linux/*/name
+    for name_file in sorted(glob.glob("/sys/class/video4linux/video*/name")):
+        try:
+            with open(name_file, "r") as f:
+                name = f.read().lower()
+                if "gc573" in name or "live gamer 4k" in name or "open_gc573" in name:
+                    dev_path = f"/dev/{os.path.basename(os.path.dirname(name_file))}"
+                    if os.path.exists(dev_path):
+                        return dev_path
+        except Exception:
+            pass
+
+    # 4. Fallback: check existing video devices
+    for fallback in ["/dev/video2", "/dev/video0", "/dev/video1", "/dev/video3", "/dev/video4"]:
+        if os.path.exists(fallback):
+            return fallback
+
+    return "/dev/video0"
+
+
+def find_gc573_adev() -> str:
+    """Auto-detects ALSA capture card for GC573."""
+    try:
+        with open("/proc/asound/cards", "r") as f:
+            for line in f:
+                if "GC573" in line or "Live Gamer 4K" in line or "A4K" in line:
+                    m = re.search(r"^\s*(\d+)\s+\[([^\]]+)\]", line)
+                    if m:
+                        card_id = m.group(2).strip()
+                        return f"hw:CARD={card_id},DEV=0"
+    except Exception:
+        pass
+    return "hw:CARD=A4K,DEV=0"
+
+
+DEFAULT_VDEV = find_gc573_vdev()
+DEFAULT_ADEV = find_gc573_adev()
 
 PRESETS = {
     "Auto (HDMI Signal)": None,
@@ -142,9 +198,9 @@ def write_led_mode(mode: int) -> bool:
 
 class GameStreamer:
     """Manages low-latency video and audio child processes."""
-    def __init__(self, vdev: str = DEFAULT_VDEV, adev: str = DEFAULT_ADEV):
-        self.vdev = vdev
-        self.adev = adev
+    def __init__(self, vdev: Optional[str] = None, adev: Optional[str] = None):
+        self.vdev = vdev if vdev is not None else find_gc573_vdev()
+        self.adev = adev if adev is not None else find_gc573_adev()
         self.mpv_proc: Optional[subprocess.Popen] = None
         self.arecord_proc: Optional[subprocess.Popen] = None
         self.pwplay_proc: Optional[subprocess.Popen] = None
@@ -611,9 +667,11 @@ def main():
     parser.add_argument("-f", "--fullscreen", action="store_true", help="Direkt im Vollbild starten")
     parser.add_argument("-p", "--preset", default="Auto (HDMI Signal)", choices=list(PRESETS.keys()), help="Auflösungs-Preset")
     parser.add_argument("--cli", action="store_true", help="Startet direkt ohne Einstellungsfenster")
-    parser.add_argument("-v", "--volume", type=float, default=1.0, help="Lautstärke (0.0 bis 1.5)")
     parser.add_argument("--led", type=str, default=None,
                         help="GC573 LED Beleuchtung sofort ändern (0-7 oder off/blue/green/red/cyan/magenta/yellow/white)")
+    parser.add_argument("-v", "--volume", type=float, default=1.0, help="Lautstärke (0.0 bis 1.5)")
+    parser.add_argument("-d", "--device", default=None, help="V4L2 Video Device (z.B. /dev/video0, Standard: Auto-Erkennung)")
+    parser.add_argument("-a", "--audio", default=None, help="ALSA Audio Device (z.B. hw:CARD=A4K,DEV=0, Standard: Auto-Erkennung)")
     args = parser.parse_args()
 
     if args.led is not None:
@@ -634,7 +692,8 @@ def main():
         if not args.cli and not any(arg in sys.argv for arg in ["-f", "--fullscreen", "-p", "--preset"]):
             sys.exit(0)
 
-    streamer = GameStreamer()
+    streamer = GameStreamer(vdev=args.device, adev=args.audio)
+    print(f"[*] GC573 Hardware: Video={streamer.vdev}, Audio={streamer.adev}")
 
     # Graceful shutdown on Ctrl+C
     def sig_handler(sig, frame):

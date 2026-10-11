@@ -48,6 +48,7 @@ detect_and_install_deps() {
         ! command -v gcc >/dev/null 2>&1 && MISSING_PKGS+=(base-devel)
         ! command -v sdl2-config >/dev/null 2>&1 && MISSING_PKGS+=(sdl2)
         ! command -v arecord >/dev/null 2>&1 && MISSING_PKGS+=(alsa-utils)
+        ! command -v v4l2-ctl >/dev/null 2>&1 && MISSING_PKGS+=(v4l-utils)
         ! command -v pw-play >/dev/null 2>&1 && MISSING_PKGS+=(pipewire)
         ! command -v wpctl >/dev/null 2>&1 && MISSING_PKGS+=(wireplumber)
         
@@ -75,6 +76,7 @@ detect_and_install_deps() {
         ! command -v gcc >/dev/null 2>&1 && MISSING_PKGS+=(build-essential)
         ! command -v sdl2-config >/dev/null 2>&1 && MISSING_PKGS+=(libsdl2-dev)
         ! command -v arecord >/dev/null 2>&1 && MISSING_PKGS+=(alsa-utils)
+        ! command -v v4l2-ctl >/dev/null 2>&1 && MISSING_PKGS+=(v4l-utils)
         ! command -v pw-play >/dev/null 2>&1 && MISSING_PKGS+=(pipewire-bin)
         ! command -v wpctl >/dev/null 2>&1 && MISSING_PKGS+=(wireplumber)
         
@@ -92,6 +94,7 @@ detect_and_install_deps() {
         ! command -v gcc >/dev/null 2>&1 && MISSING_PKGS+=(gcc make)
         ! command -v sdl2-config >/dev/null 2>&1 && MISSING_PKGS+=(SDL2-devel)
         ! command -v arecord >/dev/null 2>&1 && MISSING_PKGS+=(alsa-utils)
+        ! command -v v4l2-ctl >/dev/null 2>&1 && MISSING_PKGS+=(v4l-utils)
         ! command -v pw-play >/dev/null 2>&1 && MISSING_PKGS+=(pipewire-utils)
         ! command -v wpctl >/dev/null 2>&1 && MISSING_PKGS+=(wireplumber)
         
