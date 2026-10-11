@@ -207,7 +207,24 @@ echo "options open_gc573 led_mode=1" | sudo tee /etc/modprobe.d/open_gc573.conf
 - **Immediate Workaround:** Briefly unplug and re-insert the HDMI cable into the console or capture card to trigger an HDMI Hot-Plug Detect (HPD) renegotiation.
 - **Explanation:** Consoles switch HDMI TMDS clock frequencies when launching high-refresh modes. An automatic driver-level re-lock handler is currently in development to resolve this in software without cable replugging.
 
-#### 4. How do I uninstall EverLive?
+#### 4. Secure Boot: "Loading of unsigned module is rejected"
+- **Symptom:** On distributions with UEFI Secure Boot enabled (e.g. Ubuntu, Linux Mint, Fedora), the kernel may reject loading out-of-tree drivers with `Loading of unsigned module is rejected` or `module verification failed`.
+- **Solution:**
+  1. **Option A (Simplest):** Disable **Secure Boot** in your computer's UEFI/BIOS settings.
+  2. **Option B (Keep Secure Boot active):** Sign the compiled `open_gc573.ko` kernel module with your Machine Owner Key (MOK):
+     ```bash
+     # Generate a MOK key pair (if you don't have one already):
+     openssl req -new -x509 -newkey rsa:2048 -keyout MOK.priv -outform DER -out MOK.der -nodes -days 36500 -subj "/CN=EverLive MOK/"
+     
+     # Import the key into your system MOK list (prompts for a one-time password):
+     sudo mokutil --import MOK.der
+     # (Reboot your PC and follow the blue MOK management screen to enroll the key)
+
+     # Sign the installed driver module:
+     sudo /usr/src/linux-headers-$(uname -r)/scripts/sign-file sha256 MOK.priv MOK.der $(modinfo -n open_gc573)
+     ```
+
+#### 5. How do I uninstall EverLive?
 Run the uninstaller inside the repository directory:
 ```bash
 sudo ./uninstall.sh
