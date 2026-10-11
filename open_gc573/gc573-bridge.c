@@ -311,11 +311,7 @@ static int gc555_bridge_init_controller(struct gc555_dev *gc555)
 	if (ret)
 		return ret;
 
-	/* GC573: GPIO 3 = Red LED, GPIO 4 = Green LED. Default both to off. */
-	ret = gc555_bridge_set_gpio(gc555, 3, false, 0);
-	if (ret)
-		return ret;
-	ret = gc555_bridge_set_gpio(gc555, 4, false, 0);
+	ret = gc555_bridge_set_gpio(gc555, 3, true, 100);
 	if (ret)
 		return ret;
 

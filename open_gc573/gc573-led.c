@@ -330,18 +330,6 @@ int gc555_led_set_mode(struct gc555_dev *gc555, int mode)
 	/* 1. Control GC573 FPGA hardware MMIO RGB LED engine (0x800-0x81c, 0x2008) */
 	gc573_fpga_set_led(gc555, mode);
 
-	/* 2. Control GC573 FPGA status GPIO LEDs (Pin 3 = Red LED, Pin 4 = Green LED) */
-	if (mode == 0) {
-		gc555_bridge_set_gpio(gc555, 3, false, 0); /* Red OFF */
-		gc555_bridge_set_gpio(gc555, 4, false, 0); /* Green OFF */
-	} else if (mode == 3) {
-		gc555_bridge_set_gpio(gc555, 3, true, 0);  /* Red ON */
-		gc555_bridge_set_gpio(gc555, 4, false, 0); /* Green OFF */
-	} else {
-		gc555_bridge_set_gpio(gc555, 3, false, 0); /* Red OFF */
-		gc555_bridge_set_gpio(gc555, 4, true, 0);  /* Green ON */
-	}
-
 	led = gc555->led;
 	mutex_lock(&led->lock);
 
@@ -475,8 +463,6 @@ void gc555_led_cleanup(struct gc555_dev *gc555)
 	struct gc555_led *led;
 
 	gc573_fpga_set_led(gc555, 0);
-	gc555_bridge_set_gpio(gc555, 3, false, 0);
-	gc555_bridge_set_gpio(gc555, 4, false, 0);
 
 	if (!gc555 || !gc555->led)
 		return;

@@ -18,15 +18,77 @@
 #define GC555_LINK_SPLITTER_SCDT_GPIO	3
 #define GC555_LINK_RECEIVER_RESET_GPIO	8
 #define GC555_LINK_TX1_HPD_GATE_GPIO	7
+#define GC555_LINK_READY0_POLLS		0x15
+#define GC555_LINK_READY1_POLLS		0x14
 #define GC555_LINK_SPLITTER_QUIESCE_MS	200
 
+static int gc555_link_wait_gpio_high(struct gc555_dev *gc555,
+				     unsigned int pin,
+				     unsigned int poll_count)
+{
+	unsigned int poll;
+
+	for (poll = 0; poll < poll_count; poll++) {
+		bool high;
+		int ret;
+
+		ret = gc555_bridge_get_gpio(gc555, pin, &high);
+		if (ret)
+			return ret;
+		if (high)
+			return 0;
+		usleep_range(1000, 2000);
+	}
+
+	return -ETIMEDOUT;
+}
 
 static int gc555_link_prepare_splitter(struct gc555_dev *gc555)
 {
-	/* GC573 is a PCIe card with IT6805 + IT6664; no GC555 splitter hardware exists.
-	 * GPIO 4 is the Green LED; do not toggle it or wait for readiness here.
-	 */
-	return 0;
+	int ret;
+
+	ret = gc555_bridge_set_gpio(gc555,
+				    GC555_LINK_SPLITTER_READY0_GPIO, true, 2);
+	if (ret)
+		return ret;
+
+	ret = gc555_link_wait_gpio_high(gc555,
+					GC555_LINK_SPLITTER_READY0_GPIO,
+					GC555_LINK_READY0_POLLS);
+	/* Readiness GPIOs are advisory; I2C discovery is the hard gate. */
+	if (ret && ret != -ETIMEDOUT)
+		return ret;
+	if (ret)
+		dev_warn(gc555->dev, "GPIO4 readiness timed out\n");
+
+	ret = gc555_bridge_set_gpio(gc555,
+				    GC555_LINK_SPLITTER_READY1_GPIO, true, 2);
+	if (ret)
+		return ret;
+
+	ret = gc555_link_wait_gpio_high(gc555,
+					GC555_LINK_SPLITTER_READY1_GPIO,
+					GC555_LINK_READY1_POLLS);
+	if (ret && ret != -ETIMEDOUT)
+		return ret;
+	if (ret)
+		dev_warn(gc555->dev, "GPIO6 readiness timed out\n");
+
+	ret = gc555_bridge_set_gpio(gc555,
+				    GC555_LINK_SPLITTER_ENABLE_GPIO, false, 2);
+	if (ret)
+		return ret;
+	ret = gc555_bridge_set_gpio(gc555,
+				    GC555_LINK_SPLITTER_RESET_GPIO, true, 5);
+	if (ret)
+		return ret;
+	ret = gc555_bridge_set_gpio(gc555,
+				    GC555_LINK_SPLITTER_RESET_GPIO, false, 10);
+	if (ret)
+		return ret;
+
+	return gc555_bridge_set_gpio(gc555,
+				      GC555_LINK_SPLITTER_RESET_GPIO, true, 5);
 }
 
 static int gc555_link_reset_receiver(struct gc555_dev *gc555)
@@ -113,8 +175,11 @@ int gc555_link_set_input_hpd(struct gc555_dev *gc555, bool high)
 
 int gc555_link_set_splitter_scdt(struct gc555_dev *gc555, bool high)
 {
-	/* GC573: GPIO 3 is the Red LED, NOT splitter SCDT! Do not toggle it here. */
-	return 0;
+	if (!gc555_bridge_is_ready(gc555))
+		return -ENODEV;
+
+	return gc555_bridge_set_gpio(gc555, GC555_LINK_SPLITTER_SCDT_GPIO,
+				     high, 0);
 }
 
 int gc555_link_set_tx_hpd_gate(struct gc555_dev *gc555, unsigned int port,
