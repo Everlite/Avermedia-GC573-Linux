@@ -4,14 +4,21 @@ Contributions, bug reports, and hardware testing feedback are warmly welcomed! W
 
 ---
 
-## 🛠️ How to Report Issues
+## 🛠️ How to Report Bugs
 
-If you encounter an issue, please open an issue using our [Bug Report Template](.github/ISSUE_TEMPLATE/bug_report.md).
+If you encounter a bug, please open an issue using our [Bug Report Template](.github/ISSUE_TEMPLATE/bug_report.md).
 Please provide:
 1. Your distribution and kernel version (`uname -r`).
 2. PCI device detection (`lspci -nnk -d 1461:`).
 3. The kernel log output (`sudo dmesg | grep -iE 'gc573|open_gc573'`).
 4. Connected console and monitor model.
+
+---
+
+## 💡 Feature Requests & Hardware Proposals
+
+For feature proposals, requests for new capture cards (such as GC570D, GC551, etc.), or questions about setup and audio routing, please open a thread in [GitHub Discussions](https://github.com/Everlite/EverLive/discussions)!
+This keeps GitHub Issues clean and focused on verified bugs and active implementation tasks.
 
 ---
 

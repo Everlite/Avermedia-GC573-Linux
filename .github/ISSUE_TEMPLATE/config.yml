@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💡 Ideas & Feature Requests
+    url: https://github.com/Everlite/EverLive/discussions/new?category=ideas
+    about: Propose new capture card support, features, or gaming companion enhancements.
+  - name: 💬 Questions & Community Q&A
+    url: https://github.com/Everlite/EverLive/discussions/new?category=q-a
+    about: Ask questions about setup, desktop compositors, audio routing, or hardware configs.
