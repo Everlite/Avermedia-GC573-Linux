@@ -65,6 +65,14 @@ After installation, simply launch the game screen from your application menu (**
 
 ---
 
+## 🎮 EverLive Desktop Studio (Windowed & Fullscreen)
+
+![EverLive RECentral 4 Studio UI on Linux](docs/everlive_ui_windowed.png)
+
+*EverLive running in windowed studio mode on Linux (KDE Plasma Wayland): Live PS5 1440p HDMI stream with real-time HUD stats, LED hardware control, volume slider, and one-click fullscreen.*
+
+---
+
 ## Video Demonstration (PS5 Gameplay & Latency)
 
 Live gameplay capture demonstration of **THE FINALS** on PlayStation 5 played through EverLive on Linux desktop:
