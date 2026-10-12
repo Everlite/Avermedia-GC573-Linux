@@ -853,6 +853,10 @@ if HAS_QT:
                 self.showNormal()
                 self.btn_fs.setText("⛶ Vollbild")
 
+        def exit_fullscreen(self):
+            if self.is_fullscreen:
+                self.toggle_fullscreen()
+
         def keyPressEvent(self, event):
             if event.key() == Qt.Key_Escape:
                 if self.is_fullscreen:
