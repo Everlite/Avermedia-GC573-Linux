@@ -488,7 +488,14 @@ if HAS_QT:
             self.setAttribute(Qt.WA_OpaquePaintEvent, True)
             self.setStyleSheet("background-color: #050608;")
             self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-            self.setMouseTracking(True)
+        def resizeEvent(self, event):
+            super().resizeEvent(event)
+            p = self.window()
+            if p and hasattr(p, "streamer") and p.streamer.mpv_proc:
+                try:
+                    p.streamer.mpv_proc.send_signal(signal.SIGWINCH)
+                except Exception:
+                    pass
 
 
     class MainWindow(QMainWindow):
@@ -833,44 +840,42 @@ if HAS_QT:
                 set_audio_volume(val)
 
         def toggle_fullscreen(self):
-            # Stop embedded preview and release hardware resources
-            self.streamer.stop()
-            self.hide()
-
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            native_bin = os.path.join(script_dir, "everlive_display")
-            cmd = [native_bin, "-d", self.streamer.vdev, "-a", self.streamer.adev, "-f"]
-
-            # Launch pure native Wayland direct-scanout engine (zero Xwayland jitter, zero black bars)
-            try:
-                subprocess.run(cmd)
-            except Exception as e:
-                print(f"[!] Fehler im Vollbildmodus: {e}")
-
-            # Once exited, restore EverLive studio window and resume embedded preview
-            self.show()
-            self.activateWindow()
-            self.raise_()
-            QTimer.singleShot(250, self.auto_start_stream)
-
-        def exit_fullscreen(self):
-            pass
+            if not self.is_fullscreen:
+                self.is_fullscreen = True
+                self.header_deck.hide()
+                self.bottom_bar.hide()
+                self.showFullScreen()
+                self.btn_fs.setText("⛶ Fenster")
+            else:
+                self.is_fullscreen = False
+                self.header_deck.show()
+                self.bottom_bar.show()
+                self.showNormal()
+                self.btn_fs.setText("⛶ Vollbild")
 
         def keyPressEvent(self, event):
-            if event.key() in (Qt.Key_Escape, Qt.Key_F11, Qt.Key_F):
+            if event.key() == Qt.Key_Escape:
+                if self.is_fullscreen:
+                    self.toggle_fullscreen()
+                    event.accept()
+                    return
+            elif event.key() in (Qt.Key_F11, Qt.Key_F):
                 self.toggle_fullscreen()
                 event.accept()
+                return
             elif event.key() in (Qt.Key_Tab, Qt.Key_I):
                 self.toggle_stats()
                 event.accept()
+                return
             elif event.key() == Qt.Key_M:
                 self.toggle_mute()
                 event.accept()
+                return
             elif event.key() == Qt.Key_Q:
                 self.close()
                 event.accept()
-            else:
-                super().keyPressEvent(event)
+                return
+            super().keyPressEvent(event)
 
         def eventFilter(self, obj, event):
             if obj == self.viewport:

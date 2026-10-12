@@ -117,6 +117,14 @@ static void sig_handler(int sig)
     stop_audio_pipeline();
 }
 
+static volatile sig_atomic_t g_need_geom_check = 1;
+
+static void sigwinch_handler(int sig)
+{
+    (void)sig;
+    g_need_geom_check = 1;
+}
+
 static void sigusr1_handler(int sig)
 {
     (void)sig;
@@ -278,6 +286,7 @@ int main(int argc, char *argv[])
     signal(SIGINT, sig_handler);
     signal(SIGTERM, sig_handler);
     signal(SIGUSR1, sigusr1_handler);
+    signal(SIGWINCH, sigwinch_handler);
 
     int fd = open(vdev, O_RDWR | O_NONBLOCK);
     if (fd < 0) {
@@ -497,15 +506,11 @@ int main(int argc, char *argv[])
 
     static int cur_w = 0, cur_h = 0;
     static uint32_t last_geom_check = 0;
-    static bool g_need_geom_check = true;
-
-
-
     while (g_running) {
         uint32_t now_ticks = SDL_GetTicks();
-        if (cur_w <= 0 || cur_h <= 0 || g_need_geom_check || (now_ticks - last_geom_check >= 1000)) {
+        if (cur_w <= 0 || cur_h <= 0 || g_need_geom_check || (now_ticks - last_geom_check >= 50)) {
             last_geom_check = now_ticks;
-            g_need_geom_check = false;
+            g_need_geom_check = 0;
             if (g_embed_wid > 0) {
                 static Display *x_dpy = NULL;
                 if (!x_dpy) x_dpy = XOpenDisplay(NULL);
@@ -592,8 +597,10 @@ int main(int argc, char *argv[])
                         }
                         /* Fullscreen toggle button (hud_x + 535 .. + 590) */
                         else if (bx >= hud_x + 535 && bx <= hud_x + 590) {
-                            g_fullscreen = !g_fullscreen;
-                            SDL_SetWindowFullscreen(window, g_fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+                            if (g_embed_wid == 0) {
+                                g_fullscreen = !g_fullscreen;
+                                SDL_SetWindowFullscreen(window, g_fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+                            }
                         }
                         /* Exit button (hud_x + 595 .. + 645) */
                         else if (bx >= hud_x + 595 && bx <= hud_x + 645) {
