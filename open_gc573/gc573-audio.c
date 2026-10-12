@@ -475,12 +475,21 @@ static int gc555_audio_pcm_prepare(struct snd_pcm_substream *substream)
 		ret = -ENODEV;
 	} else if (stream->source == GC555_AUDIO_SOURCE_HDMI) {
 		ret = gc555_it6805_get_audio_format(it6805, &format);
-		if (!ret && format.transport != GC555_HDMI_AUDIO_SAMPLES)
-			ret = -EOPNOTSUPP;
-		if (!ret && format.rate_hz != runtime->rate)
-			ret = -EINVAL;
-		if (!ret && format.channels != runtime->channels)
-			ret = -EINVAL;
+		if (ret == -ENODATA) {
+			/* HDMI audio clock not yet locked; prime DMA with requested runtime parameters */
+			format.rate_hz = runtime->rate;
+			format.channels = runtime->channels;
+			format.transport = GC555_HDMI_AUDIO_SAMPLES;
+			format.valid = true;
+			ret = 0;
+		} else {
+			if (!ret && format.transport != GC555_HDMI_AUDIO_SAMPLES)
+				ret = -EOPNOTSUPP;
+			if (!ret && format.rate_hz != runtime->rate)
+				ret = -EINVAL;
+			if (!ret && format.channels != runtime->channels)
+				ret = -EINVAL;
+		}
 		if (ret && running) {
 			spin_lock_irqsave(&audio->state_lock, flags);
 			stream->format_invalidated = true;

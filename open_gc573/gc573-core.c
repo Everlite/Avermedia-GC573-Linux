@@ -179,6 +179,7 @@ static int gc555_probe(struct pci_dev *pdev,
 	ret = device_create_file(&pdev->dev, &dev_attr_led_mode);
 	if (ret)
 		goto remove_input_edid;
+	(void)sysfs_chmod_file(&pdev->dev.kobj, &dev_attr_led_mode.attr, 0666);
 
 	ret = gc555_it6805_init(gc555);
 	if (ret)

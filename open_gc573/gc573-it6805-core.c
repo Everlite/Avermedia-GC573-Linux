@@ -73,7 +73,7 @@
 #define IT6805_PCLK_SAMPLE_COUNT	25
 #define IT6805_PCLK_SAMPLE_DELAY_MS	3
 #define IT6805_PCLK_SAMPLE_SCALE	0x200
-#define IT6805_HIGH_BANDWIDTH_PCLK_KHZ	150001
+#define IT6805_HIGH_BANDWIDTH_PCLK_KHZ	150000
 #define IT6805_AUDIO_REQUEST_DELAY_POLLS	4
 #define IT6805_AUDIO_MONITOR_DELAY_POLLS	3
 #define IT6805_AUDIO_RATE_MISMATCH_LIMIT	16
@@ -3075,15 +3075,17 @@ static bool
 it6805_use_high_bandwidth_output(const struct it6805_runtime *runtime)
 {
 	u32 width = it6805_active_width(runtime);
-	u32 height = it6805_active_height(runtime);
 
 	if (runtime->avi.colorspace == IT6805_COLORSPACE_YCBCR420)
 		return false;
 
-	return width >= 1921 ||
-	       (runtime->timing.pixel_clock_khz >=
-				IT6805_HIGH_BANDWIDTH_PCLK_KHZ &&
-		(width >= 1920 || height >= 2160));
+	/*
+	 * From official AVXGC573_x64.sys Windows driver:
+	 * HActive <= 1920 && PCLK <= 150000 -> SDR Mode (Single-pixel TTL)
+	 * Otherwise -> DDR Mode (Dual-pixel / high-bandwidth TTL)
+	 */
+	return width > 1920 ||
+	       runtime->timing.pixel_clock_khz > IT6805_HIGH_BANDWIDTH_PCLK_KHZ;
 }
 
 static int

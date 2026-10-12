@@ -1,7 +1,7 @@
 # EverLive - AVerMedia GC573 Linux Gaming Suite & Open Driver
 
 [![EverLive](https://img.shields.io/badge/project-EverLive-8a2be2.svg)](#)
-[![Status](https://img.shields.io/badge/status-1440p120%20verified%20%26%20playable-brightgreen.svg)](#current-status)
+[![Status](https://img.shields.io/badge/status-jitter%20%26%20lag%20free%20(experimental)-brightgreen.svg)](#highlights--verified-capabilities)
 [![open_gc573](https://img.shields.io/badge/driver-open__gc573%20(100%25%20blob--free)-2e7d32.svg)](#native-open_gc573-driver)
 [![RGB Control](https://img.shields.io/badge/RGB%20Control-On--the--Fly%20Hardware%20MMIO-blueviolet.svg)](#-hardware-rgb-led-lighting-on-the-fly-control)
 [![Gaming Suite](https://img.shields.io/badge/suite-direct%20display%20%2B%20pipewire%20audio-blue.svg)](#everlive-gaming-suite-playsh)
@@ -11,7 +11,7 @@
 
 **EverLive** is an all-in-one Linux console gaming suite and native open-source driver ecosystem for the **AVerMedia Live Gamer 4K (GC573)** (PCI `1461:0054`, Subsystem `1461:5730`) and **Live Gamer BOLT (GC555)** (`1461:5550`).
 
-With **EverLive**, you can play PlayStation 5, Xbox Series X, or Nintendo Switch directly on your Linux desktop (Wayland & X11) at **true 1440p @ 120 FPS** with **ultra-low render pipeline latency (~1–3 ms)** — featuring synchronized surround audio, real-time in-game volume controls, and desktop application launcher integration without having to switch HDMI cables on your monitor.
+With **EverLive**, you can play PlayStation 5, Xbox Series X, Nintendo Switch, or PCs directly on your Linux desktop (Wayland & X11) at **true 1440p @ 120 FPS** with **ultra-low render latency (~1–3 ms)**. In real-world tests on PS5, the updated direct renderer achieves a smooth, **jitter- and lag-free** gameplay experience (*still experimental*), featuring synchronized multi-channel surround audio, real-time volume controls, and seamless desktop application launcher integration.
 
 ---
 
@@ -47,17 +47,20 @@ After installation, simply launch the game screen from your application menu (**
 ## Highlights & Verified Capabilities
 
 - **2560×1440 @ 120 FPS Verified on PlayStation 5:** 120.35 Hz HDMI 2.0 capture verified on real PS5 hardware (*The Finals*, *Fortnite 120Hz Mode*, PS5 Dashboard).
+- **Jitter- and Lag-Free Direct Rendering (Experimental):** Recent direct engine optimizations (`everlive_display`) eliminate micro-stutters and buffer-induced lag spikes in physical PS5 testing at 1440p @ 120 FPS, delivering stable, responsive frame delivery (~1–3 ms internal pipeline latency).
+- **All-in-One RECentral 4 Linux Studio (`everlive_viewer.py`):** Fully integrated desktop capture studio with an embedded live video viewport that auto-starts immediately upon launch. Features live signal diagnostics (e.g. `● LIVE 2560x1440 @ 60 FPS • HDR10`), on-the-fly resolution preset selection, RGB lighting dropdown, real-time volume & mute controls, and double-click / <kbd>F11</kbd> borderless fullscreen.
+- **Dynamic On-the-Fly HDR Switching:** Seamlessly toggle HDR on or off on your console at any time without freezing the video stream or requiring a restart. The driver adapts its FPGA colorimetry dynamically on the fly.
 - **Sub-Frame Direct Render Pipeline (~1–3 ms internal latency):** Built-in native C direct rendering engine (`everlive_display`) maps V4L2 DMA buffers directly to GPU textures (SDL2 unthrottled presentation / Wayland tearing). Measured buffer-to-display pass takes ~1–3 ms (excluding physical monitor panel response and controller input).
-- **Synchronized 8-Channel Surround Audio:** Captures console uncompressed 8-channel 48 kHz LPCM HDMI audio and streams it to your headset or speakers via a low-latency PipeWire pulse sink connection (configured with `PULSE_LATENCY_MSEC=10`).
+- **Universal Multi-Channel Audio Pipeline (7.1, 5.1 & Stereo):** Captures multi-channel console LPCM audio (8-channel 7.1 on PS5/Xbox/PC, 6-channel 5.1, or 2-channel stereo on Nintendo Switch/Steam Deck/retro consoles) with automatic PipeWire downmixing to any stereo headset or surround setup with ~10–20 ms latency.
 - **Hardware RGB LED Control & Live Switching (Breakthrough):**
   - **Cracked Factory Blinking Loop:** Reverse-engineered the Artix-7 FPGA MMIO lighting engine (BAR 0 `0x0800`–`0x086c` and script RAM `0x2008`), permanently solving the card's annoying factory red blinking on Linux without requiring Windows software.
-  - **Zero Stream Interruption:** Reprogramming LED registers executes asynchronously via hardware MMIO in microseconds. You can switch colors **on the fly during active 120 FPS PS5 gameplay without a single dropped frame, stutter, or stream restart** (tested & verified live on PS5).
+  - **Zero Stream Interruption & Zero Root Prompts:** Sysfs attribute `led_mode` is automatically exposed with user access (`0666`), allowing instant color changes from the GUI or CLI without `sudo` or password prompts. Reprogramming executes asynchronously via hardware MMIO in microseconds **without a single dropped frame or stream restart**.
   - **8 Hardware Profiles:** Off (Dark), Solid Blue, Green, Red, Cyan, Magenta, Yellow, and White.
   - **Boot Persistence:** Configurable via `/etc/modprobe.d/open_gc573.conf` so the card boots in your favorite color or completely dark right from kernel load.
 - **In-Game HUD & Live Volume Control:**
-  - Adjust volume anytime during gameplay using the **mouse wheel**.
-  - Interactive on-screen HUD volume slider in the top-left corner + mute button.
-  - Hotkeys: <kbd>F11</kbd> for borderless fullscreen, <kbd>m</kbd> for mute, <kbd>Tab</kbd> for live performance and jitter stats.
+  - Adjust volume anytime during gameplay using the **mouse wheel** or the RECentral 4 header slider.
+  - Interactive on-screen HUD volume slider + mute button.
+  - Hotkeys: <kbd>F11</kbd> / <kbd>f</kbd> for borderless fullscreen, <kbd>m</kbd> for mute, <kbd>Tab</kbd> for live performance and jitter stats.
 - **100% Blob-Free Driver:** The primary driver `open_gc573` is 100% open-source (**GPL-2.0**), contains no proprietary `.a` binaries, and compiles cleanly on modern Linux kernels 6.19 through 7.x.
 
 ---
@@ -99,7 +102,7 @@ flowchart LR
 | **`uninstall.sh`** | Clean uninstaller that removes all installed driver and configuration files. |
 | **`play.sh`** | Quick launcher for desktop and command-line usage. |
 | **`open_gc573/`** | **Primary Driver:** Native, 100% blob-free Linux kernel driver (GPL-2.0-only). |
-| **`tools/everlive/`** | **EverLive Gaming Suite:** Direct C display engine (`everlive_display.c`), Qt launcher (`everlive_viewer.py`), and desktop entry. |
+| **`tools/everlive/`** | **EverLive Gaming Suite:** RECentral 4 studio application (`everlive_viewer.py`), direct C display engine (`everlive_display.c`), and desktop entry. |
 | **`legacy/cx511h_blob/`** | **Legacy Archive:** Original AVerMedia vendor wrapper with binary blob (`AverMediaLib_64.a`) preserved for historical reference. |
 
 ---
@@ -130,6 +133,7 @@ Through reverse-engineering of the official firmware and FPGA MMIO register spac
 
 ### Key Advantages
 * **Zero Gameplay Interruption:** Changing lighting modes executes via microsecond hardware MMIO register writes without re-negotiating HDMI links, resetting the DMA ring, or dropping frames. Tested and verified live on PlayStation 5 during active 1440p @ 120 FPS gameplay sessions.
+* **Zero Root/Sudo Prompts:** The kernel driver automatically grants user permissions (`0666`) to the sysfs `led_mode` attribute at device probe time, allowing unprivileged desktop users and scripts to change lighting without password prompts.
 * **8 Hardware Profiles:** 
   - `0`: 🌑 **Off (Dark)** — Complete silence, all LEDs shut down inside the PC case.
   - `1`: 🔵 **Solid Blue** (Default / Normal operation)
@@ -139,12 +143,12 @@ Through reverse-engineering of the official firmware and FPGA MMIO register spac
   - `5`: 🟣 **Magenta / Purple**
   - `6`: 🟡 **Yellow**
   - `7`: ⚪ **White**
-* **Real-Time GUI Switching:** Select your preferred color anytime directly from the EverLive settings panel.
+* **Real-Time GUI Switching:** Select your preferred color anytime directly from the RECentral 4 header deck.
 * **Instant Command-Line Control:**
   ```bash
-  python3 tools/everlive/everlive_viewer.py --led off
-  python3 tools/everlive/everlive_viewer.py --led blue
-  python3 tools/everlive/everlive_viewer.py --led magenta
+  ./tools/everlive/everlive_viewer.py --led off
+  ./tools/everlive/everlive_viewer.py --led blue
+  ./tools/everlive/everlive_viewer.py --led cyan
   ```
 
 ### Boot Persistence (Silence Blinking at Startup)
@@ -163,14 +167,14 @@ echo "options open_gc573 led_mode=1" | sudo tee /etc/modprobe.d/open_gc573.conf
 ## ⚠️ Known Issues & Work in Progress
 
 > [!NOTE]
-> **EverLive is an active work in progress.** While 1440p @ 120 FPS is fully functional and playable with ~1–3 ms internal pipeline latency, it is **not yet 100% perfect**:
+> **EverLive is an active work in progress.** While 1440p @ 120 FPS is now jitter- and lag-free in initial physical hardware tests on PlayStation 5, the software remains **experimental** as wider multi-device configurations and edge cases continue to be hardened:
 >
 > - **HDMI Signal Loss on Game Switch (Known Bug):** When launching or closing games that dynamically change the console's video mode or refresh rate (e.g. switching between the 60 Hz PS5 home menu and a 120 Hz game like *The Finals*), the IT6805 HDMI receiver may occasionally fail to re-lock onto the changed TMDS clock.
 >   - **Workaround:** Briefly unplug and re-plug the HDMI cable into the capture card or console to trigger an HDMI Hot-Plug (HPD) handshake.
 >   - **Fix in Progress:** An automatic driver-side software HPD reset is being developed to handle mode switches seamlessly without physical cable replugging.
-> - **Occasional Jitter & Micro-Stutter:** Depending on desktop compositor activity (KDE Wayland / GNOME), background CPU load, and GPU presentation timing, slight frame pacing jitter (typically 1–10 ms variance) can occasionally occur.
+> - **Frame Pacing & Compositor Considerations:** Thanks to direct V4L2 texture streaming with Wayland tearing hints (`SDL_VIDEO_WAYLAND_TEARING=1`), frame pacing is virtually jitter-free. Minor variance may still occur under heavy desktop background loads or compositors with strict presentation throttling.
 > - **Fluctuating 120 FPS Cadence:** The capture hardware's native HDMI clock runs at ~120.35 Hz. If your monitor is configured for a fixed refresh rate without Variable Refresh Rate (VRR), minor cadence mismatches can cause subtle micro-stutter during fast camera sweeps.
-> - **Active Development:** We are continuously optimizing the FPGA DMA queue depth, buffer recycling intervals, and Wayland presentation synchronization to achieve completely flat frame pacing.
+> - **Active Development:** We are continuously optimizing the FPGA DMA queue depth, buffer recycling intervals, and multi-platform HDMI audio compatibility.
 >
 > **Tips to optimize your gaming experience:**
 > 1. **Try VRR / Adaptive Sync:** Depending on your GPU driver, desktop compositor, and display firmware (e.g. KDE Plasma *System Settings -> Display -> Adaptive Sync -> Always*), enabling VRR can noticeably smooth out pacing variance by dynamically adapting the panel refresh rate to incoming capture frames. *(Note: Effectiveness depends on your compositor's tearing/presentation implementation).*

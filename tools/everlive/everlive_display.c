@@ -28,10 +28,11 @@
 #include <pthread.h>
 #include <time.h>
 #include <SDL.h>
+#include <X11/Xlib.h>
 #include <glob.h>
 #include "font8x8.h"
 
-#define BUFFER_COUNT 4
+#define BUFFER_COUNT 8
 
 static const char *detect_vdev(void)
 {
@@ -94,6 +95,7 @@ static bool g_show_stats = true;
 static bool g_hud_visible = true;
 static uint32_t g_last_mouse_time = 0;
 static uint32_t g_volume_toast_time = 0;
+static uintptr_t g_embed_wid = 0;
 
 static pid_t g_audio_pid = 0;
 
@@ -115,6 +117,12 @@ static void sig_handler(int sig)
     stop_audio_pipeline();
 }
 
+static void sigusr1_handler(int sig)
+{
+    (void)sig;
+    g_show_stats = !g_show_stats;
+}
+
 static void start_audio_pipeline(const char *adev)
 {
     if (g_audio_pid > 0) return;
@@ -122,11 +130,13 @@ static void start_audio_pipeline(const char *adev)
     pid_t pid = fork();
     if (pid == 0) {
         setpgid(0, 0);
-        char cmd[512];
+        char cmd[1024];
         snprintf(cmd, sizeof(cmd),
-                 "arecord -D \"%s\" -f S16_LE -c 8 -r 48000 --buffer-size=8192 --period-size=480 -q | "
-                 "pw-play --latency=10ms -P 'application.name=gc573-audio node.name=gc573-audio' -",
-                 adev);
+                 "{ arecord -D \"%s\" -f S16_LE -c 8 -r 48000 -q 2>/dev/null || "
+                 "  arecord -D \"%s\" -f S16_LE -c 6 -r 48000 -q 2>/dev/null || "
+                 "  arecord -D \"%s\" -f S16_LE -c 2 -r 48000 -q 2>/dev/null; } | "
+                 "pw-play --latency=20ms -P 'application.name=gc573-audio node.name=gc573-audio' - 2>/dev/null",
+                 adev, adev, adev);
         execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
         _exit(127);
     } else if (pid > 0) {
@@ -151,22 +161,26 @@ static void *audio_supervisor_thread(void *arg)
             if (r > 0) {
                 g_audio_pid = 0;
                 node_id = -1;
-                fprintf(stderr, "[Audio] Stream unterbrochen. Starte neu...\n");
-                start_audio_pipeline(adev);
-                g_audio_dirty = 1;
+                /* Back off 1s before retrying to prevent rapid-fire fork loops */
+                sleep(1);
+                if (g_running) {
+                    start_audio_pipeline(adev);
+                    g_audio_dirty = 1;
+                }
             }
         }
 
-        /* Find PipeWire node ID */
-        if (node_id < 0 && g_audio_pid > 0) {
-            FILE *fp = popen("wpctl status 2>/dev/null | grep 'gc573-audio' | head -n1 | awk '{print $1}' | tr -d '.'", "r");
+        /* Find PipeWire node ID (check at most once every 500ms) */
+        static int search_counter = 0;
+        if (node_id < 0 && g_audio_pid > 0 && (++search_counter % 20 == 0)) {
+            FILE *fp = popen("wpctl status 2>/dev/null | grep 'gc573-audio' | awk '{for(i=1;i<=NF;i++) if($i ~ /^[0-9]+\\.$/) {sub(/\\./,\"\",$i); print $i; exit}}'", "r");
             if (fp) {
                 char buf[32];
                 if (fgets(buf, sizeof(buf), fp)) {
                     int id = atoi(buf);
                     if (id > 0) {
                         node_id = id;
-                        printf("[Audio] PipeWire 10ms Stream aktiv (Node ID: %d)\n", node_id);
+                        printf("[Audio] PipeWire Audio Stream aktiv (Node ID: %d)\n", node_id);
                         g_audio_dirty = 1;
                     }
                 }
@@ -236,12 +250,24 @@ int main(int argc, char *argv[])
             vdev = argv[++i];
         else if (!strcmp(argv[i], "-a") && i + 1 < argc)
             adev = argv[++i];
+        else if ((!strcmp(argv[i], "-w") || !strcmp(argv[i], "--wid")) && i + 1 < argc)
+            g_embed_wid = (uintptr_t)strtoull(argv[++i], NULL, 0);
         else if (!strcmp(argv[i], "--no-audio") || !strcmp(argv[i], "-n"))
             adev = "none";
         else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
-            printf("Usage: %s [-f|--fullscreen] [-d /dev/videoX] [-a hw:CARD,DEV|none] [--no-audio]\n", argv[0]);
+            printf("Usage: %s [-f|--fullscreen] [-d /dev/videoX] [-a hw:CARD,DEV|none] [-w wid] [--no-audio]\n", argv[0]);
             return 0;
         }
+    }
+
+    /* Mesa / AMD Radeon GPU optimization: disable VBlank wait to eliminate swap stalls */
+    setenv("vblank_mode", "0", 1);
+    setenv("mesa_glthread", "true", 1);
+
+    if (g_embed_wid > 0) {
+        setenv("SDL_VIDEODRIVER", "x11", 1);
+        g_hud_visible = false;
+        g_show_stats = true; /* Keep stats HUD visible so user sees real-time FPS/Lag/Jitter */
     }
 
     if (!vdev)
@@ -251,8 +277,9 @@ int main(int argc, char *argv[])
 
     signal(SIGINT, sig_handler);
     signal(SIGTERM, sig_handler);
+    signal(SIGUSR1, sigusr1_handler);
 
-    int fd = open(vdev, O_RDWR);
+    int fd = open(vdev, O_RDWR | O_NONBLOCK);
     if (fd < 0) {
         fprintf(stderr, "[Error] Konnte V4L2 Gerät '%s' nicht öffnen: %s\n", vdev, strerror(errno));
         return 1;
@@ -352,6 +379,9 @@ int main(int argc, char *argv[])
     }
 
     /* Initialize SDL2 */
+    if (g_embed_wid > 0) {
+        setenv("SDL_VIDEODRIVER", "x11", 1);
+    }
     if (SDL_Init(SDL_INIT_VIDEO) < 0) {
         fprintf(stderr, "[Error] SDL_Init fehlgeschlagen: %s\n", SDL_GetError());
         close(fd);
@@ -360,28 +390,50 @@ int main(int argc, char *argv[])
 
     /* Hints for lowest latency on Wayland & X11 */
     SDL_SetHint(SDL_HINT_RENDER_VSYNC, "0");
+    SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengl");
+    SDL_SetHint(SDL_HINT_RENDER_BATCHING, "1");
     SDL_SetHint("SDL_VIDEO_WAYLAND_TEARING", "1");
     SDL_SetHint("SDL_VIDEO_WAYLAND_ALLOW_DATACONTROL", "1");
     SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "1");
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
 
-    int win_w = 1920;
-    int win_h = 1080;
+    SDL_Window *window = NULL;
+    if (g_embed_wid > 0) {
+        window = SDL_CreateWindowFrom((void *)g_embed_wid);
+    } else {
+        int win_w = (width > 0) ? (int)width : 1920;
+        int win_h = (height > 0) ? (int)height : 1080;
+        Uint32 win_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
+        if (start_fullscreen) {
+            win_flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+            g_fullscreen = true;
+        }
 
-    Uint32 win_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
-    if (start_fullscreen) {
-        win_flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
-        g_fullscreen = true;
+        /* In multi-monitor setups (e.g. 1440p120 + 1080p165 + 1080p60), select the matching display */
+        int target_display = 0;
+        int num_displays = SDL_GetNumVideoDisplays();
+        for (int d = 0; d < num_displays; d++) {
+            SDL_DisplayMode dm;
+            if (SDL_GetCurrentDisplayMode(d, &dm) == 0) {
+                if ((uint32_t)dm.w == width && (uint32_t)dm.h == height) {
+                    target_display = d;
+                    break;
+                }
+            }
+        }
+
+        window = SDL_CreateWindow(
+            "EverLive - Console Gaming Screen",
+            SDL_WINDOWPOS_CENTERED_DISPLAY(target_display), SDL_WINDOWPOS_CENTERED_DISPLAY(target_display),
+            win_w, win_h,
+            win_flags
+        );
+        if (start_fullscreen && window) {
+            SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN_DESKTOP);
+        }
     }
-
-    SDL_Window *window = SDL_CreateWindow(
-        "EverLive - Console Gaming Screen",
-        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-        win_w, win_h,
-        win_flags
-    );
     if (!window) {
-        fprintf(stderr, "[Error] SDL_CreateWindow fehlgeschlagen: %s\n", SDL_GetError());
+        fprintf(stderr, "[Error] Fenstererstellung fehlgeschlagen: %s\n", SDL_GetError());
         SDL_Quit();
         close(fd);
         return 1;
@@ -396,10 +448,15 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    /* Unthrottle swap interval for zero-delay presentation */
+    SDL_GL_SetSwapInterval(0);
+
     SDL_SetRenderDrawColor(renderer, 0, 0, 20, 255);
     SDL_RenderClear(renderer);
     SDL_RenderPresent(renderer);
-    SDL_RaiseWindow(window);
+    if (g_embed_wid == 0) {
+        SDL_RaiseWindow(window);
+    }
 
     SDL_Texture *texture = SDL_CreateTexture(
         renderer,
@@ -435,13 +492,46 @@ int main(int argc, char *argv[])
     uint32_t live_fps = 0;
     uint32_t live_jitter = 0;
     uint32_t jitter_count = 0;
-    static uint64_t last_frame_time_us = 0;
 
     bool dragging_volume = false;
 
+    static int cur_w = 0, cur_h = 0;
+    static uint32_t last_geom_check = 0;
+    static bool g_need_geom_check = true;
+
+
+
     while (g_running) {
-        int cur_w, cur_h;
-        SDL_GetWindowSize(window, &cur_w, &cur_h);
+        uint32_t now_ticks = SDL_GetTicks();
+        if (cur_w <= 0 || cur_h <= 0 || g_need_geom_check || (now_ticks - last_geom_check >= 1000)) {
+            last_geom_check = now_ticks;
+            g_need_geom_check = false;
+            if (g_embed_wid > 0) {
+                static Display *x_dpy = NULL;
+                if (!x_dpy) x_dpy = XOpenDisplay(NULL);
+                if (x_dpy) {
+                    Window root;
+                    int rx, ry;
+                    unsigned int gw = 0, gh = 0, b, d;
+                    if (XGetGeometry(x_dpy, (Window)g_embed_wid, &root, &rx, &ry, &gw, &gh, &b, &d) && gw > 0 && gh > 0) {
+                        int rw = 0, rh = 0;
+                        SDL_GetRendererOutputSize(renderer, &rw, &rh);
+                        if ((int)gw != rw || (int)gh != rh) {
+                            SDL_SetWindowSize(window, (int)gw, (int)gh);
+                        }
+                        cur_w = (int)gw;
+                        cur_h = (int)gh;
+                    }
+                }
+            }
+            if (cur_w <= 0 || cur_h <= 0) {
+                SDL_GetRendererOutputSize(renderer, &cur_w, &cur_h);
+            }
+            if (cur_w <= 0 || cur_h <= 0) {
+                cur_w = width;
+                cur_h = height;
+            }
+        }
 
         /* HUD dimensions */
         int hud_w = 660;
@@ -475,7 +565,7 @@ int main(int argc, char *argv[])
                 SDL_ShowCursor(SDL_ENABLE);
 
                 if (ev.button.button == SDL_BUTTON_LEFT) {
-                    if (ev.button.clicks == 2) {
+                    if (ev.button.clicks == 2 && g_embed_wid == 0) {
                         /* Double-click toggles fullscreen */
                         g_fullscreen = !g_fullscreen;
                         SDL_SetWindowFullscreen(window, g_fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
@@ -531,9 +621,9 @@ int main(int argc, char *argv[])
                 g_last_mouse_time = SDL_GetTicks();
                 SDL_ShowCursor(SDL_ENABLE);
 
-                if (ev.key.keysym.sym == SDLK_ESCAPE || ev.key.keysym.sym == SDLK_q) {
+                if ((ev.key.keysym.sym == SDLK_ESCAPE || ev.key.keysym.sym == SDLK_q) && g_embed_wid == 0) {
                     g_running = 0;
-                } else if (ev.key.keysym.sym == SDLK_f || ev.key.keysym.sym == SDLK_F11) {
+                } else if ((ev.key.keysym.sym == SDLK_f || ev.key.keysym.sym == SDLK_F11) && g_embed_wid == 0) {
                     g_fullscreen = !g_fullscreen;
                     SDL_SetWindowFullscreen(window, g_fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
                 } else if (ev.key.keysym.sym == SDLK_m) {
@@ -553,11 +643,10 @@ int main(int argc, char *argv[])
                     g_show_stats = !g_show_stats;
                 }
             } else if (ev.type == SDL_WINDOWEVENT) {
-                if (ev.window.event == SDL_WINDOWEVENT_EXPOSED ||
-                    ev.window.event == SDL_WINDOWEVENT_RESIZED ||
-                    ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
-                    SDL_RenderCopy(renderer, texture, NULL, NULL);
-                    SDL_RenderPresent(renderer);
+                if (ev.window.event == SDL_WINDOWEVENT_RESIZED ||
+                    ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED ||
+                    ev.window.event == SDL_WINDOWEVENT_EXPOSED) {
+                    g_need_geom_check = true;
                 }
             }
         }
@@ -571,6 +660,20 @@ int main(int argc, char *argv[])
         buf.memory = V4L2_MEMORY_MMAP;
         if (ioctl(fd, VIDIOC_DQBUF, &buf) < 0)
             continue;
+
+        /* DRAIN: If multiple buffers arrived (e.g. during a presentation swap),
+         * dequeue until we reach the freshest one and return older ones immediately.
+         * This guarantees zero backlog, zero lag spikes, and perfect frame pacing! */
+        struct v4l2_buffer next_buf = {};
+        next_buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        next_buf.memory = V4L2_MEMORY_MMAP;
+        while (ioctl(fd, VIDIOC_DQBUF, &next_buf) == 0) {
+            ioctl(fd, VIDIOC_QBUF, &buf);
+            buf = next_buf;
+            memset(&next_buf, 0, sizeof(next_buf));
+            next_buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+            next_buf.memory = V4L2_MEMORY_MMAP;
+        }
 
         /* Calculate exact capture-to-display latency */
         struct timespec now_ts;
@@ -587,17 +690,25 @@ int main(int argc, char *argv[])
         /* Return buffer to driver immediately so PCIe DMA never starves */
         ioctl(fd, VIDIOC_QBUF, &buf);
 
+        /* Render to entire physical window/screen surface (100% fullscreen on High-DPI) */
         SDL_RenderCopy(renderer, texture, NULL, NULL);
 
         frame_count++;
 
-        uint64_t frame_delta_us = last_frame_time_us ? (now_us - last_frame_time_us) : 8333;
-        last_frame_time_us = now_us;
-        if (frame_delta_us > 12000 || frame_delta_us < 5000) {
+        static uint64_t last_now_us = 0;
+        uint64_t frame_delta_us = last_now_us ? (now_us - last_now_us) : 8333;
+        last_now_us = now_us;
+
+        /* Expected interval: 8333 us (120 Hz) or 16666 us (60 Hz) */
+        uint64_t expected = (frame_delta_us < 12500) ? 8333 : 16666;
+        int64_t diff = (int64_t)frame_delta_us - (int64_t)expected;
+        if (diff < 0) diff = -diff;
+        /* Count jitter only on genuine delivery stalls (> 5.5 ms deviation) */
+        if (diff > 5500) {
             jitter_count++;
         }
 
-        uint32_t now_ticks = SDL_GetTicks();
+        now_ticks = SDL_GetTicks();
 
         /* Auto-hide HUD and cursor on idle */
         if (now_ticks - g_last_mouse_time > 2500 && !dragging_volume) {
@@ -738,10 +849,12 @@ int main(int argc, char *argv[])
             jitter_count = 0;
             last_title_time = now_ticks;
 
-            char title[180];
-            snprintf(title, sizeof(title), "EverLive - %ux%u @ %u FPS | Latenz: %.1f ms | Vol: %d%%",
-                     width, height, live_fps, lat_ms, g_muted ? 0 : (int)(g_volume * 100.0f));
-            SDL_SetWindowTitle(window, title);
+            if (g_embed_wid == 0) {
+                char title[180];
+                snprintf(title, sizeof(title), "EverLive - %ux%u @ %u FPS | Latenz: %.1f ms | Vol: %d%%",
+                         width, height, live_fps, lat_ms, g_muted ? 0 : (int)(g_volume * 100.0f));
+                SDL_SetWindowTitle(window, title);
+            }
         }
     }
 

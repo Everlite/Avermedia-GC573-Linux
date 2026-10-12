@@ -119,7 +119,7 @@ make -C "${DRIVER_DIR}" -j"$(nproc)"
 echo -e "${GREEN}[+] open_gc573.ko erfolgreich gebaut!${NC}"
 
 # Display-App kompilieren
-gcc -O3 -march=native -o "${VIEWER_DIR}/everlive_display" "${VIEWER_DIR}/everlive_display.c" $(sdl2-config --cflags --libs) -lpthread
+gcc -O3 -march=native -o "${VIEWER_DIR}/everlive_display" "${VIEWER_DIR}/everlive_display.c" $(sdl2-config --cflags --libs) -lX11 -lpthread
 ln -sf everlive_display "${VIEWER_DIR}/gc573_display"
 chmod +x "${VIEWER_DIR}/everlive_display" "${VIEWER_DIR}/everlive_viewer.py" "${SCRIPT_DIR}/play.sh"
 echo -e "${GREEN}[+] EverLive Direct Display Engine erfolgreich kompiliert!${NC}"

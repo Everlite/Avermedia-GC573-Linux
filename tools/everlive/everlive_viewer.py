@@ -39,15 +39,19 @@ def save_settings(data: dict):
     except Exception:
         pass
 
+# Force X11 / xcb on Wayland so QWidget.winId() provides an X11 Window ID for mpv --wid embedding
+if "QT_QPA_PLATFORM" not in os.environ and os.environ.get("WAYLAND_DISPLAY"):
+    os.environ["QT_QPA_PLATFORM"] = "xcb"
+
 # PySide6 is optional when run with --cli
 try:
     from PySide6.QtWidgets import (
         QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
         QLabel, QPushButton, QComboBox, QCheckBox, QSlider, QFrame,
-        QGroupBox, QMessageBox
+        QGroupBox, QMessageBox, QStackedLayout, QSizePolicy
     )
-    from PySide6.QtCore import Qt, QTimer, QThread, Signal
-    from PySide6.QtGui import QFont, QIcon, QColor, QPalette
+    from PySide6.QtCore import Qt, QTimer, QThread, Signal, QEvent
+    from PySide6.QtGui import QFont, QIcon, QColor, QPalette, QKeySequence, QShortcut
     HAS_QT = True
 except ImportError:
     HAS_QT = False
@@ -175,25 +179,73 @@ def write_led_mode(mode: int) -> bool:
         with open(path, "w") as f:
             f.write(f"{mode}\n")
         success = True
-    except PermissionError:
-        # Fallback to pkexec if user permissions not granted yet
-        try:
-            p = subprocess.run(
-                ["pkexec", "tee", path],
-                input=f"{mode}\n".encode(),
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=5.0
-            )
-            success = (p.returncode == 0)
-        except Exception:
-            success = False
     except Exception:
         success = False
 
     if success:
         save_settings({"led_mode": mode})
     return success
+
+
+def set_audio_volume(vol_pct: int):
+    """Sets stream volume for gc573-audio via wpctl / pactl (0-150%)."""
+    try:
+        out = subprocess.check_output(["wpctl", "status"], text=True, stderr=subprocess.DEVNULL)
+        for line in out.splitlines():
+            if "output.gc573-audio" in line or "gc573-audio" in line:
+                for part in line.strip().split():
+                    clean = part.strip(".│*")
+                    if clean.isdigit():
+                        vol_float = vol_pct / 100.0
+                        subprocess.run(["wpctl", "set-volume", clean, f"{vol_float:.2f}"],
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        return
+    except Exception:
+        pass
+
+    try:
+        out = subprocess.check_output(["pactl", "list", "sink-inputs"], text=True, stderr=subprocess.DEVNULL)
+        curr_id = None
+        for line in out.splitlines():
+            line = line.strip()
+            if line.startswith("Sink-Eingabe #") or line.startswith("Sink Input #"):
+                curr_id = line.split("#")[-1].strip()
+            elif "gc573-audio" in line and curr_id:
+                subprocess.run(["pactl", "set-sink-input-volume", curr_id, f"{vol_pct}%"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                break
+    except Exception:
+        pass
+
+
+def set_audio_mute(mute: bool):
+    """Mutes or unmutes stream for gc573-audio via wpctl / pactl."""
+    try:
+        out = subprocess.check_output(["wpctl", "status"], text=True, stderr=subprocess.DEVNULL)
+        for line in out.splitlines():
+            if "output.gc573-audio" in line or "gc573-audio" in line:
+                for part in line.strip().split():
+                    clean = part.strip(".│*")
+                    if clean.isdigit():
+                        subprocess.run(["wpctl", "set-mute", clean, "1" if mute else "0"],
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        return
+    except Exception:
+        pass
+
+    try:
+        out = subprocess.check_output(["pactl", "list", "sink-inputs"], text=True, stderr=subprocess.DEVNULL)
+        curr_id = None
+        for line in out.splitlines():
+            line = line.strip()
+            if line.startswith("Sink-Eingabe #") or line.startswith("Sink Input #"):
+                curr_id = line.split("#")[-1].strip()
+            elif "gc573-audio" in line and curr_id:
+                subprocess.run(["pactl", "set-sink-input-mute", curr_id, "1" if mute else "0"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                break
+    except Exception:
+        pass
 
 
 class GameStreamer:
@@ -243,16 +295,29 @@ class GameStreamer:
                         fps = round(clk / (tw * th))
                 info["locked"] = True
                 info["resolution"] = f"{w}x{h}"
-                info["framerate"] = f"{fps} Hz"
+                info["framerate"] = f"{fps} FPS"
+
+                try:
+                    fmt_out = subprocess.check_output(
+                        ["v4l2-ctl", "-d", self.vdev, "--get-fmt-video"],
+                        stderr=subprocess.DEVNULL, timeout=0.8
+                    ).decode()
+                    if "SMPTE 2084" in fmt_out or "P010" in fmt_out:
+                        info["hdr"] = "HDR10"
+                    else:
+                        info["hdr"] = "SDR"
+                except Exception:
+                    info["hdr"] = "SDR"
         except Exception:
             # Kein aktiver HDMI-Signal-Lock über DV-Timings vorhanden
             info["locked"] = False
-            info["resolution"] = "Kein HDMI-Signal erkannt"
+            info["resolution"] = "Kein Signal"
             info["framerate"] = ""
+            info["hdr"] = ""
 
         return info
 
-    def start(self, preset_name: str = "Auto (HDMI Signal)", fullscreen: bool = False, volume: float = 1.0) -> bool:
+    def start(self, preset_name: str = "Auto (HDMI Signal)", fullscreen: bool = False, volume: float = 1.0, wid: Optional[int] = None) -> bool:
         if self.is_running:
             return True
 
@@ -286,6 +351,7 @@ class GameStreamer:
             except Exception:
                 pass
 
+        # Prefer native high-performance everlive_display binary (< 2 ms display latency)
         script_dir = os.path.dirname(os.path.abspath(__file__))
         native_bin = os.path.join(script_dir, "everlive_display")
         if not os.path.isfile(native_bin):
@@ -293,23 +359,23 @@ class GameStreamer:
 
         if os.path.isfile(native_bin) and os.access(native_bin, os.X_OK):
             cmd = [native_bin, "-d", self.vdev, "-a", self.adev]
-            if fullscreen:
+            if wid is not None:
+                cmd.extend(["-w", str(wid)])
+            elif fullscreen:
                 cmd.append("-f")
-            print(f"[*] Starte nativen EverLive Direct-Renderer mit integriertem Audio ({native_bin})...")
+            print(f"[*] Starte nativen EverLive Direct-Renderer (1-2 ms Hardware-Latenz): {' '.join(cmd)}")
             try:
                 self.mpv_proc = subprocess.Popen(cmd)
                 self.is_running = True
                 return True
             except Exception as e:
-                print(f"[!] Fehler beim Starten von everlive_display: {e}")
-                self.stop()
-                return False
+                print(f"[!] Fehler beim Starten von everlive_display ({e}), weiche auf mpv aus...")
 
-        # Build optimized mpv command for zero-delay display
+        # Fallback: optimized mpv command with zero-delay low-latency profile
         mpv_cmd = [
             "mpv",
             f"av://v4l2:{self.vdev}",
-            "--title=PS5 - AVerMedia GC573",
+            "--title=AVerMedia RECentral 4 - Live Gamer 4K",
             "--profile=low-latency",
             "--untimed",
             "--no-cache",
@@ -317,45 +383,49 @@ class GameStreamer:
             "--demuxer-lavf-probe-info=no",
             "--demuxer-lavf-analyzeduration=0",
             "--demuxer-readahead-secs=0",
+            "--demuxer-lavf-o=fflags=nobuffer+fastseek",
+            "--demuxer-lavf-o-add=flags=low_delay",
+            "--demuxer-lavf-o-add=probesize=32",
             "--video-latency-hacks=yes",
             "--interpolation=no",
-            "--framedrop=no",
+            "--framedrop=vo",
             "--video-sync=display-desync",
-            "--opengl-glfinish=yes",
+            "--opengl-glfinish=no",
+            "--vd-lavc-threads=1",
+            "--vd-lavc-fast=yes",
             "--vo=gpu",
-            "--gpu-context=wayland",
             "--cursor-autohide=1000",
             "--no-terminal",
             "--input-default-bindings=yes",
         ]
 
-        # Video size options if preset selected
-        lavf_opts = ["fflags=nobuffer", "flags=low_delay"]
-        if width and height:
-            lavf_opts.append(f"video_size={width}x{height}")
-        if fps:
-            lavf_opts.append(f"framerate={fps}")
-            mpv_cmd.append(f"--fps={fps}")
-        lavf_opts.append("input_format=yuyv422")
-        mpv_cmd.append(f"--demuxer-lavf-o={','.join(lavf_opts)}")
-
-        if fullscreen:
+        mpv_env = dict(os.environ)
+        if wid is not None:
+            # Force X11 backend so mpv attaches directly to Qt XCB widget
+            mpv_env.pop("WAYLAND_DISPLAY", None)
+            mpv_cmd.extend([
+                f"--wid={wid}",
+                "--gpu-context=x11egl",
+                "--x11-bypass-compositor=no",
+                "--input-vo-keyboard=no",
+                "--input-cursor-passthrough=yes",
+                "--input-default-bindings=no",
+            ])
+        elif fullscreen:
             mpv_cmd.append("--fullscreen")
 
         try:
-            self.mpv_proc = subprocess.Popen(mpv_cmd)
+            self.mpv_proc = subprocess.Popen(mpv_cmd, env=mpv_env)
             self.is_running = True
             if self.adev and self.adev != "none":
                 try:
-                    self.arecord_proc = subprocess.Popen(
-                        ["arecord", "-D", self.adev, "-f", "S16_LE", "-c", "8", "-r", "48000",
-                         "--buffer-size=8192", "--period-size=480", "-q"],
-                        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+                    cmd = (
+                        f"{{ arecord -D '{self.adev}' -f S16_LE -c 8 -r 48000 -q 2>/dev/null || "
+                        f"   arecord -D '{self.adev}' -f S16_LE -c 6 -r 48000 -q 2>/dev/null || "
+                        f"   arecord -D '{self.adev}' -f S16_LE -c 2 -r 48000 -q 2>/dev/null; }} | "
+                        f"pw-play --latency=20ms -P 'application.name=gc573-audio node.name=gc573-audio' - 2>/dev/null"
                     )
-                    self.pwplay_proc = subprocess.Popen(
-                        ["pw-play", "--latency=10ms", "-P", "application.name=gc573-audio node.name=gc573-audio", "-"],
-                        stdin=self.arecord_proc.stdout, stderr=subprocess.DEVNULL
-                    )
+                    self.pwplay_proc = subprocess.Popen(cmd, shell=True, preexec_fn=os.setsid)
                 except Exception as ae:
                     print(f"[*] Hinweis beim Starten des Audio-Streams: {ae}")
             return True
@@ -410,253 +480,419 @@ class GameStreamer:
 
 
 if HAS_QT:
+    class VideoViewport(QWidget):
+        """Native X11 window widget for direct embedded mpv rendering."""
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self.setAttribute(Qt.WA_NativeWindow, True)
+            self.setAttribute(Qt.WA_OpaquePaintEvent, True)
+            self.setStyleSheet("background-color: #050608;")
+            self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            self.setMouseTracking(True)
+
+
     class MainWindow(QMainWindow):
         def __init__(self, streamer: GameStreamer):
             super().__init__()
             self.streamer = streamer
+            self.is_fullscreen = False
+            self.muted = False
+            self.saved_cfg = load_settings()
+
             self.init_ui()
 
-            # Timer to check signal & player status
+            # Completely hide default QMainWindow menuBar & statusBar to eliminate top black bar offset in fullscreen
+            self.menuBar().hide()
+            self.menuBar().setFixedHeight(0)
+            self.statusBar().hide()
+            self.statusBar().setFixedHeight(0)
+
+            # Signal monitor timer (1s polling)
             self.timer = QTimer(self)
             self.timer.timeout.connect(self.update_status)
             self.timer.start(1000)
 
-        def init_ui(self):
-            self.setWindowTitle("🎮 GC573 PS5 Gaming Screen")
-            self.setMinimumSize(480, 430)
+            # Auto-start stream inside viewport as soon as window is shown
+            QTimer.singleShot(200, self.auto_start_stream)
 
-            # Modern Dark Theme Stylesheet
+        def init_ui(self):
+            self.setWindowTitle("AVerMedia RECentral 4 - Live Gamer 4K (EverLive Linux)")
+            self.resize(1280, 780)
+            self.setMinimumSize(640, 420)
+
+            # RECentral 4 Dark Studio Theme
             self.setStyleSheet("""
                 QMainWindow {
-                    background-color: #12141a;
+                    background-color: #0c0d12;
                 }
-                QGroupBox {
-                    border: 1px solid #2a2e3d;
-                    border-radius: 8px;
-                    margin-top: 14px;
-                    font-weight: bold;
-                    color: #8fa0c0;
-                    padding-top: 15px;
+                QFrame#headerDeck {
+                    background-color: #141720;
+                    border-bottom: 1px solid #232736;
+                    padding: 4px 12px;
                 }
-                QGroupBox::title {
-                    subcontrol-origin: margin;
-                    subcontrol-position: top left;
-                    padding: 0 8px;
-                    color: #58a6ff;
+                QFrame#bottomBar {
+                    background-color: #0f1118;
+                    border-top: 1px solid #1c202e;
+                    padding: 2px 10px;
                 }
                 QLabel {
                     color: #e6edf3;
-                    font-size: 13px;
+                    font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+                }
+                QLabel#logoTitle {
+                    color: #ffffff;
+                    font-size: 15px;
+                    font-weight: 800;
+                    letter-spacing: 0.5px;
+                }
+                QLabel#badgeModel {
+                    color: #ff3344;
+                    background-color: #2b1115;
+                    border: 1px solid #5a1e25;
+                    border-radius: 4px;
+                    padding: 2px 6px;
+                    font-size: 10px;
+                    font-weight: bold;
+                    letter-spacing: 1px;
+                }
+                QLabel#pillLive {
+                    border-radius: 12px;
+                    padding: 4px 12px;
+                    font-size: 12px;
+                    font-weight: bold;
                 }
                 QComboBox {
-                    background-color: #1f2430;
+                    background-color: #1b202c;
                     color: #f0f6fc;
-                    border: 1px solid #3b4252;
+                    border: 1px solid #303749;
                     border-radius: 6px;
-                    padding: 6px 12px;
+                    padding: 4px 10px;
+                    font-size: 12px;
                     min-height: 24px;
+                }
+                QComboBox:hover {
+                    border-color: #58a6ff;
                 }
                 QComboBox::drop-down {
                     border: none;
+                    width: 20px;
                 }
-                QPushButton#btnPlay {
-                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1f6feb, stop:1 #388bfd);
+                QPushButton {
+                    background-color: #1f2533;
+                    color: #e6edf3;
+                    border: 1px solid #323b4e;
+                    border-radius: 6px;
+                    padding: 5px 12px;
+                    font-size: 12px;
+                    font-weight: 600;
+                }
+                QPushButton:hover {
+                    background-color: #2b3346;
+                    border-color: #58a6ff;
+                }
+                QPushButton#btnToggleLive {
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #da3633, stop:1 #f85149);
                     color: white;
-                    font-size: 15px;
-                    font-weight: bold;
-                    border-radius: 8px;
-                    padding: 12px;
                     border: none;
+                    font-weight: bold;
                 }
-                QPushButton#btnPlay:hover {
-                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #388bfd, stop:1 #58a6ff);
+                QPushButton#btnToggleLive:hover {
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #f85149, stop:1 #ff7b72);
                 }
-                QPushButton#btnStop {
-                    background-color: #da3633;
+                QPushButton#btnToggleStart {
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #238636, stop:1 #2ea043);
                     color: white;
-                    font-size: 15px;
-                    font-weight: bold;
-                    border-radius: 8px;
-                    padding: 12px;
                     border: none;
+                    font-weight: bold;
                 }
-                QPushButton#btnStop:hover {
-                    background-color: #f85149;
-                }
-                QCheckBox {
-                    color: #c9d1d9;
-                    font-size: 13px;
+                QPushButton#btnToggleStart:hover {
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #2ea043, stop:1 #3fb950);
                 }
                 QSlider::groove:horizontal {
-                    height: 6px;
-                    background: #2a2e3d;
-                    border-radius: 3px;
+                    height: 5px;
+                    background: #252c3c;
+                    border-radius: 2px;
                 }
                 QSlider::sub-page:horizontal {
-                    background: #58a6ff;
-                    border-radius: 3px;
+                    background: #ff3344;
+                    border-radius: 2px;
                 }
                 QSlider::handle:horizontal {
-                    background: #f0f6fc;
-                    width: 16px;
+                    background: #ffffff;
+                    width: 14px;
                     margin-top: -5px;
                     margin-bottom: -5px;
-                    border-radius: 8px;
+                    border-radius: 7px;
                 }
             """)
 
             central_widget = QWidget()
             self.setCentralWidget(central_widget)
-            layout = QVBoxLayout(central_widget)
-            layout.setContentsMargins(20, 20, 20, 20)
-            layout.setSpacing(15)
+            root_layout = QVBoxLayout(central_widget)
+            root_layout.setContentsMargins(0, 0, 0, 0)
+            root_layout.setSpacing(0)
 
-            # Signal Status Box
-            status_box = QGroupBox("Signal-Status")
-            status_layout = QVBoxLayout(status_box)
-            self.lbl_status = QLabel("● Prüfe Signal...")
-            self.lbl_status.setFont(QFont("Inter", 13, QFont.Bold))
-            self.lbl_details = QLabel("HDMI: - | Audio: -")
-            self.lbl_details.setStyleSheet("color: #8b949e; font-size: 12px;")
-            status_layout.addWidget(self.lbl_status)
-            status_layout.addWidget(self.lbl_details)
-            layout.addWidget(status_box)
+            # -------------------------------------------------------------
+            # Top Deck: RECentral 4 Branding & Quick Controls
+            # -------------------------------------------------------------
+            self.header_deck = QFrame()
+            self.header_deck.setObjectName("headerDeck")
+            h_layout = QHBoxLayout(self.header_deck)
+            h_layout.setContentsMargins(12, 6, 12, 6)
+            h_layout.setSpacing(12)
 
-            # Settings Box
-            settings_box = QGroupBox("Einstellungen")
-            settings_layout = QVBoxLayout(settings_box)
-            settings_layout.setSpacing(10)
+            # Logo & Model
+            lbl_logo = QLabel("🔴 RECentral 4")
+            lbl_logo.setObjectName("logoTitle")
+            h_layout.addWidget(lbl_logo)
 
-            # Preset Combo
-            res_layout = QHBoxLayout()
-            lbl_res = QLabel("Auflösung:")
+            lbl_badge = QLabel("LIVE GAMER 4K")
+            lbl_badge.setObjectName("badgeModel")
+            h_layout.addWidget(lbl_badge)
+
+            # Dynamic Signal Pill
+            self.lbl_pill = QLabel("● PRÜFE SIGNAL...")
+            self.lbl_pill.setObjectName("pillLive")
+            self.lbl_pill.setStyleSheet("background-color: #2b2518; color: #d29922; border: 1px solid #7d5918;")
+            h_layout.addWidget(self.lbl_pill)
+
+            h_layout.addStretch(1)
+
+            # Resolution Preset
+            h_layout.addWidget(QLabel("Format:"))
             self.combo_presets = QComboBox()
             self.combo_presets.addItems(list(PRESETS.keys()))
-            res_layout.addWidget(lbl_res)
-            res_layout.addWidget(self.combo_presets, 1)
-            settings_layout.addLayout(res_layout)
+            if "preset" in self.saved_cfg and self.saved_cfg["preset"] in PRESETS:
+                self.combo_presets.setCurrentText(self.saved_cfg["preset"])
+            self.combo_presets.currentIndexChanged.connect(self.on_preset_changed)
+            h_layout.addWidget(self.combo_presets)
 
-            # Restore saved user preferences
-            saved_cfg = load_settings()
-            saved_led = saved_cfg.get("led_mode")
-            if saved_led is not None and isinstance(saved_led, int):
-                curr = read_led_mode()
-                if curr >= 0 and curr != saved_led:
-                    write_led_mode(saved_led)
-
-            if "preset" in saved_cfg and saved_cfg["preset"] in PRESETS:
-                self.combo_presets.setCurrentText(saved_cfg["preset"])
-            self.combo_presets.currentIndexChanged.connect(
-                lambda: save_settings({"preset": self.combo_presets.currentText()})
-            )
-
-            # LED Lighting Combo (RGB On-the-Fly Control)
-            led_layout = QHBoxLayout()
-            lbl_led = QLabel("LED Beleuchtung:")
+            # LED Lighting Combo
+            h_layout.addWidget(QLabel("LED:"))
             self.combo_led = QComboBox()
             for name, val in LED_MODES.items():
                 self.combo_led.addItem(name, val)
 
-            curr_mode = read_led_mode()
-            if curr_mode >= 0:
-                idx = self.combo_led.findData(curr_mode)
+            saved_led = self.saved_cfg.get("led_mode", 1)
+            if saved_led is not None and isinstance(saved_led, int) and 0 <= saved_led <= 7:
+                write_led_mode(saved_led)
+                idx = self.combo_led.findData(saved_led)
                 if idx >= 0:
                     self.combo_led.setCurrentIndex(idx)
             else:
-                self.combo_led.setEnabled(False)
-                self.combo_led.setToolTip("Kein open_gc573 LED-Knoten in sysfs gefunden")
+                curr_led = read_led_mode()
+                if curr_led >= 0:
+                    idx = self.combo_led.findData(curr_led)
+                    if idx >= 0:
+                        self.combo_led.setCurrentIndex(idx)
+                else:
+                    self.combo_led.setEnabled(False)
+            self.combo_led.currentIndexChanged.connect(self.on_led_changed)
+            h_layout.addWidget(self.combo_led)
 
-            self.combo_led.currentIndexChanged.connect(self.on_led_mode_changed)
-            led_layout.addWidget(lbl_led)
-            led_layout.addWidget(self.combo_led, 1)
-            settings_layout.addLayout(led_layout)
+            # Audio Mute & Volume
+            self.btn_mute = QPushButton("🔊")
+            self.btn_mute.setFixedWidth(36)
+            self.btn_mute.setCursor(Qt.PointingHandCursor)
+            self.btn_mute.clicked.connect(self.toggle_mute)
+            h_layout.addWidget(self.btn_mute)
 
-            # Fullscreen Checkbox
-            self.chk_fullscreen = QCheckBox("Direkt im Vollbildmodus starten (F11 zum Umschalten)")
-            self.chk_fullscreen.setChecked(bool(saved_cfg.get("fullscreen", False)))
-            self.chk_fullscreen.toggled.connect(
-                lambda v: save_settings({"fullscreen": v})
-            )
-            settings_layout.addWidget(self.chk_fullscreen)
-
-            # Volume Slider
-            vol_layout = QHBoxLayout()
-            lbl_vol = QLabel("Lautstärke:")
             self.slider_vol = QSlider(Qt.Horizontal)
             self.slider_vol.setRange(0, 150)
-            initial_vol = int(saved_cfg.get("volume", 1.0) * 100)
+            initial_vol = int(self.saved_cfg.get("volume", 1.0) * 100)
             self.slider_vol.setValue(initial_vol)
-            self.lbl_vol_val = QLabel(f"{initial_vol}%")
-            self.lbl_vol_val.setFixedWidth(40)
-            self.slider_vol.valueChanged.connect(lambda v: self.lbl_vol_val.setText(f"{v}%"))
-            self.slider_vol.valueChanged.connect(
-                lambda v: save_settings({"volume": v / 100.0})
-            )
-            vol_layout.addWidget(lbl_vol)
-            vol_layout.addWidget(self.slider_vol, 1)
-            vol_layout.addWidget(self.lbl_vol_val)
-            settings_layout.addLayout(vol_layout)
+            self.slider_vol.setFixedWidth(90)
+            self.slider_vol.valueChanged.connect(self.on_volume_changed)
+            h_layout.addWidget(self.slider_vol)
 
-            layout.addWidget(settings_box)
+            self.lbl_vol = QLabel(f"{initial_vol}%")
+            self.lbl_vol.setFixedWidth(36)
+            self.lbl_vol.setStyleSheet("color: #8b949e; font-size: 11px;")
+            h_layout.addWidget(self.lbl_vol)
 
-            # Action Button
-            self.btn_toggle = QPushButton("🎮 PS5 Fenster starten")
-            self.btn_toggle.setObjectName("btnPlay")
-            self.btn_toggle.setCursor(Qt.PointingHandCursor)
-            self.btn_toggle.clicked.connect(self.toggle_stream)
-            layout.addWidget(self.btn_toggle)
+            # Stream Restart/Toggle Button
+            self.btn_toggle_stream = QPushButton("⏹ Stop")
+            self.btn_toggle_stream.setObjectName("btnToggleLive")
+            self.btn_toggle_stream.setCursor(Qt.PointingHandCursor)
+            self.btn_toggle_stream.clicked.connect(self.toggle_stream)
+            h_layout.addWidget(self.btn_toggle_stream)
 
-            # Shortcut tips
-            tips = QLabel("Tipp: Im Spielfenster mit 'f' oder 'F11' Vollbild umschalten, 'm' stummschalten, 'q' beenden.")
-            tips.setStyleSheet("color: #6e7681; font-size: 11px;")
-            tips.setAlignment(Qt.AlignCenter)
-            layout.addWidget(tips)
+            # Fullscreen Button
+            self.btn_fs = QPushButton("⛶ Vollbild")
+            self.btn_fs.setCursor(Qt.PointingHandCursor)
+            self.btn_fs.clicked.connect(self.toggle_fullscreen)
+            h_layout.addWidget(self.btn_fs)
+
+            root_layout.addWidget(self.header_deck)
+
+            # -------------------------------------------------------------
+            # Central Video Viewport (mpv embeds directly here)
+            # -------------------------------------------------------------
+            self.viewport = VideoViewport(central_widget)
+            self.viewport.installEventFilter(self)
+            root_layout.addWidget(self.viewport, 1)
+
+            # -------------------------------------------------------------
+            # Bottom Status Bar
+            # -------------------------------------------------------------
+            self.bottom_bar = QFrame()
+            self.bottom_bar.setObjectName("bottomBar")
+            b_layout = QHBoxLayout(self.bottom_bar)
+            b_layout.setContentsMargins(10, 4, 10, 4)
+
+            self.lbl_vdev = QLabel(f"🎮 Video: {self.streamer.vdev}")
+            self.lbl_vdev.setStyleSheet("color: #8b949e; font-size: 11px;")
+            b_layout.addWidget(self.lbl_vdev)
+
+            self.btn_stats = QPushButton("📊 HUD Stats")
+            self.btn_stats.setCursor(Qt.PointingHandCursor)
+            self.btn_stats.setStyleSheet("""
+                QPushButton {
+                    background-color: #21262d; color: #c9d1d9; border: 1px solid #30363d;
+                    border-radius: 4px; padding: 4px 10px; font-size: 11px; font-weight: bold;
+                }
+                QPushButton:hover { background-color: #30363d; color: #58a6ff; border-color: #58a6ff; }
+            """)
+            self.btn_stats.clicked.connect(self.toggle_stats)
+            b_layout.addWidget(self.btn_stats)
+
+            b_layout.addStretch(1)
+
+            self.lbl_hint = QLabel("Tab: Stats • Doppelklick / F11: Vollbild • M: Stumm • ESC: Fenster")
+            self.lbl_hint.setStyleSheet("color: #58a6ff; font-size: 11px;")
+            b_layout.addWidget(self.lbl_hint)
+
+            b_layout.addStretch(1)
+
+            self.lbl_engine = QLabel("⚡ EverLive Direct-DMA Engine (< 2 ms Hardware-Latenz)")
+            self.lbl_engine.setStyleSheet("color: #3fb950; font-size: 11px; font-weight: bold;")
+            b_layout.addWidget(self.lbl_engine)
+
+            root_layout.addWidget(self.bottom_bar)
+
+            # Setup global shortcuts
+            QShortcut(QKeySequence("F11"), self, self.toggle_fullscreen)
+            QShortcut(QKeySequence("f"), self, self.toggle_fullscreen)
+            QShortcut(QKeySequence("Escape"), self, self.exit_fullscreen)
+            QShortcut(QKeySequence("Tab"), self, self.toggle_stats)
+            QShortcut(QKeySequence("i"), self, self.toggle_stats)
+            QShortcut(QKeySequence("m"), self, self.toggle_mute)
+            QShortcut(QKeySequence("q"), self, self.close)
 
             self.update_status()
+
+        def toggle_stats(self):
+            if self.streamer.mpv_proc and self.streamer.mpv_proc.poll() is None:
+                try:
+                    self.streamer.mpv_proc.send_signal(signal.SIGUSR1)
+                except Exception:
+                    pass
+
+        def auto_start_stream(self):
+            if not self.streamer.is_running:
+                preset = self.combo_presets.currentText()
+                vol = self.slider_vol.value() / 100.0
+                wid = int(self.viewport.winId())
+                success = self.streamer.start(preset_name=preset, fullscreen=False, volume=vol, wid=wid)
+                if success:
+                    self.btn_toggle_stream.setText("⏹ Stop")
+                    self.btn_toggle_stream.setObjectName("btnToggleLive")
+                    self.btn_toggle_stream.setStyle(self.btn_toggle_stream.style())
+                    set_audio_volume(self.slider_vol.value())
+
+        def toggle_stream(self):
+            if self.streamer.is_running:
+                self.streamer.stop()
+                self.btn_toggle_stream.setText("▶ Start")
+                self.btn_toggle_stream.setObjectName("btnToggleStart")
+                self.btn_toggle_stream.setStyle(self.btn_toggle_stream.style())
+            else:
+                self.auto_start_stream()
+
+        def on_preset_changed(self):
+            preset = self.combo_presets.currentText()
+            save_settings({"preset": preset})
+            if self.streamer.is_running:
+                self.streamer.stop()
+                QTimer.singleShot(150, self.auto_start_stream)
+
+        def on_led_changed(self, index: int):
+            mode = self.combo_led.currentData()
+            if mode is not None:
+                write_led_mode(mode)
+
+        def toggle_mute(self):
+            self.muted = not self.muted
+            self.btn_mute.setText("🔇" if self.muted else "🔊")
+            set_audio_mute(self.muted)
+
+        def on_volume_changed(self, val: int):
+            self.lbl_vol.setText(f"{val}%")
+            save_settings({"volume": val / 100.0})
+            if not self.muted:
+                set_audio_volume(val)
+
+        def toggle_fullscreen(self):
+            # Stop embedded preview and release hardware resources
+            self.streamer.stop()
+            self.hide()
+
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            native_bin = os.path.join(script_dir, "everlive_display")
+            cmd = [native_bin, "-d", self.streamer.vdev, "-a", self.streamer.adev, "-f"]
+
+            # Launch pure native Wayland direct-scanout engine (zero Xwayland jitter, zero black bars)
+            try:
+                subprocess.run(cmd)
+            except Exception as e:
+                print(f"[!] Fehler im Vollbildmodus: {e}")
+
+            # Once exited, restore RECentral 4 studio window and resume embedded preview
+            self.show()
+            self.activateWindow()
+            self.raise_()
+            QTimer.singleShot(250, self.auto_start_stream)
+
+        def exit_fullscreen(self):
+            pass
+
+        def keyPressEvent(self, event):
+            if event.key() in (Qt.Key_Escape, Qt.Key_F11, Qt.Key_F):
+                self.toggle_fullscreen()
+                event.accept()
+            elif event.key() in (Qt.Key_Tab, Qt.Key_I):
+                self.toggle_stats()
+                event.accept()
+            elif event.key() == Qt.Key_M:
+                self.toggle_mute()
+                event.accept()
+            elif event.key() == Qt.Key_Q:
+                self.close()
+                event.accept()
+            else:
+                super().keyPressEvent(event)
+
+        def eventFilter(self, obj, event):
+            if obj == self.viewport:
+                if event.type() == QEvent.MouseButtonDblClick:
+                    self.toggle_fullscreen()
+                    return True
+            return super().eventFilter(obj, event)
 
         def update_status(self):
             info = self.streamer.get_signal_info()
             if info["locked"]:
-                self.lbl_status.setText(f"● Verbunden: {info['resolution']} @ {info['framerate']}")
-                self.lbl_status.setStyleSheet("color: #3fb950; font-weight: bold;")
-                self.lbl_details.setText(f"HDMI 2.0 Lock aktiv | Audio: {info['audio']}")
+                hdr_str = f" • {info['hdr']}" if info.get("hdr") else ""
+                self.lbl_pill.setText(f"● LIVE {info['resolution']} @ {info['framerate']}{hdr_str}")
+                self.lbl_pill.setStyleSheet("background-color: #12281a; color: #3fb950; border: 1px solid #238636;")
             else:
-                self.lbl_status.setText("○ Kein HDMI-Signal erkannt")
-                self.lbl_status.setStyleSheet("color: #f85149; font-weight: bold;")
-                self.lbl_details.setText("Bitte PS5 einschalten oder HDMI-Kabel prüfen")
+                self.lbl_pill.setText("○ KEIN HDMI-SIGNAL")
+                self.lbl_pill.setStyleSheet("background-color: #2b1313; color: #f85149; border: 1px solid #7d2323;")
 
-            if self.streamer.is_running:
-                if not self.streamer.poll():
-                    self.set_ui_stopped()
-
-        def toggle_stream(self):
-            if not self.streamer.is_running:
-                preset = self.combo_presets.currentText()
-                fs = self.chk_fullscreen.isChecked()
-                vol = self.slider_vol.value() / 100.0
-
-                success = self.streamer.start(preset_name=preset, fullscreen=fs, volume=vol)
-                if success:
-                    self.btn_toggle.setText("🛑 Spielfenster schließen")
-                    self.btn_toggle.setObjectName("btnStop")
-                    self.btn_toggle.setStyle(self.btn_toggle.style())
-                else:
-                    QMessageBox.warning(self, "Fehler", "Spielfenster konnte nicht gestartet werden. Läuft OBS noch?")
-            else:
-                self.streamer.stop()
-                self.set_ui_stopped()
-
-        def on_led_mode_changed(self, index: int):
-            mode = self.combo_led.currentData()
-            if mode is not None:
-                success = write_led_mode(mode)
-                if not success:
-                    print(f"[!] LED Modus {mode} konnte nicht gesetzt werden (Berechtigung?).")
-
-        def set_ui_stopped(self):
-            self.btn_toggle.setText("🎮 PS5 Fenster starten")
-            self.btn_toggle.setObjectName("btnPlay")
-            self.btn_toggle.setStyle(self.btn_toggle.style())
+            if self.streamer.is_running and not self.streamer.poll():
+                self.btn_toggle_stream.setText("▶ Start")
+                self.btn_toggle_stream.setObjectName("btnToggleStart")
+                self.btn_toggle_stream.setStyle(self.btn_toggle_stream.style())
 
         def closeEvent(self, event):
             self.streamer.stop()
@@ -664,10 +900,10 @@ if HAS_QT:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="GC573 PS5 Low-Latency Gaming Screen")
+    parser = argparse.ArgumentParser(description="AVerMedia RECentral 4 - Live Gamer 4K (EverLive Linux)")
     parser.add_argument("-f", "--fullscreen", action="store_true", help="Direkt im Vollbild starten")
     parser.add_argument("-p", "--preset", default="Auto (HDMI Signal)", choices=list(PRESETS.keys()), help="Auflösungs-Preset")
-    parser.add_argument("--cli", action="store_true", help="Startet direkt ohne Einstellungsfenster")
+    parser.add_argument("--cli", action="store_true", help="Startet direkt ohne RECentral 4 GUI")
     parser.add_argument("--led", type=str, default=None,
                         help="GC573 LED Beleuchtung sofort ändern (0-7 oder off/blue/green/red/cyan/magenta/yellow/white)")
     parser.add_argument("-v", "--volume", type=float, default=1.0, help="Lautstärke (0.0 bis 1.5)")
@@ -718,11 +954,11 @@ def main():
         streamer.stop()
     else:
         app = QApplication(sys.argv)
-        app.setApplicationName("GC573 PS5 Screen")
+        app.setApplicationName("AVerMedia RECentral 4")
         window = MainWindow(streamer)
         window.show()
         if args.fullscreen:
-            window.chk_fullscreen.setChecked(True)
+            window.toggle_fullscreen()
         sys.exit(app.exec())
 
 

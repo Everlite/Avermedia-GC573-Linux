@@ -503,50 +503,26 @@ static bool gc555_video_signal_equal(const struct gc555_video_signal *a,
 	       a->dual_pixel == b->dual_pixel && a->ddr == b->ddr;
 }
 
-static bool
-gc555_video_is_dynamic_p010_signal(const struct gc555_video_signal *signal)
-{
-	bool sdr;
-	bool hdr;
-
-	if (signal->width != 1920 || signal->height != 1080 ||
-	    signal->frame_rate_hz != 60 || signal->interlaced ||
-	    signal->input_class != GC555_VIDEO_INPUT_HD ||
-	    signal->encoding != GC555_VIDEO_ENCODING_RGB_LIMITED ||
-	    signal->sampling != GC555_VIDEO_SAMPLING_RGB)
-		return false;
-
-	sdr = signal->colorimetry == GC555_VIDEO_COLORIMETRY_BT709 &&
-	      signal->hdr_mode == GC555_VIDEO_HDR_SDR;
-	hdr = signal->colorimetry == GC555_VIDEO_COLORIMETRY_BT2020 &&
-	      signal->hdr_mode == GC555_VIDEO_HDR_PQ_BT2020;
-	return sdr || hdr;
-}
 
 static bool
 gc555_video_stream_compatible(const struct gc555_video_signal *sample,
 			      const struct gc555_video_signal *stream,
 			      enum gc555_video_format format)
 {
-	bool transport_equal;
-
-	transport_equal = sample->width == stream->width &&
-		sample->height == stream->height &&
-		sample->input_class == stream->input_class &&
-		sample->encoding == stream->encoding &&
-		sample->sampling == stream->sampling &&
-		sample->interlaced == stream->interlaced &&
-		sample->dual_pixel == stream->dual_pixel &&
-		sample->ddr == stream->ddr;
-	if (!transport_equal)
-		return false;
-	if (sample->colorimetry == stream->colorimetry &&
-	    sample->hdr_mode == stream->hdr_mode)
-		return true;
-
-	return format == GC555_VIDEO_FORMAT_P010 &&
-	       gc555_video_is_dynamic_p010_signal(sample) &&
-	       gc555_video_is_dynamic_p010_signal(stream);
+	/*
+	 * Frame transport dimensions and bus layout must match.
+	 * HDR and colorimetry changes (e.g. toggling HDR on/off on console)
+	 * are handled dynamically in the DMA completion callback without
+	 * dropping frames or requiring a stream restart.
+	 */
+	return sample->width == stream->width &&
+	       sample->height == stream->height &&
+	       sample->input_class == stream->input_class &&
+	       sample->encoding == stream->encoding &&
+	       sample->sampling == stream->sampling &&
+	       sample->interlaced == stream->interlaced &&
+	       sample->dual_pixel == stream->dual_pixel &&
+	       sample->ddr == stream->ddr;
 }
 
 static void
@@ -628,6 +604,22 @@ static void gc555_video_monitor_work(struct work_struct *work)
 			spin_unlock_irqrestore(&video->queue_lock, flags);
 			gc555_fpga_set_frame_rate(gc555, signal.frame_rate_hz);
 		}
+		if ((signal.hdr_mode != video->stream_signal.hdr_mode ||
+		     signal.colorimetry != video->stream_signal.colorimetry) &&
+		    signal.width == video->stream_signal.width &&
+		    signal.height == video->stream_signal.height) {
+			dev_info(gc555->dev, "Input HDR/Colorimetry changed: HDR=%d -> %d, Colorimetry=%d -> %d\n",
+				 video->stream_signal.hdr_mode, signal.hdr_mode,
+				 video->stream_signal.colorimetry, signal.colorimetry);
+			spin_lock_irqsave(&video->queue_lock, flags);
+			video->stream_signal.hdr_mode = signal.hdr_mode;
+			video->stream_signal.colorimetry = signal.colorimetry;
+			spin_unlock_irqrestore(&video->queue_lock, flags);
+			gc555_fpga_configure(gc555, &signal,
+					     video->format_info->format,
+					     video->pix.width, video->pix.height,
+					     signal.frame_rate_hz);
+		}
 	}
 	if (device_lost && vb2_is_streaming(&video->queue))
 		vb2_queue_error(&video->queue);
@@ -635,9 +627,11 @@ static void gc555_video_monitor_work(struct work_struct *work)
 		gc555_video_queue_source_change(video);
 	mutex_unlock(&video->lock);
 
-	if (!READ_ONCE(video->detaching))
+	if (!READ_ONCE(video->detaching)) {
+		unsigned int poll_ms = vb2_is_streaming(&video->queue) ? 1000U : GC555_VIDEO_POLL_MS;
 		schedule_delayed_work(&video->monitor_work,
-				      msecs_to_jiffies(GC555_VIDEO_POLL_MS));
+				      msecs_to_jiffies(poll_ms));
+	}
 }
 
 static struct gc555_video_buffer *
@@ -856,6 +850,17 @@ gc555_video_buffer_complete(void *cookie, u64 completion_ns, void *context)
 		spin_unlock_irqrestore(&video->queue_lock, flags);
 		if (video->gc555)
 			gc555_fpga_set_frame_rate(video->gc555, current_signal.frame_rate_hz);
+	}
+
+	if (current_signal.hdr_mode != stream_signal.hdr_mode ||
+	    current_signal.colorimetry != stream_signal.colorimetry) {
+		spin_lock_irqsave(&video->queue_lock, flags);
+		video->stream_signal.hdr_mode = current_signal.hdr_mode;
+		video->stream_signal.colorimetry = current_signal.colorimetry;
+		stream_signal.hdr_mode = current_signal.hdr_mode;
+		stream_signal.colorimetry = current_signal.colorimetry;
+		spin_unlock_irqrestore(&video->queue_lock, flags);
+		mod_delayed_work(system_wq, &video->monitor_work, 0);
 	}
 
 	last_published_ns = atomic64_read(&video->last_published_ns);

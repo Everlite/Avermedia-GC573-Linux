@@ -39,6 +39,25 @@ chmod 0666 /sys/bus/pci/drivers/open_gc573/*/led_mode 2>/dev/null || true
 
 echo "[+] open_gc573 erfolgreich geladen!"
 
+# Dauerhafte Boot-Registrierung (damit nach jedem PC-Neustart der Treiber automatisch geladen ist)
+MOD_DEST="/lib/modules/$(uname -r)/updates/open_gc573"
+mkdir -p "${MOD_DEST}"
+install -m 644 "${MODULE}" "${MOD_DEST}/" 2>/dev/null || true
+depmod -a "$(uname -r)" 2>/dev/null || true
+
+mkdir -p /etc/modules-load.d
+echo "open_gc573" > /etc/modules-load.d/everlive.conf 2>/dev/null || true
+
+mkdir -p /etc/udev/rules.d
+cat > /etc/udev/rules.d/70-everlive.rules <<'UDEV_EOF' 2>/dev/null || true
+# AVerMedia Live Gamer 4K (GC573) - EverLive Gaming Access
+SUBSYSTEM=="video4linux", KERNEL=="video*", ATTRS{vendor}=="0x1461", ATTRS{device}=="0x0054", MODE="0660", TAG+="uaccess", GROUP="video"
+SUBSYSTEM=="sound", KERNEL=="pcmC*D*c", ATTRS{vendor}=="0x1461", ATTRS{device}=="0x0054", MODE="0660", TAG+="uaccess", GROUP="audio"
+SUBSYSTEM=="pci", ATTRS{vendor}=="0x1461", ATTRS{device}=="0x0054", TEST=="led_mode", RUN+="/bin/chmod 0666 /sys%p/led_mode"
+UDEV_EOF
+udevadm control --reload-rules 2>/dev/null || true
+udevadm trigger 2>/dev/null || true
+
 echo "[*] Warte auf HDMI-Signal-Lock (max. 5s)..."
 SIGNAL_FOUND=0
 for _ in $(seq 1 25); do
