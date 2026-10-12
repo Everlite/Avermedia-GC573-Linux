@@ -48,7 +48,7 @@ After installation, simply launch the game screen from your application menu (**
 
 - **2560×1440 @ 120 FPS Verified on PlayStation 5:** 120.35 Hz HDMI 2.0 capture verified on real PS5 hardware (*The Finals*, *Fortnite 120Hz Mode*, PS5 Dashboard).
 - **Jitter- and Lag-Free Direct Rendering (Experimental):** Recent direct engine optimizations (`everlive_display`) eliminate micro-stutters and buffer-induced lag spikes in physical PS5 testing at 1440p @ 120 FPS, delivering stable, responsive frame delivery (~1–3 ms internal pipeline latency).
-- **All-in-One RECentral 4 Linux Studio (`everlive_viewer.py`):** Fully integrated desktop capture studio with an embedded live video viewport that auto-starts immediately upon launch. Features live signal diagnostics (e.g. `● LIVE 2560x1440 @ 60 FPS • HDR10`), on-the-fly resolution preset selection, RGB lighting dropdown, real-time volume & mute controls, and double-click / <kbd>F11</kbd> borderless fullscreen.
+- **All-in-One EverLive Linux Studio (`everlive_viewer.py`):** Fully integrated desktop capture studio with an embedded live video viewport that auto-starts immediately upon launch. Features live signal diagnostics (e.g. `● LIVE 2560x1440 @ 60 FPS • HDR10`), on-the-fly resolution preset selection, RGB lighting dropdown, real-time volume & mute controls, and double-click / <kbd>F11</kbd> borderless fullscreen.
 - **Dynamic On-the-Fly HDR Switching:** Seamlessly toggle HDR on or off on your console at any time without freezing the video stream or requiring a restart. The driver adapts its FPGA colorimetry dynamically on the fly.
 - **Sub-Frame Direct Render Pipeline (~1–3 ms internal latency):** Built-in native C direct rendering engine (`everlive_display`) maps V4L2 DMA buffers directly to GPU textures (SDL2 unthrottled presentation / Wayland tearing). Measured buffer-to-display pass takes ~1–3 ms (excluding physical monitor panel response and controller input).
 - **Universal Multi-Channel Audio Pipeline (7.1, 5.1 & Stereo):** Captures multi-channel console LPCM audio (8-channel 7.1 on PS5/Xbox/PC, 6-channel 5.1, or 2-channel stereo on Nintendo Switch/Steam Deck/retro consoles) with automatic PipeWire downmixing to any stereo headset or surround setup with ~10–20 ms latency.
@@ -58,7 +58,7 @@ After installation, simply launch the game screen from your application menu (**
   - **8 Hardware Profiles:** Off (Dark), Solid Blue, Green, Red, Cyan, Magenta, Yellow, and White.
   - **Boot Persistence:** Configurable via `/etc/modprobe.d/open_gc573.conf` so the card boots in your favorite color or completely dark right from kernel load.
 - **In-Game HUD & Live Volume Control:**
-  - Adjust volume anytime during gameplay using the **mouse wheel** or the RECentral 4 header slider.
+  - Adjust volume anytime during gameplay using the **mouse wheel** or the EverLive header slider.
   - Interactive on-screen HUD volume slider + mute button.
   - Hotkeys: <kbd>F11</kbd> / <kbd>f</kbd> for borderless fullscreen, <kbd>m</kbd> for mute, <kbd>Tab</kbd> for live performance and jitter stats.
 - **100% Blob-Free Driver:** The primary driver `open_gc573` is 100% open-source (**GPL-2.0**), contains no proprietary `.a` binaries, and compiles cleanly on modern Linux kernels 6.19 through 7.x.
@@ -67,7 +67,7 @@ After installation, simply launch the game screen from your application menu (**
 
 ## 🎮 EverLive Desktop Studio (Windowed & Fullscreen)
 
-![EverLive RECentral 4 Studio UI on Linux](docs/everlive_ui_windowed.png)
+![EverLive Studio UI on Linux](docs/everlive_ui_windowed.png)
 
 *EverLive running in windowed studio mode on Linux (KDE Plasma Wayland): Live PS5 1440p HDMI stream with real-time HUD stats, LED hardware control, volume slider, and one-click fullscreen.*
 
@@ -110,7 +110,7 @@ flowchart LR
 | **`uninstall.sh`** | Clean uninstaller that removes all installed driver and configuration files. |
 | **`play.sh`** | Quick launcher for desktop and command-line usage. |
 | **`open_gc573/`** | **Primary Driver:** Native, 100% blob-free Linux kernel driver (GPL-2.0-only). |
-| **`tools/everlive/`** | **EverLive Gaming Suite:** RECentral 4 studio application (`everlive_viewer.py`), direct C display engine (`everlive_display.c`), and desktop entry. |
+| **`tools/everlive/`** | **EverLive Gaming Suite:** EverLive studio application (`everlive_viewer.py`), direct C display engine (`everlive_display.c`), and desktop entry. |
 | **`legacy/cx511h_blob/`** | **Legacy Archive:** Original AVerMedia vendor wrapper with binary blob (`AverMediaLib_64.a`) preserved for historical reference. |
 
 ---
@@ -151,7 +151,7 @@ Through reverse-engineering of the official firmware and FPGA MMIO register spac
   - `5`: 🟣 **Magenta / Purple**
   - `6`: 🟡 **Yellow**
   - `7`: ⚪ **White**
-* **Real-Time GUI Switching:** Select your preferred color anytime directly from the RECentral 4 header deck.
+* **Real-Time GUI Switching:** Select your preferred color anytime directly from the EverLive header deck.
 * **Instant Command-Line Control:**
   ```bash
   ./tools/everlive/everlive_viewer.py --led off

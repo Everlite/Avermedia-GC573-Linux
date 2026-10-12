@@ -375,7 +375,7 @@ class GameStreamer:
         mpv_cmd = [
             "mpv",
             f"av://v4l2:{self.vdev}",
-            "--title=AVerMedia RECentral 4 - Live Gamer 4K",
+            "--title=EverLive - Live Gamer 4K",
             "--profile=low-latency",
             "--untimed",
             "--no-cache",
@@ -516,11 +516,11 @@ if HAS_QT:
             QTimer.singleShot(200, self.auto_start_stream)
 
         def init_ui(self):
-            self.setWindowTitle("AVerMedia RECentral 4 - Live Gamer 4K (EverLive Linux)")
+            self.setWindowTitle("EverLive - Live Gamer 4K")
             self.resize(1280, 780)
             self.setMinimumSize(640, 420)
 
-            # RECentral 4 Dark Studio Theme
+            # EverLive Dark Studio Theme
             self.setStyleSheet("""
                 QMainWindow {
                     background-color: #0c0d12;
@@ -633,7 +633,7 @@ if HAS_QT:
             root_layout.setSpacing(0)
 
             # -------------------------------------------------------------
-            # Top Deck: RECentral 4 Branding & Quick Controls
+            # Top Deck: EverLive Branding & Quick Controls
             # -------------------------------------------------------------
             self.header_deck = QFrame()
             self.header_deck.setObjectName("headerDeck")
@@ -642,7 +642,7 @@ if HAS_QT:
             h_layout.setSpacing(12)
 
             # Logo & Model
-            lbl_logo = QLabel("🔴 RECentral 4")
+            lbl_logo = QLabel("🟣 EverLive")
             lbl_logo.setObjectName("logoTitle")
             h_layout.addWidget(lbl_logo)
 
@@ -847,7 +847,7 @@ if HAS_QT:
             except Exception as e:
                 print(f"[!] Fehler im Vollbildmodus: {e}")
 
-            # Once exited, restore RECentral 4 studio window and resume embedded preview
+            # Once exited, restore EverLive studio window and resume embedded preview
             self.show()
             self.activateWindow()
             self.raise_()
@@ -900,10 +900,10 @@ if HAS_QT:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="AVerMedia RECentral 4 - Live Gamer 4K (EverLive Linux)")
+    parser = argparse.ArgumentParser(description="EverLive - Live Gamer 4K Console Gaming Screen")
     parser.add_argument("-f", "--fullscreen", action="store_true", help="Direkt im Vollbild starten")
     parser.add_argument("-p", "--preset", default="Auto (HDMI Signal)", choices=list(PRESETS.keys()), help="Auflösungs-Preset")
-    parser.add_argument("--cli", action="store_true", help="Startet direkt ohne RECentral 4 GUI")
+    parser.add_argument("--cli", action="store_true", help="Startet direkt ohne GUI")
     parser.add_argument("--led", type=str, default=None,
                         help="GC573 LED Beleuchtung sofort ändern (0-7 oder off/blue/green/red/cyan/magenta/yellow/white)")
     parser.add_argument("-v", "--volume", type=float, default=1.0, help="Lautstärke (0.0 bis 1.5)")
@@ -954,7 +954,7 @@ def main():
         streamer.stop()
     else:
         app = QApplication(sys.argv)
-        app.setApplicationName("AVerMedia RECentral 4")
+        app.setApplicationName("EverLive")
         window = MainWindow(streamer)
         window.show()
         if args.fullscreen:
