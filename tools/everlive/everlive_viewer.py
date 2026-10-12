@@ -853,6 +853,20 @@ if HAS_QT:
                 self.showNormal()
                 self.btn_fs.setText("⛶ Vollbild")
 
+            if hasattr(self, "streamer") and self.streamer.mpv_proc:
+                try:
+                    self.streamer.mpv_proc.send_signal(signal.SIGWINCH)
+                except Exception:
+                    pass
+            QTimer.singleShot(100, self.notify_streamer_winch)
+
+        def notify_streamer_winch(self):
+            if hasattr(self, "streamer") and self.streamer.mpv_proc:
+                try:
+                    self.streamer.mpv_proc.send_signal(signal.SIGWINCH)
+                except Exception:
+                    pass
+
         def exit_fullscreen(self):
             if self.is_fullscreen:
                 self.toggle_fullscreen()

@@ -516,12 +516,15 @@ int main(int argc, char *argv[])
                 if (!x_dpy) x_dpy = XOpenDisplay(NULL);
                 if (x_dpy) {
                     Window root;
-                    int rx, ry;
-                    unsigned int gw = 0, gh = 0, b, d;
+                    int rx = 0, ry = 0;
+                    unsigned int gw = 0, gh = 0, b = 0, d = 0;
                     if (XGetGeometry(x_dpy, (Window)g_embed_wid, &root, &rx, &ry, &gw, &gh, &b, &d) && gw > 0 && gh > 0) {
                         int rw = 0, rh = 0;
+                        int wx = 0, wy = 0;
                         SDL_GetRendererOutputSize(renderer, &rw, &rh);
-                        if ((int)gw != rw || (int)gh != rh) {
+                        SDL_GetWindowPosition(window, &wx, &wy);
+                        if ((int)gw != rw || (int)gh != rh || rx != wx || ry != wy) {
+                            SDL_SetWindowPosition(window, rx, ry);
                             SDL_SetWindowSize(window, (int)gw, (int)gh);
                         }
                         cur_w = (int)gw;
