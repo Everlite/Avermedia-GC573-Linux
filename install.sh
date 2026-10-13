@@ -51,6 +51,8 @@ detect_and_install_deps() {
         ! command -v v4l2-ctl >/dev/null 2>&1 && MISSING_PKGS+=(v4l-utils)
         ! command -v pw-play >/dev/null 2>&1 && MISSING_PKGS+=(pipewire)
         ! command -v wpctl >/dev/null 2>&1 && MISSING_PKGS+=(wireplumber)
+        ! command -v mpv >/dev/null 2>&1 && MISSING_PKGS+=(mpv)
+        ! python3 -c 'import PySide6' >/dev/null 2>&1 && MISSING_PKGS+=(pyside6)
         
         # Clang/LLVM Prüfen falls Kernel mit Clang gebaut wurde (z.B. CachyOS)
         if grep -q '^CONFIG_CC_IS_CLANG=y' "/usr/lib/modules/$(uname -r)/build/.config" 2>/dev/null || grep -iq 'clang' /proc/version 2>/dev/null; then
@@ -79,6 +81,8 @@ detect_and_install_deps() {
         ! command -v v4l2-ctl >/dev/null 2>&1 && MISSING_PKGS+=(v4l-utils)
         ! command -v pw-play >/dev/null 2>&1 && MISSING_PKGS+=(pipewire-bin)
         ! command -v wpctl >/dev/null 2>&1 && MISSING_PKGS+=(wireplumber)
+        ! command -v mpv >/dev/null 2>&1 && MISSING_PKGS+=(mpv)
+        ! python3 -c 'import PySide6' >/dev/null 2>&1 && MISSING_PKGS+=(python3-pyside6)
         
         if grep -q '^CONFIG_CC_IS_CLANG=y' "/lib/modules/$(uname -r)/build/.config" 2>/dev/null || grep -iq 'clang' /proc/version 2>/dev/null; then
             ! command -v clang >/dev/null 2>&1 && MISSING_PKGS+=(clang lld llvm)
@@ -97,6 +101,8 @@ detect_and_install_deps() {
         ! command -v v4l2-ctl >/dev/null 2>&1 && MISSING_PKGS+=(v4l-utils)
         ! command -v pw-play >/dev/null 2>&1 && MISSING_PKGS+=(pipewire-utils)
         ! command -v wpctl >/dev/null 2>&1 && MISSING_PKGS+=(wireplumber)
+        ! command -v mpv >/dev/null 2>&1 && MISSING_PKGS+=(mpv)
+        ! python3 -c 'import PySide6' >/dev/null 2>&1 && MISSING_PKGS+=(python3-pyside6)
         
         if grep -q '^CONFIG_CC_IS_CLANG=y' "/usr/src/kernels/$(uname -r)/.config" 2>/dev/null || grep -iq 'clang' /proc/version 2>/dev/null; then
             ! command -v clang >/dev/null 2>&1 && MISSING_PKGS+=(clang lld llvm)

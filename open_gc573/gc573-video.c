@@ -161,9 +161,12 @@ gc555_video_mode_supports_rate(const struct gc555_video_mode *mode, u32 rate)
 
 	if (!mode)
 		return false;
-	for (i = 0; i < mode->rate_count; i++)
-		if (mode->rates[i] == rate)
+	for (i = 0; i < mode->rate_count; i++) {
+		int diff = (int)mode->rates[i] - (int)rate;
+
+		if (diff >= -2 && diff <= 2)
 			return true;
+	}
 
 	return false;
 }
@@ -210,8 +213,11 @@ gc555_video_p010_supports_rate(const struct gc555_video_mode *mode, u32 rate)
 		return false;
 	if ((mode->width == 640 && mode->height == 480) ||
 	    (mode->width == 1024 && mode->height == 768) ||
-	    (mode->width == 1280 && mode->height == 1024))
-		return rate == 60;
+	    (mode->width == 1280 && mode->height == 1024)) {
+		int diff = (int)rate - 60;
+
+		return diff >= -2 && diff <= 2;
+	}
 
 	return gc555_video_mode_supports_rate(mode, rate);
 }
@@ -242,8 +248,11 @@ gc555_video_supports_rate(const struct gc555_video_mode *mode,
 	if (format->format == GC555_VIDEO_FORMAT_P010)
 		return gc555_video_p010_supports_rate(mode, rate);
 	if (format->format != GC555_VIDEO_FORMAT_YUYV &&
-	    format->format != GC555_VIDEO_FORMAT_NV12)
-		return rate == 60;
+	    format->format != GC555_VIDEO_FORMAT_NV12) {
+		int diff = (int)rate - 60;
+
+		return diff >= -2 && diff <= 2;
+	}
 
 	return gc555_video_mode_supports_rate(mode, rate);
 }

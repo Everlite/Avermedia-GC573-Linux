@@ -250,9 +250,10 @@ def set_audio_mute(mute: bool):
 
 class GameStreamer:
     """Manages low-latency video and audio child processes."""
-    def __init__(self, vdev: Optional[str] = None, adev: Optional[str] = None):
+    def __init__(self, vdev: Optional[str] = None, adev: Optional[str] = None, force_mpv: bool = False):
         self.vdev = vdev if vdev is not None else find_gc573_vdev()
         self.adev = adev if adev is not None else find_gc573_adev()
+        self.force_mpv = force_mpv
         self.mpv_proc: Optional[subprocess.Popen] = None
         self.arecord_proc: Optional[subprocess.Popen] = None
         self.pwplay_proc: Optional[subprocess.Popen] = None
@@ -357,7 +358,7 @@ class GameStreamer:
         if not os.path.isfile(native_bin):
             native_bin = os.path.join(script_dir, "gc573_display")
 
-        if os.path.isfile(native_bin) and os.access(native_bin, os.X_OK):
+        if not self.force_mpv and os.path.isfile(native_bin) and os.access(native_bin, os.X_OK):
             cmd = [native_bin, "-d", self.vdev, "-a", self.adev]
             if wid is not None:
                 cmd.extend(["-w", str(wid)])
@@ -927,6 +928,7 @@ def main():
     parser.add_argument("-f", "--fullscreen", action="store_true", help="Direkt im Vollbild starten")
     parser.add_argument("-p", "--preset", default="Auto (HDMI Signal)", choices=list(PRESETS.keys()), help="Auflösungs-Preset")
     parser.add_argument("--cli", action="store_true", help="Startet direkt ohne GUI")
+    parser.add_argument("--mpv", action="store_true", help="Erzwingt mpv als Video-Engine anstelle von everlive_display")
     parser.add_argument("--led", type=str, default=None,
                         help="GC573 LED Beleuchtung sofort ändern (0-7 oder off/blue/green/red/cyan/magenta/yellow/white)")
     parser.add_argument("-v", "--volume", type=float, default=1.0, help="Lautstärke (0.0 bis 1.5)")
@@ -952,7 +954,7 @@ def main():
         if not args.cli and not any(arg in sys.argv for arg in ["-f", "--fullscreen", "-p", "--preset"]):
             sys.exit(0)
 
-    streamer = GameStreamer(vdev=args.device, adev=args.audio)
+    streamer = GameStreamer(vdev=args.device, adev=args.audio, force_mpv=args.mpv)
     print(f"[*] GC573 Hardware: Video={streamer.vdev}, Audio={streamer.adev}")
 
     # Graceful shutdown on Ctrl+C

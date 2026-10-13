@@ -138,13 +138,21 @@ static void start_audio_pipeline(const char *adev)
     pid_t pid = fork();
     if (pid == 0) {
         setpgid(0, 0);
+        char plug_dev[256];
+        if (strncmp(adev, "hw:", 3) == 0) {
+            snprintf(plug_dev, sizeof(plug_dev), "plughw:%s", adev + 3);
+        } else {
+            snprintf(plug_dev, sizeof(plug_dev), "%s", adev);
+        }
+
         char cmd[1024];
         snprintf(cmd, sizeof(cmd),
                  "{ arecord -D \"%s\" -f S16_LE -c 8 -r 48000 -q 2>/dev/null || "
                  "  arecord -D \"%s\" -f S16_LE -c 6 -r 48000 -q 2>/dev/null || "
+                 "  arecord -D \"%s\" -f S16_LE -c 2 -r 48000 -q 2>/dev/null || "
                  "  arecord -D \"%s\" -f S16_LE -c 2 -r 48000 -q 2>/dev/null; } | "
                  "pw-play --latency=20ms -P 'application.name=gc573-audio node.name=gc573-audio' - 2>/dev/null",
-                 adev, adev, adev);
+                 adev, adev, adev, plug_dev);
         execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
         _exit(127);
     } else if (pid > 0) {
@@ -158,6 +166,8 @@ static void *audio_supervisor_thread(void *arg)
     int node_id = -1;
     float last_vol = -1.0f;
     bool last_muted = false;
+    int fail_count = 0;
+    time_t last_start_time = time(NULL);
 
     start_audio_pipeline(adev);
 
@@ -169,9 +179,26 @@ static void *audio_supervisor_thread(void *arg)
             if (r > 0) {
                 g_audio_pid = 0;
                 node_id = -1;
-                /* Back off 1s before retrying to prevent rapid-fire fork loops */
-                sleep(1);
+                time_t now = time(NULL);
+                if (now - last_start_time > 5) {
+                    fail_count = 0;
+                }
+                fail_count++;
+
+                /* Back off before retrying to prevent rapid-fire fork loops and speaker pops */
+                int backoff_sec = 1;
+                if (fail_count > 5) {
+                    backoff_sec = 10;
+                } else if (fail_count > 2) {
+                    backoff_sec = 4;
+                }
+
+                for (int s = 0; s < backoff_sec && g_running; s++) {
+                    sleep(1);
+                }
+
                 if (g_running) {
+                    last_start_time = time(NULL);
                     start_audio_pipeline(adev);
                     g_audio_dirty = 1;
                 }
@@ -242,6 +269,18 @@ static void draw_string(SDL_Renderer *r, const char *str, int x, int y, int scal
         draw_char(r, *str, x, y, scale, color);
         x += 8 * scale;
         str++;
+    }
+}
+
+static void update_fullscreen(SDL_Window *window, bool enable)
+{
+    g_fullscreen = enable;
+    if (enable) {
+        SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "1");
+        SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN_DESKTOP);
+    } else {
+        SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "0");
+        SDL_SetWindowFullscreen(window, 0);
     }
 }
 
@@ -403,7 +442,11 @@ int main(int argc, char *argv[])
     SDL_SetHint(SDL_HINT_RENDER_BATCHING, "1");
     SDL_SetHint("SDL_VIDEO_WAYLAND_TEARING", "1");
     SDL_SetHint("SDL_VIDEO_WAYLAND_ALLOW_DATACONTROL", "1");
-    SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "1");
+    if (start_fullscreen) {
+        SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "1");
+    } else {
+        SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "0");
+    }
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
 
     SDL_Window *window = NULL;
@@ -431,6 +474,25 @@ int main(int argc, char *argv[])
             }
         }
 
+        /* In windowed mode, ensure window fits inside display without overflowing */
+        if (!start_fullscreen) {
+            SDL_Rect bounds;
+            if (SDL_GetDisplayBounds(target_display, &bounds) == 0) {
+                int max_w = bounds.w * 85 / 100;
+                int max_h = bounds.h * 85 / 100;
+                if (win_w > max_w || win_h > max_h) {
+                    float aspect = (float)win_w / (float)win_h;
+                    if ((float)max_w / aspect <= (float)max_h) {
+                        win_w = max_w;
+                        win_h = (int)((float)max_w / aspect);
+                    } else {
+                        win_h = max_h;
+                        win_w = (int)((float)max_h * aspect);
+                    }
+                }
+            }
+        }
+
         window = SDL_CreateWindow(
             "EverLive - Console Gaming Screen",
             SDL_WINDOWPOS_CENTERED_DISPLAY(target_display), SDL_WINDOWPOS_CENTERED_DISPLAY(target_display),
@@ -438,7 +500,7 @@ int main(int argc, char *argv[])
             win_flags
         );
         if (start_fullscreen && window) {
-            SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN_DESKTOP);
+            update_fullscreen(window, true);
         }
     }
     if (!window) {
@@ -575,8 +637,7 @@ int main(int argc, char *argv[])
                 if (ev.button.button == SDL_BUTTON_LEFT) {
                     if (ev.button.clicks == 2 && g_embed_wid == 0) {
                         /* Double-click toggles fullscreen */
-                        g_fullscreen = !g_fullscreen;
-                        SDL_SetWindowFullscreen(window, g_fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+                        update_fullscreen(window, !g_fullscreen);
                     } else if (g_hud_visible && ev.button.y >= hud_y && ev.button.y <= hud_y + hud_h) {
                         int bx = ev.button.x;
                         /* Mute toggle button (hud_x + 10 .. + 55) */
@@ -601,8 +662,7 @@ int main(int argc, char *argv[])
                         /* Fullscreen toggle button (hud_x + 535 .. + 590) */
                         else if (bx >= hud_x + 535 && bx <= hud_x + 590) {
                             if (g_embed_wid == 0) {
-                                g_fullscreen = !g_fullscreen;
-                                SDL_SetWindowFullscreen(window, g_fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+                                update_fullscreen(window, !g_fullscreen);
                             }
                         }
                         /* Exit button (hud_x + 595 .. + 645) */
@@ -634,8 +694,7 @@ int main(int argc, char *argv[])
                 if ((ev.key.keysym.sym == SDLK_ESCAPE || ev.key.keysym.sym == SDLK_q) && g_embed_wid == 0) {
                     g_running = 0;
                 } else if ((ev.key.keysym.sym == SDLK_f || ev.key.keysym.sym == SDLK_F11) && g_embed_wid == 0) {
-                    g_fullscreen = !g_fullscreen;
-                    SDL_SetWindowFullscreen(window, g_fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+                    update_fullscreen(window, !g_fullscreen);
                 } else if (ev.key.keysym.sym == SDLK_m) {
                     g_muted = !g_muted;
                     g_audio_dirty = 1;
