@@ -126,6 +126,7 @@ The following controls are available inside the game window:
 | <kbd>m</kbd> | Toggle audio mute / unmute |
 | <kbd>F11</kbd> or <kbd>f</kbd> | Toggle borderless fullscreen (or double-click the window) |
 | <kbd>Tab</kbd> or <kbd>i</kbd> | Toggle on-screen statistics (FPS, PCIe latency, jitter) |
+| <kbd>h</kbd> or <kbd>r</kbd> | Force HDMI handshake & re-sync video timings |
 | <kbd>+</kbd> / <kbd>-</kbd> or <kbd>↑</kbd> / <kbd>↓</kbd> | Adjust volume in 5% increments |
 | <kbd>Esc</kbd> or <kbd>q</kbd> | Exit game window |
 

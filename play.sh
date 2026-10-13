@@ -35,4 +35,10 @@ if ! grep -q "^open_gc573 " /proc/modules; then
     fi
 fi
 
-exec "${VIEWER}" "$@"
+if [ -x "${SCRIPT_DIR}/tools/everlive/.venv/bin/python3" ]; then
+    exec "${SCRIPT_DIR}/tools/everlive/.venv/bin/python3" "${VIEWER}" "$@"
+elif [ -x "${SCRIPT_DIR}/tools/everlive/.venv/bin/python" ]; then
+    exec "${SCRIPT_DIR}/tools/everlive/.venv/bin/python" "${VIEWER}" "$@"
+else
+    exec "${VIEWER}" "$@"
+fi

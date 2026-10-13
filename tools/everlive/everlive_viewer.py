@@ -287,16 +287,20 @@ class GameStreamer:
 
             if w_m and h_m:
                 w, h = int(w_m.group(1)), int(h_m.group(1))
-                fps = 60
+                fps_str = "60 FPS"
                 if clk_m and tot_w and tot_h:
                     clk = int(clk_m.group(1))
                     tw = int(tot_w.group(1))
                     th = int(tot_h.group(1))
                     if tw > 0 and th > 0:
-                        fps = round(clk / (tw * th))
+                        fps_calc = clk / (tw * th)
+                        if abs(fps_calc - round(fps_calc)) < 0.01:
+                            fps_str = f"{int(round(fps_calc))} FPS"
+                        else:
+                            fps_str = f"{fps_calc:.2f} FPS"
                 info["locked"] = True
                 info["resolution"] = f"{w}x{h}"
-                info["framerate"] = f"{fps} FPS"
+                info["framerate"] = fps_str
 
                 try:
                     fmt_out = subprocess.check_output(
@@ -317,6 +321,19 @@ class GameStreamer:
             info["hdr"] = ""
 
         return info
+
+    def resync(self) -> bool:
+        """Forces HDMI handshake renegotiation via v4l2-ctl query."""
+        if not os.path.exists(self.vdev):
+            return False
+        try:
+            subprocess.run(
+                ["v4l2-ctl", "-d", self.vdev, "--set-dv-bt-timings", "query"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2.0
+            )
+            return True
+        except Exception:
+            return False
 
     def start(self, preset_name: str = "Auto (HDMI Signal)", fullscreen: bool = False, volume: float = 1.0, wid: Optional[int] = None) -> bool:
         if self.is_running:
@@ -725,6 +742,13 @@ if HAS_QT:
             self.btn_toggle_stream.clicked.connect(self.toggle_stream)
             h_layout.addWidget(self.btn_toggle_stream)
 
+            # HDMI Re-Sync Button
+            self.btn_resync = QPushButton("🔄 Re-Sync")
+            self.btn_resync.setCursor(Qt.PointingHandCursor)
+            self.btn_resync.setToolTip("HDMI Handshake & Signal neu aushandeln (Taste: H oder R)")
+            self.btn_resync.clicked.connect(self.force_resync)
+            h_layout.addWidget(self.btn_resync)
+
             # Fullscreen Button
             self.btn_fs = QPushButton("⛶ Vollbild")
             self.btn_fs.setCursor(Qt.PointingHandCursor)
@@ -766,7 +790,7 @@ if HAS_QT:
 
             b_layout.addStretch(1)
 
-            self.lbl_hint = QLabel("Tab: Stats • Doppelklick / F11: Vollbild • M: Stumm • ESC: Fenster")
+            self.lbl_hint = QLabel("Tab: Stats • H/R: Re-Sync • Doppelklick / F11: Vollbild • M: Stumm • ESC: Fenster")
             self.lbl_hint.setStyleSheet("color: #58a6ff; font-size: 11px;")
             b_layout.addWidget(self.lbl_hint)
 
@@ -784,6 +808,8 @@ if HAS_QT:
             QShortcut(QKeySequence("Escape"), self, self.exit_fullscreen)
             QShortcut(QKeySequence("Tab"), self, self.toggle_stats)
             QShortcut(QKeySequence("i"), self, self.toggle_stats)
+            QShortcut(QKeySequence("h"), self, self.force_resync)
+            QShortcut(QKeySequence("r"), self, self.force_resync)
             QShortcut(QKeySequence("m"), self, self.toggle_mute)
             QShortcut(QKeySequence("q"), self, self.close)
 
@@ -795,6 +821,14 @@ if HAS_QT:
                     self.streamer.mpv_proc.send_signal(signal.SIGUSR1)
                 except Exception:
                     pass
+
+        def force_resync(self):
+            """Forces HDMI handshake renegotiation and restarts stream if active."""
+            self.streamer.resync()
+            if self.streamer.is_running:
+                self.streamer.stop()
+                QTimer.singleShot(200, self.auto_start_stream)
+            self.update_status()
 
         def auto_start_stream(self):
             if not self.streamer.is_running:
@@ -884,6 +918,10 @@ if HAS_QT:
                 return
             elif event.key() in (Qt.Key_Tab, Qt.Key_I):
                 self.toggle_stats()
+                event.accept()
+                return
+            elif event.key() in (Qt.Key_H, Qt.Key_R):
+                self.force_resync()
                 event.accept()
                 return
             elif event.key() == Qt.Key_M:

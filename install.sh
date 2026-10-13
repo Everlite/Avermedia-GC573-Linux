@@ -52,7 +52,8 @@ detect_and_install_deps() {
         ! command -v pw-play >/dev/null 2>&1 && MISSING_PKGS+=(pipewire)
         ! command -v wpctl >/dev/null 2>&1 && MISSING_PKGS+=(wireplumber)
         ! command -v mpv >/dev/null 2>&1 && MISSING_PKGS+=(mpv)
-        ! python3 -c 'import PySide6' >/dev/null 2>&1 && MISSING_PKGS+=(pyside6)
+        ! pacman -Q libxcb-cursor >/dev/null 2>&1 && MISSING_PKGS+=(libxcb-cursor)
+        ! sudo -u "${TARGET_USER}" python3 -c 'import PySide6' >/dev/null 2>&1 && MISSING_PKGS+=(pyside6)
         
         # Clang/LLVM Prüfen falls Kernel mit Clang gebaut wurde (z.B. CachyOS)
         if grep -q '^CONFIG_CC_IS_CLANG=y' "/usr/lib/modules/$(uname -r)/build/.config" 2>/dev/null || grep -iq 'clang' /proc/version 2>/dev/null; then
@@ -82,7 +83,9 @@ detect_and_install_deps() {
         ! command -v pw-play >/dev/null 2>&1 && MISSING_PKGS+=(pipewire-bin)
         ! command -v wpctl >/dev/null 2>&1 && MISSING_PKGS+=(wireplumber)
         ! command -v mpv >/dev/null 2>&1 && MISSING_PKGS+=(mpv)
-        ! python3 -c 'import PySide6' >/dev/null 2>&1 && MISSING_PKGS+=(python3-pyside6)
+        ! dpkg -s libxcb-cursor0 >/dev/null 2>&1 && MISSING_PKGS+=(libxcb-cursor0)
+        ! dpkg -s python3-pip >/dev/null 2>&1 && MISSING_PKGS+=(python3-pip)
+        ! dpkg -s python3-venv >/dev/null 2>&1 && MISSING_PKGS+=(python3-venv)
         
         if grep -q '^CONFIG_CC_IS_CLANG=y' "/lib/modules/$(uname -r)/build/.config" 2>/dev/null || grep -iq 'clang' /proc/version 2>/dev/null; then
             ! command -v clang >/dev/null 2>&1 && MISSING_PKGS+=(clang lld llvm)
@@ -102,7 +105,8 @@ detect_and_install_deps() {
         ! command -v pw-play >/dev/null 2>&1 && MISSING_PKGS+=(pipewire-utils)
         ! command -v wpctl >/dev/null 2>&1 && MISSING_PKGS+=(wireplumber)
         ! command -v mpv >/dev/null 2>&1 && MISSING_PKGS+=(mpv)
-        ! python3 -c 'import PySide6' >/dev/null 2>&1 && MISSING_PKGS+=(python3-pyside6)
+        ! rpm -q xcb-util-cursor >/dev/null 2>&1 && MISSING_PKGS+=(xcb-util-cursor)
+        ! sudo -u "${TARGET_USER}" python3 -c 'import PySide6' >/dev/null 2>&1 && MISSING_PKGS+=(python3-pyside6)
         
         if grep -q '^CONFIG_CC_IS_CLANG=y' "/usr/src/kernels/$(uname -r)/.config" 2>/dev/null || grep -iq 'clang' /proc/version 2>/dev/null; then
             ! command -v clang >/dev/null 2>&1 && MISSING_PKGS+=(clang lld llvm)
@@ -129,6 +133,26 @@ gcc -O3 -march=native -o "${VIEWER_DIR}/everlive_display" "${VIEWER_DIR}/everliv
 ln -sf everlive_display "${VIEWER_DIR}/gc573_display"
 chmod +x "${VIEWER_DIR}/everlive_display" "${VIEWER_DIR}/everlive_viewer.py" "${SCRIPT_DIR}/play.sh"
 echo -e "${GREEN}[+] EverLive Direct Display Engine erfolgreich kompiliert!${NC}"
+
+# Python GUI-Umgebung (PySide6) für Benutzer prüfen und bei Bedarf einrichten
+echo -e "\n[*] Prüfe Python-Umgebung für EverLive Studio..."
+if ! sudo -u "${TARGET_USER}" python3 -c 'import PySide6' >/dev/null 2>&1; then
+    echo -e "${YELLOW}[*] PySide6 nicht systemweit gefunden. Richte venv für EverLive Studio ein...${NC}"
+    if [ ! -d "${VIEWER_DIR}/.venv" ]; then
+        sudo -u "${TARGET_USER}" python3 -m venv "${VIEWER_DIR}/.venv" 2>/dev/null || python3 -m venv "${VIEWER_DIR}/.venv"
+        chown -R "${TARGET_USER}:${TARGET_USER}" "${VIEWER_DIR}/.venv" 2>/dev/null || true
+    fi
+    if [ -x "${VIEWER_DIR}/.venv/bin/pip" ]; then
+        sudo -u "${TARGET_USER}" "${VIEWER_DIR}/.venv/bin/pip" install --upgrade pip PySide6 2>/dev/null || "${VIEWER_DIR}/.venv/bin/pip" install --upgrade pip PySide6
+    fi
+    if sudo -u "${TARGET_USER}" "${VIEWER_DIR}/.venv/bin/python3" -c 'import PySide6' >/dev/null 2>&1; then
+        echo -e "${GREEN}[+] PySide6 erfolgreich in ${VIEWER_DIR}/.venv eingerichtet!${NC}"
+    else
+        echo -e "${YELLOW}[!] Hinweis: PySide6 konnte nicht automatisch via pip bezogen werden. EverLive läuft zuverlässig im nativen Direct-Renderer (everlive_display).${NC}"
+    fi
+else
+    echo -e "${GREEN}[+] Systemweites PySide6 vorhanden!${NC}"
+fi
 
 # 4. Modul im System registrieren
 echo -e "\n${BLUE}[3/5] Installiere Kernel-Modul ins System...${NC}"

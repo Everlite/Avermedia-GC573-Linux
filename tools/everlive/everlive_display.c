@@ -95,6 +95,8 @@ static bool g_show_stats = true;
 static bool g_hud_visible = true;
 static uint32_t g_last_mouse_time = 0;
 static uint32_t g_volume_toast_time = 0;
+static char g_toast_custom[64] = "";
+static uint32_t g_toast_time = 0;
 static uintptr_t g_embed_wid = 0;
 
 static pid_t g_audio_pid = 0;
@@ -560,7 +562,7 @@ int main(int argc, char *argv[])
     g_last_mouse_time = SDL_GetTicks();
 
     double lat_ms = 0.0;
-    uint32_t live_fps = 0;
+    double live_fps = 0.0;
     uint32_t live_jitter = 0;
     uint32_t jitter_count = 0;
 
@@ -570,7 +572,7 @@ int main(int argc, char *argv[])
     static uint32_t last_geom_check = 0;
     while (g_running) {
         uint32_t now_ticks = SDL_GetTicks();
-        if (cur_w <= 0 || cur_h <= 0 || g_need_geom_check || (now_ticks - last_geom_check >= 50)) {
+        if (cur_w <= 0 || cur_h <= 0 || g_need_geom_check || (now_ticks - last_geom_check >= 100)) {
             last_geom_check = now_ticks;
             g_need_geom_check = 0;
             if (g_embed_wid > 0) {
@@ -582,17 +584,16 @@ int main(int argc, char *argv[])
                     unsigned int gw = 0, gh = 0, b = 0, d = 0;
                     if (XGetGeometry(x_dpy, (Window)g_embed_wid, &root, &rx, &ry, &gw, &gh, &b, &d) && gw > 0 && gh > 0) {
                         int rw = 0, rh = 0;
-                        int wx = 0, wy = 0;
                         SDL_GetRendererOutputSize(renderer, &rw, &rh);
-                        SDL_GetWindowPosition(window, &wx, &wy);
-                        if ((int)gw != rw || (int)gh != rh || rx != wx || ry != wy) {
-                            SDL_SetWindowPosition(window, rx, ry);
+                        if ((int)gw != rw || (int)gh != rh) {
                             SDL_SetWindowSize(window, (int)gw, (int)gh);
                         }
                         cur_w = (int)gw;
                         cur_h = (int)gh;
                     }
                 }
+            } else {
+                SDL_GetRendererOutputSize(renderer, &cur_w, &cur_h);
             }
             if (cur_w <= 0 || cur_h <= 0) {
                 SDL_GetRendererOutputSize(renderer, &cur_w, &cur_h);
@@ -710,6 +711,14 @@ int main(int argc, char *argv[])
                     g_volume_toast_time = SDL_GetTicks();
                 } else if (ev.key.keysym.sym == SDLK_TAB || ev.key.keysym.sym == SDLK_i) {
                     g_show_stats = !g_show_stats;
+                } else if (ev.key.keysym.sym == SDLK_h || ev.key.keysym.sym == SDLK_r) {
+                    struct v4l2_dv_timings new_dv = {};
+                    if (ioctl(fd, VIDIOC_QUERY_DV_TIMINGS, &new_dv) == 0) {
+                        ioctl(fd, VIDIOC_S_DV_TIMINGS, &new_dv);
+                        printf("[*] HDMI Re-Sync: %ux%u\n", new_dv.bt.width, new_dv.bt.height);
+                    }
+                    snprintf(g_toast_custom, sizeof(g_toast_custom), "HDMI RE-SYNC");
+                    g_toast_time = SDL_GetTicks();
                 }
             } else if (ev.type == SDL_WINDOWEVENT) {
                 if (ev.window.event == SDL_WINDOWEVENT_RESIZED ||
@@ -759,8 +768,26 @@ int main(int argc, char *argv[])
         /* Return buffer to driver immediately so PCIe DMA never starves */
         ioctl(fd, VIDIOC_QBUF, &buf);
 
-        /* Render to entire physical window/screen surface (100% fullscreen on High-DPI) */
-        SDL_RenderCopy(renderer, texture, NULL, NULL);
+        /* Aspect-ratio preserving letterboxed scaling */
+        SDL_Rect dest_rect;
+        if (width > 0 && height > 0 && cur_w > 0 && cur_h > 0) {
+            double scale_w = (double)cur_w / (double)width;
+            double scale_h = (double)cur_h / (double)height;
+            double scale = (scale_w < scale_h) ? scale_w : scale_h;
+            dest_rect.w = (int)(width * scale);
+            dest_rect.h = (int)(height * scale);
+            dest_rect.x = (cur_w - dest_rect.w) / 2;
+            dest_rect.y = (cur_h - dest_rect.h) / 2;
+        } else {
+            dest_rect.x = 0;
+            dest_rect.y = 0;
+            dest_rect.w = cur_w;
+            dest_rect.h = cur_h;
+        }
+
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+        SDL_RenderClear(renderer);
+        SDL_RenderCopy(renderer, texture, NULL, &dest_rect);
 
         frame_count++;
 
@@ -835,7 +862,7 @@ int main(int argc, char *argv[])
 
             /* Signal Info Badge */
             char sig_txt[32];
-            snprintf(sig_txt, sizeof(sig_txt), "%ux%u@%u", width, height, live_fps ? live_fps : 120);
+            snprintf(sig_txt, sizeof(sig_txt), "%ux%u@%.2f", width, height, live_fps > 0.0 ? live_fps : 60.0);
             draw_string(renderer, sig_txt, hud_x + 260, hud_y + 18, 1, (SDL_Color){63, 185, 80, 255});
 
             /* Separator */
@@ -877,7 +904,7 @@ int main(int argc, char *argv[])
             SDL_RenderDrawRect(renderer, &stats_bg);
 
             char line1[32], line2[32], line3[32];
-            snprintf(line1, sizeof(line1), "FPS: %u (%.1fms)", live_fps ? live_fps : 120, live_fps > 0 ? (1000.0/live_fps) : 8.3);
+            snprintf(line1, sizeof(line1), "FPS: %.2f (%.2fms)", live_fps > 0.0 ? live_fps : 60.0, live_fps > 0.0 ? (1000.0 / live_fps) : 16.67);
             snprintf(line2, sizeof(line2), "LAG: %.1f ms", lat_ms);
             snprintf(line3, sizeof(line3), "JITTER: %u/s", live_jitter);
 
@@ -886,8 +913,8 @@ int main(int argc, char *argv[])
             draw_string(renderer, line3, box_x + 12, box_y + 52, 1, (live_jitter > 5) ? (SDL_Color){248, 81, 73, 255} : (SDL_Color){139, 148, 158, 255});
         }
 
-        /* 3. Center Volume Toast (pops up on scroll/key volume changes) */
-        if (now_ticks - g_volume_toast_time < 1200) {
+        /* 3. Center Toast (pops up on scroll/key volume changes or HDMI re-sync) */
+        if (now_ticks - g_volume_toast_time < 1200 || now_ticks - g_toast_time < 1200) {
             SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
             int tw = 220;
             int th = 40;
@@ -900,11 +927,14 @@ int main(int argc, char *argv[])
             SDL_SetRenderDrawColor(renderer, 56, 139, 253, 240);
             SDL_RenderDrawRect(renderer, &t_rect);
 
-            char toast_msg[32];
-            if (g_muted)
+            char toast_msg[64];
+            if (now_ticks - g_toast_time < 1200 && g_toast_custom[0]) {
+                snprintf(toast_msg, sizeof(toast_msg), "%s", g_toast_custom);
+            } else if (g_muted) {
                 snprintf(toast_msg, sizeof(toast_msg), "AUDIO: MUTED");
-            else
+            } else {
                 snprintf(toast_msg, sizeof(toast_msg), "VOLUME: %3d%%", (int)(g_volume * 100.0f));
+            }
 
             draw_string(renderer, toast_msg, tx + 20, ty + 16, 1, (SDL_Color){240, 246, 252, 255});
         }
@@ -912,7 +942,8 @@ int main(int argc, char *argv[])
         SDL_RenderPresent(renderer);
 
         if (now_ticks - last_title_time >= 1000) {
-            live_fps = (uint32_t)frame_count;
+            uint32_t elapsed_ms = now_ticks - last_title_time;
+            live_fps = (double)frame_count * 1000.0 / (double)elapsed_ms;
             live_jitter = jitter_count;
             frame_count = 0;
             jitter_count = 0;
@@ -920,7 +951,7 @@ int main(int argc, char *argv[])
 
             if (g_embed_wid == 0) {
                 char title[180];
-                snprintf(title, sizeof(title), "EverLive - %ux%u @ %u FPS | Latenz: %.1f ms | Vol: %d%%",
+                snprintf(title, sizeof(title), "EverLive - %ux%u @ %.2f FPS | Latenz: %.1f ms | Vol: %d%%",
                          width, height, live_fps, lat_ms, g_muted ? 0 : (int)(g_volume * 100.0f));
                 SDL_SetWindowTitle(window, title);
             }
