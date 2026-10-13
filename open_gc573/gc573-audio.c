@@ -678,7 +678,9 @@ int gc555_audio_init(struct gc555_dev *gc555)
 	if (gc555->audio)
 		return 0;
 
-	ret = snd_card_new(gc555->dev, -1, NULL, THIS_MODULE,
+	const char *card_id = (gc555->pdev->subsystem_device == 0x5730) ? "A4K" : "GC555";
+
+	ret = snd_card_new(gc555->dev, -1, card_id, THIS_MODULE,
 			   sizeof(*audio), &card);
 	if (ret < 0)
 		return dev_err_probe(gc555->dev, ret,

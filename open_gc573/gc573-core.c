@@ -8,6 +8,7 @@
  * Licensed under the GNU General Public License version 2 (GPL-2.0-only).
  */
 
+#include <linux/delay.h>
 #include <linux/dma-mapping.h>
 #include <linux/err.h>
 #include <linux/module.h>
@@ -79,6 +80,29 @@ static ssize_t led_mode_store(struct device *dev,
 	return count;
 }
 static DEVICE_ATTR_RW(led_mode);
+
+static ssize_t hpd_pulse_store(struct device *dev,
+			       struct device_attribute *attr,
+			       const char *buf, size_t count)
+{
+	struct pci_dev *pdev = to_pci_dev(dev);
+	struct gc555_dev *gc555 = pci_get_drvdata(pdev);
+	int val, ret;
+
+	ret = kstrtoint(buf, 10, &val);
+	if (ret)
+		return ret;
+
+	if (val) {
+		dev_info(dev, "triggering manual HDMI HPD re-sync pulse\n");
+		gc555_link_set_input_hpd(gc555, false);
+		msleep(200);
+		gc555_link_set_input_hpd(gc555, true);
+	}
+
+	return count;
+}
+static DEVICE_ATTR_WO(hpd_pulse);
 
 static int gc555_quiesce_host_irq(struct gc555_dev *gc555)
 {
@@ -179,11 +203,16 @@ static int gc555_probe(struct pci_dev *pdev,
 	ret = device_create_file(&pdev->dev, &dev_attr_led_mode);
 	if (ret)
 		goto remove_input_edid;
-	(void)sysfs_chmod_file(&pdev->dev.kobj, &dev_attr_led_mode.attr, 0666);
+	(void)sysfs_chmod_file(&pdev->dev.kobj, &dev_attr_led_mode.attr, 0660);
+
+	ret = device_create_file(&pdev->dev, &dev_attr_hpd_pulse);
+	if (ret)
+		goto remove_led_mode;
+	(void)sysfs_chmod_file(&pdev->dev.kobj, &dev_attr_hpd_pulse.attr, 0660);
 
 	ret = gc555_it6805_init(gc555);
 	if (ret)
-		goto remove_led_mode;
+		goto remove_hpd_pulse;
 
 	ret = gc555_dma_init(gc555);
 	if (ret)
@@ -221,6 +250,8 @@ cleanup_dma:
 	gc555_dma_cleanup(gc555);
 cleanup_it6805:
 	gc555_it6805_cleanup(gc555);
+remove_hpd_pulse:
+	device_remove_file(&pdev->dev, &dev_attr_hpd_pulse);
 remove_led_mode:
 	device_remove_file(&pdev->dev, &dev_attr_led_mode);
 remove_input_edid:
@@ -266,6 +297,7 @@ static void gc555_remove(struct pci_dev *pdev)
 	gc555_it6805_suspend(gc555);
 	gc555_it6664_suspend(gc555);
 	gc555_led_suspend(gc555);
+	device_remove_file(&pdev->dev, &dev_attr_hpd_pulse);
 	device_remove_file(&pdev->dev, &dev_attr_led_mode);
 	sysfs_remove_bin_file(&pdev->dev.kobj, &input_edid_attr);
 

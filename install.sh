@@ -44,7 +44,20 @@ detect_and_install_deps() {
     
     if command -v pacman >/dev/null 2>&1; then
         # Arch / CachyOS / Manjaro
-        [ ! -d "/usr/lib/modules/$(uname -r)/build" ] && MISSING_PKGS+=(linux-headers)
+        if [ ! -d "/usr/lib/modules/$(uname -r)/build" ]; then
+            KERNEL_PKG=$(pacman -Qoq "/usr/lib/modules/$(uname -r)" 2>/dev/null | grep -E '^linux' | head -n 1)
+            if [ -n "${KERNEL_PKG}" ] && pacman -Si "${KERNEL_PKG}-headers" >/dev/null 2>&1; then
+                MISSING_PKGS+=("${KERNEL_PKG}-headers")
+            elif [[ "$(uname -r)" =~ cachyos ]]; then
+                MISSING_PKGS+=(linux-cachyos-headers)
+            elif [[ "$(uname -r)" =~ zen ]]; then
+                MISSING_PKGS+=(linux-zen-headers)
+            elif [[ "$(uname -r)" =~ lts ]]; then
+                MISSING_PKGS+=(linux-lts-headers)
+            else
+                MISSING_PKGS+=(linux-headers)
+            fi
+        fi
         ! command -v gcc >/dev/null 2>&1 && MISSING_PKGS+=(base-devel)
         ! command -v sdl2-config >/dev/null 2>&1 && MISSING_PKGS+=(sdl2)
         ! command -v arecord >/dev/null 2>&1 && MISSING_PKGS+=(alsa-utils)
@@ -178,9 +191,11 @@ MAKE[0]="make -C \${dkms_tree}/\${PACKAGE_NAME}/\${PACKAGE_VERSION}/build KDIR=\
 EOF
     dkms remove -m everlive -v 1.0.0 --all 2>/dev/null || true
     dkms add -m everlive -v 1.0.0 2>/dev/null || true
-    dkms build -m everlive -v 1.0.0 2>/dev/null || true
-    dkms install -m everlive -v 1.0.0 --force 2>/dev/null || true
-    echo -e "${GREEN}[+] DKMS registriert: Treiber aktualisiert sich bei Kernel-Updates automatisch!${NC}"
+    if dkms build -m everlive -v 1.0.0 2>/dev/null && dkms install -m everlive -v 1.0.0 --force 2>/dev/null; then
+        echo -e "${GREEN}[+] DKMS registriert: Treiber aktualisiert sich bei Kernel-Updates automatisch!${NC}"
+    else
+        echo -e "${YELLOW}[!] Hinweis: DKMS-Registrierung übersprungen oder nicht möglich. Der direkt installierte Treiber funktioniert trotzdem einwandfrei.${NC}"
+    fi
 fi
 
 # Autostart beim Systemstart
@@ -193,7 +208,8 @@ cat > /etc/udev/rules.d/70-everlive.rules <<EOF
 # AVerMedia Live Gamer 4K (GC573) - EverLive Gaming Access
 SUBSYSTEM=="video4linux", KERNEL=="video*", ATTRS{vendor}=="0x1461", ATTRS{device}=="0x0054", MODE="0660", TAG+="uaccess", GROUP="video"
 SUBSYSTEM=="sound", KERNEL=="pcmC*D*c", ATTRS{vendor}=="0x1461", ATTRS{device}=="0x0054", MODE="0660", TAG+="uaccess", GROUP="audio"
-SUBSYSTEM=="pci", ATTRS{vendor}=="0x1461", ATTRS{device}=="0x0054", TEST=="led_mode", RUN+="/bin/chmod 0666 /sys%p/led_mode"
+SUBSYSTEM=="pci", ATTRS{vendor}=="0x1461", ATTRS{device}=="0x0054", TEST=="led_mode", RUN+="/bin/chgrp video /sys%p/led_mode", RUN+="/bin/chmod 0660 /sys%p/led_mode"
+SUBSYSTEM=="pci", ATTRS{vendor}=="0x1461", ATTRS{device}=="0x0054", TEST=="hpd_pulse", RUN+="/bin/chgrp video /sys%p/hpd_pulse", RUN+="/bin/chmod 0660 /sys%p/hpd_pulse"
 EOF
 udevadm control --reload-rules 2>/dev/null || true
 udevadm trigger 2>/dev/null || true
@@ -226,12 +242,18 @@ fi
 
 # 7. Treiber direkt laden
 echo -e "\n${BLUE}[*] Lade neuen Treiber...${NC}"
-bash "${DRIVER_DIR}/load.sh" >/dev/null 2>&1 || true
-
-echo -e "\n${GREEN}===================================================================${NC}"
-echo -e "${GREEN}     EverLive wurde erfolgreich auf deinem System installiert!     ${NC}"
-echo -e "${GREEN}===================================================================${NC}"
-echo -e "Du kannst das Spiel jetzt auf zwei Arten starten:"
-echo -e " 1. Im Startmenü / Application Launcher nach '${YELLOW}EverLive${NC}' suchen und anklicken."
-echo -e " 2. Oder im Terminal einfach '${YELLOW}./play.sh${NC}' ausführen (kein sudo nötig!)."
-echo
+if bash "${DRIVER_DIR}/load.sh"; then
+    echo -e "\n${GREEN}===================================================================${NC}"
+    echo -e "${GREEN}     EverLive wurde erfolgreich auf deinem System installiert!     ${NC}"
+    echo -e "${GREEN}===================================================================${NC}"
+    echo -e "Du kannst das Spiel jetzt auf zwei Arten starten:"
+    echo -e " 1. Im Startmenü / Application Launcher nach '${YELLOW}EverLive${NC}' suchen und anklicken."
+    echo -e " 2. Oder im Terminal einfach '${YELLOW}./play.sh${NC}' ausführen (kein sudo nötig!)."
+    echo
+else
+    echo -e "\n${RED}===================================================================${NC}"
+    echo -e "${RED}[!] FEHLER: open_gc573 Treiber konnte nicht geladen werden!       ${NC}"
+    echo -e "${RED}===================================================================${NC}"
+    echo -e "Bitte prüfe 'dmesg | tail -n 20' oder deaktiviere Secure Boot im UEFI/BIOS."
+    exit 1
+fi

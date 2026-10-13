@@ -13,5 +13,6 @@ SUBSYSTEM=="video4linux", KERNEL=="video*", \
   ENV{ID_SERIAL}="AVerMedia_Live_Gamer_BOLT_GC555_$attr{serial_number}", \
   SYMLINK+="v4l/by-id/$env{ID_BUS}-$env{ID_SERIAL}-video-index$attr{index}"
 
-# Allow regular users to control RGB LED lighting on the fly
-SUBSYSTEM=="pci", ATTRS{vendor}=="0x1461", ATTRS{device}=="0x0054", TEST=="led_mode", RUN+="/bin/chmod 0666 /sys%p/led_mode"
+# Allow regular desktop users to control RGB LED lighting and trigger HDMI HPD re-sync
+SUBSYSTEM=="pci", ATTRS{vendor}=="0x1461", ATTRS{device}=="0x0054", TEST=="led_mode", RUN+="/bin/chgrp video /sys%p/led_mode", RUN+="/bin/chmod 0660 /sys%p/led_mode"
+SUBSYSTEM=="pci", ATTRS{vendor}=="0x1461", ATTRS{device}=="0x0054", TEST=="hpd_pulse", RUN+="/bin/chgrp video /sys%p/hpd_pulse", RUN+="/bin/chmod 0660 /sys%p/hpd_pulse"

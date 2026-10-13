@@ -1,5 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
- * gc573_display.c - Dedicated Zero-Latency Direct V4L2/SDL2 Console Display & Audio Companion
+ * everlive_display.c - Dedicated Zero-Latency Direct V4L2/SDL2 Console Display & Audio Companion
  *
  * Designed specifically for interactive gaming on capture cards.
  * Features:
@@ -156,7 +157,7 @@ static void start_audio_pipeline(const char *adev)
                  "  arecord -D \"%s\" -f S16_LE -c 6 -r 48000 -q 2>/dev/null || "
                  "  arecord -D \"%s\" -f S16_LE -c 2 -r 48000 -q 2>/dev/null || "
                  "  arecord -D \"%s\" -f S16_LE -c 2 -r 48000 -q 2>/dev/null; } | "
-                 "pw-play --latency=20ms -P 'application.name=gc573-audio node.name=gc573-audio' - 2>/dev/null",
+                 "pw-play --latency=10ms -P 'application.name=gc573-audio node.name=gc573-audio' - 2>/dev/null",
                  adev, adev, adev, plug_dev);
         execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
         _exit(127);
@@ -720,6 +721,17 @@ int main(int argc, char *argv[])
                 } else if (ev.key.keysym.sym == SDLK_TAB || ev.key.keysym.sym == SDLK_i) {
                     g_show_stats = !g_show_stats;
                 } else if (ev.key.keysym.sym == SDLK_h || ev.key.keysym.sym == SDLK_r) {
+                    glob_t hg;
+                    if (glob("/sys/bus/pci/drivers/open_gc573/*/hpd_pulse", 0, NULL, &hg) == 0 && hg.gl_pathc > 0) {
+                        FILE *hf = fopen(hg.gl_pathv[0], "w");
+                        if (hf) {
+                            fputs("1\n", hf);
+                            fclose(hf);
+                            printf("[*] Hardware HDMI HPD Re-Sync Impuls ausgeloest\n");
+                        }
+                        globfree(&hg);
+                        usleep(250000);
+                    }
                     struct v4l2_dv_timings new_dv = {};
                     if (ioctl(fd, VIDIOC_QUERY_DV_TIMINGS, &new_dv) == 0) {
                         ioctl(fd, VIDIOC_S_DV_TIMINGS, &new_dv);

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """
-GC573 PS5 Gaming Screen - Ultra-Low-Latency Display & Audio Viewer
-A standalone app to play PS5 (or any HDMI console) directly on the PC desktop
-with sub-frame video rendering and synchronized PipeWire/ALSA audio.
+EverLive - Live Gamer 4K (GC573) Control Center & Video Viewer
+Desktop Studio with low-latency direct-DMA preview for Linux gaming.
 """
 
 import sys
@@ -187,6 +187,28 @@ def write_led_mode(mode: int) -> bool:
     return success
 
 
+def find_hpd_pulse_sysfs_path() -> Optional[str]:
+    """Locates the open_gc573 sysfs hpd_pulse attribute."""
+    import glob
+    candidates = glob.glob("/sys/bus/pci/drivers/open_gc573/*/hpd_pulse")
+    if candidates and os.path.exists(candidates[0]):
+        return candidates[0]
+    return None
+
+
+def trigger_hpd_pulse() -> bool:
+    """Pulses the hardware HDMI Hot-Plug Detect line to trigger a physical HDMI re-sync."""
+    path = find_hpd_pulse_sysfs_path()
+    if not path:
+        return False
+    try:
+        with open(path, "w") as f:
+            f.write("1\n")
+        return True
+    except Exception:
+        return False
+
+
 def set_audio_volume(vol_pct: int):
     """Sets stream volume for gc573-audio via wpctl / pactl (0-150%)."""
     try:
@@ -323,7 +345,9 @@ class GameStreamer:
         return info
 
     def resync(self) -> bool:
-        """Forces HDMI handshake renegotiation via v4l2-ctl query."""
+        """Forces hardware HDMI HPD re-sync and updates timings via v4l2-ctl query."""
+        trigger_hpd_pulse()
+        time.sleep(0.35)
         if not os.path.exists(self.vdev):
             return False
         try:
