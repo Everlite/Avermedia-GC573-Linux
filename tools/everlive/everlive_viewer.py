@@ -383,7 +383,7 @@ class GameStreamer:
                 cmd.append("-f")
             print(f"[*] Starte nativen EverLive Direct-Renderer (1-2 ms Hardware-Latenz): {' '.join(cmd)}")
             try:
-                self.mpv_proc = subprocess.Popen(cmd)
+                self.mpv_proc = subprocess.Popen(cmd, start_new_session=True)
                 self.is_running = True
                 return True
             except Exception as e:
@@ -433,7 +433,7 @@ class GameStreamer:
             mpv_cmd.append("--fullscreen")
 
         try:
-            self.mpv_proc = subprocess.Popen(mpv_cmd, env=mpv_env)
+            self.mpv_proc = subprocess.Popen(mpv_cmd, env=mpv_env, start_new_session=True)
             self.is_running = True
             if self.adev and self.adev != "none":
                 try:
@@ -456,13 +456,24 @@ class GameStreamer:
         self.is_running = False
         if self.mpv_proc:
             try:
-                self.mpv_proc.terminate()
+                pgid = os.getpgid(self.mpv_proc.pid)
+                os.killpg(pgid, signal.SIGTERM)
+            except Exception:
+                try:
+                    self.mpv_proc.terminate()
+                except Exception:
+                    pass
+            try:
                 self.mpv_proc.wait(timeout=1.0)
             except Exception:
                 try:
-                    self.mpv_proc.kill()
+                    pgid = os.getpgid(self.mpv_proc.pid)
+                    os.killpg(pgid, signal.SIGKILL)
                 except Exception:
-                    pass
+                    try:
+                        self.mpv_proc.kill()
+                    except Exception:
+                        pass
             self.mpv_proc = None
 
         if self.pwplay_proc:
@@ -822,13 +833,28 @@ if HAS_QT:
                 except Exception:
                     pass
 
-        def force_resync(self):
+        def force_resync(self, *args):
             """Forces HDMI handshake renegotiation and restarts stream if active."""
-            self.streamer.resync()
-            if self.streamer.is_running:
-                self.streamer.stop()
-                QTimer.singleShot(200, self.auto_start_stream)
-            self.update_status()
+            if hasattr(self, "_resyncing") and self._resyncing:
+                return
+            self._resyncing = True
+            if hasattr(self, "btn_resync"):
+                self.btn_resync.setEnabled(False)
+            try:
+                was_running = self.streamer.is_running
+                if was_running:
+                    self.streamer.stop()
+                    self.btn_toggle_stream.setText("▶ Start")
+                    self.btn_toggle_stream.setObjectName("btnToggleStart")
+                    self.btn_toggle_stream.setStyle(self.btn_toggle_stream.style())
+                self.streamer.resync()
+                self.update_status()
+                if was_running:
+                    QTimer.singleShot(250, self.auto_start_stream)
+            except Exception as e:
+                print(f"[!] Fehler bei HDMI Re-Sync: {e}")
+            finally:
+                QTimer.singleShot(600, lambda: (setattr(self, "_resyncing", False), hasattr(self, "btn_resync") and self.btn_resync.setEnabled(True)))
 
         def auto_start_stream(self):
             if not self.streamer.is_running:

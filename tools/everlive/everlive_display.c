@@ -104,11 +104,14 @@ static pid_t g_audio_pid = 0;
 static void stop_audio_pipeline(void)
 {
     if (g_audio_pid > 0) {
-        kill(-g_audio_pid, SIGTERM);
-        usleep(30000);
-        kill(-g_audio_pid, SIGKILL);
-        waitpid(g_audio_pid, NULL, WNOHANG);
+        pid_t pid = g_audio_pid;
         g_audio_pid = 0;
+        kill(-pid, SIGTERM);
+        kill(pid, SIGTERM);
+        usleep(30000);
+        kill(-pid, SIGKILL);
+        kill(pid, SIGKILL);
+        waitpid(pid, NULL, WNOHANG);
     }
 }
 
@@ -158,6 +161,7 @@ static void start_audio_pipeline(const char *adev)
         execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
         _exit(127);
     } else if (pid > 0) {
+        setpgid(pid, pid);
         g_audio_pid = pid;
     }
 }
