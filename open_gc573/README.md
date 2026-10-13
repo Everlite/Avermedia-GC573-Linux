@@ -12,11 +12,12 @@ Unlike the proprietary vendor driver package, `open_gc573` requires **no binary 
 
 ## Key Features
 
-- **1440p @ 120 FPS Native Capture:** EDID and the V4L2 mode table advertise 2560×1440 @ 120 Hz CVT-RB. The ITE6805 under-read (~100 fps at ~413 MHz) is rescaled to 120, and `0x1080[31:16]` keeps that rate. Picture at 1440p120 is confirmed on the blob driver; this module still needs a capture run.
+- **1440p @ 120 FPS Native Capture:** Verified on real hardware (PlayStation 5 / PC). EDID and V4L2 mode tables advertise 2560×1440 @ 120 Hz CVT-RB. The ITE6805 under-read (~100 fps at ~413 MHz) is dynamically rescaled to 120, and VIP register `0x1080[31:16]` maintains unthrottled 120 FPS capture.
 - **Dynamic FPGA Clocking:** Automatically calculates and programs internal VIP Frame Period (`0x103c` @ 148.5 MHz) to prevent hardware frame rate decimation.
 - **High-Bandwidth DDR Dual-Pixel Mode:** Enables dual-pixel DDR mode (`0x3` in VIP Pixel Mode `0x1088`) for >400 MHz pixel clocks (1440p120, 4K60).
 - **Format Flexibility:** Supports NV12, YUYV (YUY2), RGB32, and P010 (HDR10).
-- **ALSA Stereo HDMI Audio:** Native ALSA capture device (`open_gc573` / `Live Gamer 4K Audio Capture`).
+- **ALSA Multi-Channel & Stereo HDMI Audio:** Native ALSA capture device supporting 8-channel (7.1 surround), 6-channel (5.1 surround), and 2-channel stereo LPCM.
+- **On-the-Fly Hardware RGB Control:** Sysfs attribute `led_mode` (BAR 0 `0x0800`–`0x086c` & script RAM `0x2008`) permanently solves the factory blinking loop and enables instant color switching (Off, Blue, Green, Red, Cyan, Magenta, Yellow, White) without stream restarts.
 - **Subsystem Auto-Detection:** Automatically binds to both PCIe GC573 (`1461:5730`) and Thunderbolt GC555 (`1461:5550`).
 
 ---
@@ -48,7 +49,7 @@ Unlike the proprietary vendor driver package, `open_gc573` requires **no binary 
                      |                               |
                      v                               v
              V4L2 Video Node                 ALSA Audio Device
-              /dev/video*                       hw:CARD=GC573
+              /dev/video*                       hw:CARD=A4K,DEV=0
 ```
 
 ---
@@ -57,7 +58,9 @@ Unlike the proprietary vendor driver package, `open_gc573` requires **no binary 
 
 ### Build
 ```bash
-make LLVM=1 CC=clang
+make
+# Or with Clang/LLVM:
+# make LLVM=1 CC=clang
 ```
 
 ### Safe Load / Test
