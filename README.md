@@ -31,11 +31,12 @@ cd EverLive
 ```
 
 ### What the installer handles automatically:
-1. **Auto-Detects Your Distribution:** Automatically identifies your package manager (`pacman` on Arch/CachyOS/Manjaro, `apt` on Ubuntu/Debian/Mint/Pop!_OS, or `dnf` on Fedora/Nobara) and installs any missing build headers or libraries (including SDL2, PipeWire, ALSA, mpv, and PySide6).
-2. **Compiles Driver & Display App:** Builds the clean `open_gc573` kernel module and compiles the high-performance C direct display engine (`everlive_display`).
-3. **DKMS Support for Kernel Updates:** If DKMS is installed on your system, it registers the module so that supported Linux kernel updates automatically rebuild the driver in the background.
-4. **No Root Privileges Needed to Play (udev):** Sets up `/etc/udev/rules.d/70-everlive.rules` with `TAG+="uaccess"`. Normal desktop users get immediate read/write access to capture video, audio, and on-the-fly RGB controls without ever needing `sudo`.
-5. **Start Menu Integration:** Installs the desktop launcher into your application menu (KDE Plasma, GNOME, etc.).
+1. **Auto-Detects Your Distribution:** Automatically identifies your package manager (`pacman` on Arch/CachyOS/Manjaro, `apt` on Ubuntu/Debian/Mint/Pop!_OS, or `dnf` on Fedora/Nobara) and installs missing build tools and libraries (including SDL2, PipeWire, ALSA, mpv, and Qt XCB cursor dependencies like `libxcb-cursor0`).
+2. **Automated Python Environment (PySide6):** On distributions without system-packaged PySide6 (such as Debian, Ubuntu, and Linux Mint), the installer automatically provisions a dedicated local virtual environment (`tools/everlive/.venv`) so EverLive Studio launches seamlessly out of the box without polluting system Python.
+3. **Compiles Driver & Display App:** Builds the clean `open_gc573` kernel module and compiles the high-performance C direct display engine (`everlive_display`).
+4. **DKMS Support for Kernel Updates:** If DKMS is installed on your system, it registers the module so that supported Linux kernel updates automatically rebuild the driver in the background.
+5. **No Root Privileges Needed to Play (udev):** Sets up `/etc/udev/rules.d/70-everlive.rules` with `TAG+="uaccess"`. Normal desktop users get immediate read/write access to capture video, audio, and on-the-fly RGB controls without ever needing `sudo`.
+6. **Start Menu Integration:** Installs the desktop launcher into your application menu (KDE Plasma, GNOME, Cinnamon, etc.).
 
 After installation, simply launch the game screen from your application menu (**EverLive**) or run:
 ```bash
@@ -47,11 +48,13 @@ After installation, simply launch the game screen from your application menu (**
 ## Highlights & Verified Capabilities
 
 - **2560×1440 @ 120 FPS Verified on PlayStation 5:** 120.35 Hz HDMI 2.0 capture verified on real PS5 hardware (*The Finals*, *Fortnite 120Hz Mode*, PS5 Dashboard).
-- **Jitter- and Lag-Free Direct Rendering (Experimental):** Recent direct engine optimizations (`everlive_display`) eliminate micro-stutters and buffer-induced lag spikes in physical PS5 testing at 1440p @ 120 FPS, delivering stable, responsive frame delivery (~1–3 ms internal pipeline latency).
-- **All-in-One EverLive Linux Studio (`everlive_viewer.py`):** Fully integrated desktop capture studio with an embedded live video viewport that auto-starts immediately upon launch. Features live signal diagnostics (e.g. `● LIVE 2560x1440 @ 60 FPS • HDR10`), on-the-fly resolution preset selection, RGB lighting dropdown, real-time volume & mute controls, and double-click / <kbd>F11</kbd> borderless fullscreen.
+- **Retro Scalers & Non-Integer Cadence (RetroTINK 4K, 59.94 Hz NTSC / 50 Hz PAL):** Built-in rate tolerance ($\pm 2\text{ Hz}$) and floating-point timing detection allow non-standard console timings, retro scalers (RetroTINK 4K Pro, OSSC), and NTSC framerates (59.94 Hz, 29.97 Hz, 119.88 Hz) to stream smoothly with exact two-decimal precision (e.g. `59.94 FPS (16.68ms)`).
+- **Jitter- and Lag-Free Direct Rendering (Experimental):** Direct engine optimizations (`everlive_display`) eliminate micro-stutters and buffer-induced lag spikes in physical PS5 & scaler testing, delivering stable, responsive frame delivery (~1–3 ms internal pipeline latency).
+- **Aspect-Ratio-Preserving Centered Scaling (Letterbox / Pillarbox):** Preserves native aspect ratios across all display configurations. Displays clean black borders on 16:10 laptop screens, 21:9 ultrawide monitors, and 4:3 retro signals without stretching or visual distortion in both windowed and fullscreen modes.
+- **All-in-One EverLive Linux Studio (`everlive_viewer.py`):** Fully integrated desktop capture studio with an embedded live video viewport that auto-starts immediately upon launch. Features live signal diagnostics (e.g. `● LIVE 2560x1440 @ 120 FPS • HDR10`), on-the-fly resolution preset selection, dedicated **"🔄 Re-Sync"** HDMI handshake button, RGB lighting dropdown, real-time volume & mute controls, and double-click / <kbd>F11</kbd> borderless fullscreen.
 - **Dynamic On-the-Fly HDR Switching:** Seamlessly toggle HDR on or off on your console at any time without freezing the video stream or requiring a restart. The driver adapts its FPGA colorimetry dynamically on the fly.
 - **Sub-Frame Direct Render Pipeline (~1–3 ms internal latency):** Built-in native C direct rendering engine (`everlive_display`) maps V4L2 DMA buffers directly to GPU textures (SDL2 unthrottled presentation / Wayland tearing). Measured buffer-to-display pass takes ~1–3 ms (excluding physical monitor panel response and controller input).
-- **Universal Multi-Channel Audio Pipeline (7.1, 5.1 & Stereo):** Captures multi-channel console LPCM audio (8-channel 7.1 on PS5/Xbox/PC, 6-channel 5.1, or 2-channel stereo on Nintendo Switch/Steam Deck/retro consoles) with automatic PipeWire downmixing to any stereo headset or surround setup with ~10–20 ms latency.
+- **Universal Multi-Channel Audio Pipeline (7.1, 5.1 & Stereo):** Captures multi-channel console LPCM audio (8-channel 7.1 on PS5/Xbox/PC, 6-channel 5.1, or 2-channel stereo on Nintendo Switch/Steam Deck/retro consoles) with automatic PipeWire downmixing to any stereo headset or surround setup with ~10–20 ms latency (including automatic ALSA `plughw` fallback).
 - **Hardware RGB LED Control & Live Switching (Breakthrough):**
   - **Cracked Factory Blinking Loop:** Reverse-engineered the Artix-7 FPGA MMIO lighting engine (BAR 0 `0x0800`–`0x086c` and script RAM `0x2008`), permanently solving the card's annoying factory red blinking on Linux without requiring Windows software.
   - **Zero Stream Interruption & Zero Root Prompts:** Sysfs attribute `led_mode` is automatically exposed with user access (`0666`), allowing instant color changes from the GUI or CLI without `sudo` or password prompts. Reprogramming executes asynchronously via hardware MMIO in microseconds **without a single dropped frame or stream restart**.
@@ -60,7 +63,7 @@ After installation, simply launch the game screen from your application menu (**
 - **In-Game HUD & Live Volume Control:**
   - Adjust volume anytime during gameplay using the **mouse wheel** or the EverLive header slider.
   - Interactive on-screen HUD volume slider + mute button.
-  - Hotkeys: <kbd>F11</kbd> / <kbd>f</kbd> for borderless fullscreen, <kbd>m</kbd> for mute, <kbd>Tab</kbd> for live performance and jitter stats.
+  - Hotkeys: <kbd>F11</kbd> / <kbd>f</kbd> for borderless fullscreen, <kbd>m</kbd> for mute, <kbd>Tab</kbd> / <kbd>i</kbd> for live performance and jitter stats, <kbd>h</kbd> / <kbd>r</kbd> for HDMI re-sync.
 - **100% Blob-Free Driver:** The primary driver `open_gc573` is 100% open-source (**GPL-2.0**), contains no proprietary `.a` binaries, and compiles cleanly on modern Linux kernels 6.19 through 7.x.
 
 ---
@@ -196,11 +199,12 @@ echo "options open_gc573 led_mode=1" | sudo tee /etc/modprobe.d/open_gc573.conf
 
 | Device | Interface | PCI Subsystem | Support Status | Notes |
 |:---|:---|:---:|:---:|:---|
-| **AVerMedia Live Gamer 4K (GC573)** | PCIe Gen2 x4 | `1461:5730` | **Verified on Hardware** | Daily driver testing on PlayStation 5 (1440p120, 1080p, 4K60) on CachyOS / Arch Linux. |
+| **AVerMedia Live Gamer 4K (GC573)** | PCIe Gen2 x4 | `1461:5730` | **Verified on Hardware** | Hardware testing on PlayStation 5 (1440p120, 1080p, 4K60) and RetroTINK 4K Pro (59.94 Hz NTSC). |
 | **AVerMedia Live Gamer BOLT (GC555)** | Thunderbolt 3 | `1461:5550` | **Architecturally Supported** | Code logic inherited from ostrich's clean-room driver; not yet physically tested by Everlite. Testers welcome! |
 
-- **Linux Kernels:** Compatible with Linux 6.19 through 7.x (tested on CachyOS Linux 7.2.9 & Arch Linux).
-- **Desktop Environments:** Wayland (KDE Plasma 6, GNOME) and X11.
+- **Linux Distributions Tested:** CachyOS, Arch Linux, Linux Mint 22.3 (Cinnamon), Ubuntu, Debian.
+- **Linux Kernels:** Compatible with Linux 6.19 through 7.x (tested on 7.0 generic through CachyOS Linux 7.2.9 & Arch Linux).
+- **Desktop Environments:** Wayland (KDE Plasma 6, GNOME) and X11 (Cinnamon, XFCE).
 
 ---
 
