@@ -589,7 +589,11 @@ int main(int argc, char *argv[])
                     if (XGetGeometry(x_dpy, (Window)g_embed_wid, &root, &rx, &ry, &gw, &gh, &b, &d) && gw > 0 && gh > 0) {
                         int rw = 0, rh = 0;
                         SDL_GetRendererOutputSize(renderer, &rw, &rh);
-                        if ((int)gw != rw || (int)gh != rh) {
+                        static int last_rx = -1, last_ry = -1;
+                        if ((int)gw != rw || (int)gh != rh || rx != last_rx || ry != last_ry) {
+                            last_rx = rx;
+                            last_ry = ry;
+                            SDL_SetWindowPosition(window, rx, ry);
                             SDL_SetWindowSize(window, (int)gw, (int)gh);
                         }
                         cur_w = (int)gw;
