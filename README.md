@@ -178,9 +178,9 @@ echo "options open_gc573 led_mode=1" | sudo tee /etc/modprobe.d/open_gc573.conf
 > [!NOTE]
 > **EverLive is an active work in progress.** While 1440p @ 120 FPS is now jitter- and lag-free in initial physical hardware tests on PlayStation 5, the software remains **experimental** as wider multi-device configurations and edge cases continue to be hardened:
 >
-> - **HDMI Signal Loss on Game Switch (Known Bug):** When launching or closing games that dynamically change the console's video mode or refresh rate (e.g. switching between the 60 Hz PS5 home menu and a 120 Hz game like *The Finals*), the IT6805 HDMI receiver may occasionally fail to re-lock onto the changed TMDS clock.
->   - **Workaround:** Briefly unplug and re-plug the HDMI cable into the capture card or console to trigger an HDMI Hot-Plug (HPD) handshake.
->   - **Fix in Progress:** An automatic driver-side software HPD reset is being developed to handle mode switches seamlessly without physical cable replugging.
+> - **HDMI Signal Loss on Game / Mode Switch:** When launching or closing games that dynamically change the console's video mode or refresh rate (e.g. switching between the 60 Hz PS5 home menu and a 120 Hz game like *The Finals*), the IT6805 HDMI receiver may occasionally lose lock on the changed TMDS clock.
+>   - **Software Re-Sync (Theoretically eliminates cable replugging):** Simply click the **"🔄 Re-Sync"** button in EverLive Studio or press <kbd>h</kbd> / <kbd>r</kbd> inside the viewer window. This forces a software HDMI handshake and re-queries the new hardware timings automatically. Physical cable replugging should in theory no longer be necessary!
+>   - **Next Step:** A fully autonomous driver-side HPD re-lock handler is being developed to eliminate even the manual button press.
 > - **Frame Pacing & Compositor Considerations:** Thanks to direct V4L2 texture streaming with Wayland tearing hints (`SDL_VIDEO_WAYLAND_TEARING=1`), frame pacing is virtually jitter-free. Minor variance may still occur under heavy desktop background loads or compositors with strict presentation throttling.
 > - **Fluctuating 120 FPS Cadence:** The capture hardware's native HDMI clock runs at ~120.35 Hz. If your monitor is configured for a fixed refresh rate without Variable Refresh Rate (VRR), minor cadence mismatches can cause subtle micro-stutter during fast camera sweeps.
 > - **Active Development:** We are continuously optimizing the FPGA DMA queue depth, buffer recycling intervals, and multi-platform HDMI audio compatibility.
@@ -216,9 +216,9 @@ echo "options open_gc573 led_mode=1" | sudo tee /etc/modprobe.d/open_gc573.conf
 - In your KDE/GNOME audio settings under "Applications", ensure the stream **`gc573-audio`** is active and unmuted.
 
 #### 3. Signal lost after launching or closing a game (Mode / Rate Switch)
-- **Symptom:** Screen turns black or loses signal when switching between the 60 Hz console menu and a 120 Hz game mode (e.g. *The Finals*).
-- **Immediate Workaround:** Briefly unplug and re-insert the HDMI cable into the console or capture card to trigger an HDMI Hot-Plug Detect (HPD) renegotiation.
-- **Explanation:** Consoles switch HDMI TMDS clock frequencies when launching high-refresh modes. An automatic driver-level re-lock handler is currently in development to resolve this in software without cable replugging.
+- **Symptom:** Screen turns black or loses signal when switching between the 60 Hz console menu and a 120 Hz game mode (e.g. *The Finals*) or changing source video modes.
+- **Primary Solution (Software Re-Sync):** Press <kbd>h</kbd> or <kbd>r</kbd> on your keyboard, or click the **"🔄 Re-Sync"** button in the top toolbar of EverLive Studio. This forces a software HDMI renegotiation and re-latches onto the new timings immediately. Physically unplugging the HDMI cable should in theory no longer be necessary.
+- **Emergency Hardware Fallback:** Only if the hardware HDMI receiver enters an unresponsive lockup state should you briefly re-plug the HDMI cable into the capture card.
 
 #### 4. Secure Boot: "Loading of unsigned module is rejected"
 - **Symptom:** On distributions with UEFI Secure Boot enabled (e.g. Ubuntu, Linux Mint, Fedora), the kernel may reject loading out-of-tree drivers with `Loading of unsigned module is rejected` or `module verification failed`.
