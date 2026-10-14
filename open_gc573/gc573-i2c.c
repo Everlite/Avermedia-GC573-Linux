@@ -10,6 +10,7 @@
 #include <linux/mutex.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
+#include <linux/version.h>
 
 #include "gc573.h"
 
@@ -447,7 +448,11 @@ static u32 gc555_i2c_functionality(struct i2c_adapter *adapter)
 }
 
 static const struct i2c_algorithm gc555_i2c_algorithm = {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0)
 	.xfer = gc555_i2c_xfer,
+#else
+	.master_xfer = gc555_i2c_xfer,
+#endif
 	.functionality = gc555_i2c_functionality,
 };
 
