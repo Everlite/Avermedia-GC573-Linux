@@ -716,9 +716,11 @@ int main(int argc, char *argv[])
                                 update_fullscreen(window, !g_fullscreen);
                             }
                         }
-                        /* Exit button (hud_x + 595 .. + 645) */
+                        /* Exit button (hud_x + 595 .. + 645) - only active in standalone window */
                         else if (bx >= hud_x + 595 && bx <= hud_x + 645) {
-                            g_running = 0;
+                            if (g_embed_wid == 0) {
+                                g_running = 0;
+                            }
                         }
                     }
                 }
@@ -960,11 +962,13 @@ int main(int argc, char *argv[])
             SDL_RenderFillRect(renderer, &btn_full);
             draw_string(renderer, g_fullscreen ? "WNDW" : "FULL", hud_x + 539, hud_y + 18, 1, (SDL_Color){220, 230, 245, 255});
 
-            /* Exit Button */
-            SDL_Rect btn_exit = { hud_x + 596, hud_y + 10, 48, 24 };
-            SDL_SetRenderDrawColor(renderer, 150, 30, 30, 200);
-            SDL_RenderFillRect(renderer, &btn_exit);
-            draw_string(renderer, "EXIT", hud_x + 603, hud_y + 18, 1, (SDL_Color){255, 255, 255, 255});
+            /* Exit Button (only in standalone window) */
+            if (g_embed_wid == 0) {
+                SDL_Rect btn_exit = { hud_x + 596, hud_y + 10, 48, 24 };
+                SDL_SetRenderDrawColor(renderer, 150, 30, 30, 200);
+                SDL_RenderFillRect(renderer, &btn_exit);
+                draw_string(renderer, "EXIT", hud_x + 603, hud_y + 18, 1, (SDL_Color){255, 255, 255, 255});
+            }
         }
 
         /* 2. Top-Right Stats HUD Overlay (if enabled) */

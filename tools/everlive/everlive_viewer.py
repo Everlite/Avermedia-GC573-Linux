@@ -879,11 +879,20 @@ if HAS_QT:
                 self.streamer.resync()
                 self.update_status()
                 if was_running:
-                    QTimer.singleShot(250, self.auto_start_stream)
+                    QTimer.singleShot(600, lambda: self._wait_and_restart_after_resync(12))
             except Exception as e:
                 print(f"[!] Fehler bei HDMI Re-Sync: {e}")
             finally:
-                QTimer.singleShot(600, lambda: (setattr(self, "_resyncing", False), hasattr(self, "btn_resync") and self.btn_resync.setEnabled(True)))
+                QTimer.singleShot(2500, lambda: (setattr(self, "_resyncing", False), hasattr(self, "btn_resync") and self.btn_resync.setEnabled(True)))
+
+        def _wait_and_restart_after_resync(self, attempts=12):
+            if self.streamer.is_running:
+                return
+            sig = self.streamer.get_signal_info()
+            if sig.get("active") or attempts <= 1:
+                self.auto_start_stream()
+            else:
+                QTimer.singleShot(250, lambda: self._wait_and_restart_after_resync(attempts - 1))
 
         def auto_start_stream(self):
             if not self.streamer.is_running:
