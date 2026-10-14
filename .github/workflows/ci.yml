@@ -48,15 +48,21 @@ jobs:
 
       - name: Compile open_gc573 kernel driver (Clang/LLVM)
         run: |
-          make -C open_gc573 KDIR="${{ steps.kdir.outputs.kdir }}" LLVM=1 CC=clang
+          if grep -Eq "CONFIG_CC_IS_CLANG=y" "${{ steps.kdir.outputs.kdir }}/.config" "${{ steps.kdir.outputs.kdir }}/include/config/auto.conf" 2>/dev/null; then
+            echo "Kernel was built with Clang. Building module with LLVM=1 CC=clang..."
+            make -C open_gc573 KDIR="${{ steps.kdir.outputs.kdir }}" LLVM=1 CC=clang
+            make -C open_gc573 KDIR="${{ steps.kdir.outputs.kdir }}" clean
+          else
+            echo "Target kernel was compiled with GCC (CONFIG_CC_IS_GCC=y)."
+            echo "Skipping LLVM=1 kernel build as Kbuild flags include GCC-specific options (-fconserve-stack, etc.)."
+          fi
 
-      - name: Clean open_gc573 driver
-        run: |
-          make -C open_gc573 KDIR="${{ steps.kdir.outputs.kdir }}" clean
-
-      - name: Compile EverLive direct display renderer
+      - name: Compile EverLive direct display renderer (GCC & Clang)
         run: |
           gcc -O3 -Wall -Wextra tools/everlive/everlive_display.c -o tools/everlive/everlive_display $(sdl2-config --cflags --libs) -lX11 -lpthread -lm
+          rm tools/everlive/everlive_display
+          clang -O3 -Wall -Wextra tools/everlive/everlive_display.c -o tools/everlive/everlive_display $(sdl2-config --cflags --libs) -lX11 -lpthread -lm
+          rm tools/everlive/everlive_display
 
       - name: Verify Python syntax
         run: |
