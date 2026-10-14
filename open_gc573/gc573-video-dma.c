@@ -39,8 +39,8 @@
 #define GC555_VIDEO_DMA_DESCRIPTOR_CONTROL	0x80008000U
 #define GC555_VIDEO_DMA_STOP_TIMEOUT_MS		2000U
 #define GC555_VIDEO_DMA_WATCHDOG_INTERVAL_MS	250U
-/* Mode switches (e.g. 58Hz <-> 60Hz or HDR changes) take 1.5-2.5s to settle. */
-#define GC555_VIDEO_DMA_STALL_TIMEOUT_MS		3500U
+/* Even a 24 Hz stream should make substantial progress inside this bound. */
+#define GC555_VIDEO_DMA_STALL_TIMEOUT_MS		1000U
 
 struct gc555_video_dma_descriptor {
 	__le32 address_low;
@@ -470,10 +470,12 @@ static void gc555_video_dma_irq(void *context, u32 status,
 					gc555_video_dma_submit_ready_locked(video_dma);
 			} else if (video_dma->streaming &&
 				   !video_dma->stopping) {
-				gc555_video_dma_submit_ready_locked(video_dma);
+				video_dma->recovery_requested = true;
+				schedule_recovery = true;
 			}
 		} else if (video_dma->streaming && !video_dma->stopping) {
-			gc555_video_dma_submit_ready_locked(video_dma);
+			video_dma->recovery_requested = true;
+			schedule_recovery = true;
 		}
 		spin_unlock_irqrestore(&video_dma->state_lock, flags);
 	}
