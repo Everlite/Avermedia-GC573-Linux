@@ -20,8 +20,8 @@ echo "[*] Prüfe und bereinige geladene Module..."
 rmmod open_gc573 2>/dev/null || true
 
 if grep -q "^cx511h " /proc/modules; then
-    echo "[*] Entlade proprietären cx511h Treiber über unload.sh..."
-    "${REPO_ROOT}/unload.sh"
+    echo "[*] Entlade proprietären cx511h Treiber..."
+    rmmod cx511h 2>/dev/null || true
 fi
 
 echo "[*] Lade Kernel-Abhängigkeiten (v4l2-dv-timings, videobuf2, etc.)..."

@@ -67,7 +67,7 @@ make
 ```bash
 ./load.sh
 ```
-The script will unload any existing `cx511h` driver and load `open_gc573.ko`.
+The script will unload any previously running driver instance and cleanly load `open_gc573.ko`.
 
 ### Test Capture (1440p @ 120 FPS)
 ```bash

@@ -90,11 +90,7 @@ def find_gc573_vdev() -> str:
         except Exception:
             pass
 
-    # 4. Fallback: check existing video devices
-    for fallback in ["/dev/video2", "/dev/video0", "/dev/video1", "/dev/video3", "/dev/video4"]:
-        if os.path.exists(fallback):
-            return fallback
-
+    # Default fallback if card has not yet registered
     return "/dev/video0"
 
 

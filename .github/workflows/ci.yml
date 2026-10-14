@@ -1,0 +1,59 @@
+name: CI Build & Sanity Check
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            clang \
+            llvm \
+            linux-headers-generic \
+            libsdl2-dev \
+            libx11-dev \
+            python3
+
+      - name: Compile open_gc573 kernel driver (GCC)
+        run: |
+          make -C open_gc573
+
+      - name: Clean open_gc573 driver
+        run: |
+          make -C open_gc573 clean
+
+      - name: Compile open_gc573 kernel driver (Clang/LLVM)
+        run: |
+          make -C open_gc573 LLVM=1 CC=clang
+
+      - name: Clean open_gc573 driver
+        run: |
+          make -C open_gc573 clean
+
+      - name: Compile EverLive direct display renderer
+        run: |
+          gcc -O3 -Wall -Wextra tools/everlive/everlive_display.c -o tools/everlive/everlive_display $(sdl2-config --cflags --libs) -lX11 -lpthread -lm
+
+      - name: Verify Python syntax
+        run: |
+          python3 -m py_compile tools/everlive/everlive_viewer.py
+
+      - name: Verify shell script syntax
+        run: |
+          bash -n install.sh
+          bash -n uninstall.sh
+          bash -n play.sh
+          bash -n open_gc573/load.sh
+          bash -n open_gc573/unload.sh

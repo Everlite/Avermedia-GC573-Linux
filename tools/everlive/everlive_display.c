@@ -39,6 +39,7 @@ static const char *detect_vdev(void)
 {
     static char buf[64];
     glob_t g;
+    /* 1. Primary: Direct sysfs driver link for open_gc573 */
     if (glob("/sys/bus/pci/drivers/open_gc573/*/video4linux/video*", 0, NULL, &g) == 0 && g.gl_pathc > 0) {
         char *base = strrchr(g.gl_pathv[0], '/');
         if (base) {
@@ -49,10 +50,33 @@ static const char *detect_vdev(void)
         }
         globfree(&g);
     }
-    if (access("/dev/video2", F_OK) == 0) return "/dev/video2";
-    if (access("/dev/video0", F_OK) == 0) return "/dev/video0";
-    if (access("/dev/video1", F_OK) == 0) return "/dev/video1";
-    return "/dev/video0";
+    /* 2. Secondary: Scan V4L2 device names for GC573 / Live Gamer 4K */
+    if (glob("/sys/class/video4linux/video*/name", 0, NULL, &g) == 0) {
+        for (size_t i = 0; i < g.gl_pathc; i++) {
+            FILE *f = fopen(g.gl_pathv[i], "r");
+            if (f) {
+                char name[128];
+                if (fgets(name, sizeof(name), f)) {
+                    if (strstr(name, "Live Gamer 4K") || strstr(name, "GC573") || strstr(name, "open_gc573")) {
+                        fclose(f);
+                        char *vnode = strstr(g.gl_pathv[i], "video");
+                        if (vnode) {
+                            char *slash = strchr(vnode, '/');
+                            if (slash) *slash = '\0';
+                            snprintf(buf, sizeof(buf), "/dev/%s", vnode);
+                            globfree(&g);
+                            if (access(buf, F_OK) == 0)
+                                return buf;
+                        }
+                        break;
+                    }
+                }
+                fclose(f);
+            }
+        }
+        globfree(&g);
+    }
+    return NULL;
 }
 
 static const char *detect_adev(void)
@@ -326,6 +350,10 @@ int main(int argc, char *argv[])
 
     if (!vdev)
         vdev = detect_vdev();
+    if (!vdev) {
+        fprintf(stderr, "[Error] Kein GC573 V4L2-Gerät gefunden. Bitte prüfen, ob der Treiber geladen ist ('lsmod | grep gc573').\n");
+        return 1;
+    }
     if (!adev)
         adev = detect_adev();
 

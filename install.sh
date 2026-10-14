@@ -31,7 +31,8 @@ fi
 
 # Echten Benutzer ermitteln (nicht root)
 TARGET_USER="${SUDO_USER:-$USER}"
-TARGET_HOME=$(eval echo "~${TARGET_USER}")
+TARGET_HOME="$(getent passwd "${TARGET_USER}" 2>/dev/null | cut -d: -f6)"
+[ -z "${TARGET_HOME}" ] && TARGET_HOME="${HOME}"
 
 echo -e "[*] Ziel-Benutzer: ${GREEN}${TARGET_USER}${NC}"
 echo -e "[*] Linux Kernel : ${GREEN}$(uname -r)${NC}"
