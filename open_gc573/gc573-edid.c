@@ -4,7 +4,11 @@
 #include <linux/errno.h>
 #include <linux/kernel.h>
 #include <linux/string.h>
+#if __has_include(<linux/unaligned.h>)
 #include <linux/unaligned.h>
+#else
+#include <asm/unaligned.h>
+#endif
 
 #include <media/v4l2-dv-timings.h>
 

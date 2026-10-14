@@ -19,7 +19,11 @@
 #include <linux/mutex.h>
 #include <linux/regmap.h>
 #include <linux/slab.h>
+#if __has_include(<linux/unaligned.h>)
 #include <linux/unaligned.h>
+#else
+#include <asm/unaligned.h>
+#endif
 #include <linux/workqueue.h>
 
 #include "gc573.h"
