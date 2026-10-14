@@ -203,12 +203,14 @@ static int gc555_probe(struct pci_dev *pdev,
 	ret = device_create_file(&pdev->dev, &dev_attr_led_mode);
 	if (ret)
 		goto remove_input_edid;
-	(void)sysfs_chmod_file(&pdev->dev.kobj, &dev_attr_led_mode.attr, 0660);
+	if (sysfs_chmod_file(&pdev->dev.kobj, &dev_attr_led_mode.attr, 0660))
+		dev_warn(&pdev->dev, "Could not set permissions for led_mode to 0660\n");
 
 	ret = device_create_file(&pdev->dev, &dev_attr_hpd_pulse);
 	if (ret)
 		goto remove_led_mode;
-	(void)sysfs_chmod_file(&pdev->dev.kobj, &dev_attr_hpd_pulse.attr, 0660);
+	if (sysfs_chmod_file(&pdev->dev.kobj, &dev_attr_hpd_pulse.attr, 0660))
+		dev_warn(&pdev->dev, "Could not set permissions for hpd_pulse to 0660\n");
 
 	ret = gc555_it6805_init(gc555);
 	if (ret)

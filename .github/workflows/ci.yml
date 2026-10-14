@@ -26,21 +26,33 @@ jobs:
             libx11-dev \
             python3
 
+      - name: Locate Generic Kernel Headers
+        id: kdir
+        run: |
+          GENERIC_KDIR=$(find /usr/src -maxdepth 1 -name "linux-headers-*-generic" | sort -V | tail -n 1)
+          if [ -n "$GENERIC_KDIR" ] && [ -d "$GENERIC_KDIR" ]; then
+            echo "kdir=$GENERIC_KDIR" >> "$GITHUB_OUTPUT"
+            echo "Found generic kernel headers: $GENERIC_KDIR"
+          else
+            echo "kdir=/lib/modules/$(uname -r)/build" >> "$GITHUB_OUTPUT"
+            echo "Fallback to default build directory: /lib/modules/$(uname -r)/build"
+          fi
+
       - name: Compile open_gc573 kernel driver (GCC)
         run: |
-          make -C open_gc573
+          make -C open_gc573 KDIR="${{ steps.kdir.outputs.kdir }}"
 
       - name: Clean open_gc573 driver
         run: |
-          make -C open_gc573 clean
+          make -C open_gc573 KDIR="${{ steps.kdir.outputs.kdir }}" clean
 
       - name: Compile open_gc573 kernel driver (Clang/LLVM)
         run: |
-          make -C open_gc573 LLVM=1 CC=clang
+          make -C open_gc573 KDIR="${{ steps.kdir.outputs.kdir }}" LLVM=1 CC=clang
 
       - name: Clean open_gc573 driver
         run: |
-          make -C open_gc573 clean
+          make -C open_gc573 KDIR="${{ steps.kdir.outputs.kdir }}" clean
 
       - name: Compile EverLive direct display renderer
         run: |
