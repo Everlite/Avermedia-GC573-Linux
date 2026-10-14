@@ -573,44 +573,32 @@ int main(int argc, char *argv[])
 
     bool dragging_volume = false;
 
-    static int cur_w = 0, cur_h = 0;
-    static uint32_t last_geom_check = 0;
+    int cur_w = 0, cur_h = 0;
     while (g_running) {
         uint32_t now_ticks = SDL_GetTicks();
-        if (cur_w <= 0 || cur_h <= 0 || g_need_geom_check || (now_ticks - last_geom_check >= 100)) {
-            last_geom_check = now_ticks;
+        if (g_need_geom_check) {
             g_need_geom_check = 0;
             if (g_embed_wid > 0) {
-                static Display *x_dpy = NULL;
-                if (!x_dpy) x_dpy = XOpenDisplay(NULL);
+                Display *x_dpy = XOpenDisplay(NULL);
                 if (x_dpy) {
                     Window root;
                     int rx = 0, ry = 0;
                     unsigned int gw = 0, gh = 0, b = 0, d = 0;
                     if (XGetGeometry(x_dpy, (Window)g_embed_wid, &root, &rx, &ry, &gw, &gh, &b, &d) && gw > 0 && gh > 0) {
-                        int rw = 0, rh = 0;
-                        SDL_GetRendererOutputSize(renderer, &rw, &rh);
-                        static int last_rx = -1, last_ry = -1;
-                        if ((int)gw != rw || (int)gh != rh || rx != last_rx || ry != last_ry) {
-                            last_rx = rx;
-                            last_ry = ry;
-                            SDL_SetWindowPosition(window, rx, ry);
+                        int win_w = 0, win_h = 0;
+                        SDL_GetWindowSize(window, &win_w, &win_h);
+                        if ((int)gw != win_w || (int)gh != win_h) {
                             SDL_SetWindowSize(window, (int)gw, (int)gh);
                         }
-                        cur_w = (int)gw;
-                        cur_h = (int)gh;
                     }
+                    XCloseDisplay(x_dpy);
                 }
-            } else {
-                SDL_GetRendererOutputSize(renderer, &cur_w, &cur_h);
             }
-            if (cur_w <= 0 || cur_h <= 0) {
-                SDL_GetRendererOutputSize(renderer, &cur_w, &cur_h);
-            }
-            if (cur_w <= 0 || cur_h <= 0) {
-                cur_w = width;
-                cur_h = height;
-            }
+        }
+        SDL_GetRendererOutputSize(renderer, &cur_w, &cur_h);
+        if (cur_w <= 0 || cur_h <= 0) {
+            cur_w = width > 0 ? (int)width : 1920;
+            cur_h = height > 0 ? (int)height : 1080;
         }
 
         /* HUD dimensions */
@@ -732,11 +720,22 @@ int main(int argc, char *argv[])
                         globfree(&hg);
                         usleep(250000);
                     }
+                    enum v4l2_buf_type stype = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+                    ioctl(fd, VIDIOC_STREAMOFF, &stype);
                     struct v4l2_dv_timings new_dv = {};
                     if (ioctl(fd, VIDIOC_QUERY_DV_TIMINGS, &new_dv) == 0) {
-                        ioctl(fd, VIDIOC_S_DV_TIMINGS, &new_dv);
-                        printf("[*] HDMI Re-Sync: %ux%u\n", new_dv.bt.width, new_dv.bt.height);
+                        if (ioctl(fd, VIDIOC_S_DV_TIMINGS, &new_dv) == 0) {
+                            printf("[*] HDMI Re-Sync: %ux%u\n", new_dv.bt.width, new_dv.bt.height);
+                        }
                     }
+                    for (unsigned int i = 0; i < req.count; i++) {
+                        struct v4l2_buffer b = {};
+                        b.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+                        b.memory = V4L2_MEMORY_MMAP;
+                        b.index = i;
+                        ioctl(fd, VIDIOC_QBUF, &b);
+                    }
+                    ioctl(fd, VIDIOC_STREAMON, &stype);
                     snprintf(g_toast_custom, sizeof(g_toast_custom), "HDMI RE-SYNC");
                     g_toast_time = SDL_GetTicks();
                 }
