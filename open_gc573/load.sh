@@ -17,7 +17,20 @@ if [[ ! -f "${MODULE}" ]]; then
 fi
 
 echo "[*] Prüfe und bereinige geladene Module..."
-rmmod open_gc573 2>/dev/null || true
+pkill -f "everlive_display" 2>/dev/null || true
+pkill -f "arecord.*CARD=A4K" 2>/dev/null || true
+pkill -f "pw-cat.*GC573" 2>/dev/null || true
+sleep 0.2
+
+if grep -q "^open_gc573 " /proc/modules; then
+    rmmod open_gc573 2>/dev/null || rmmod -f open_gc573 2>/dev/null || true
+fi
+
+if grep -q "^open_gc573 " /proc/modules; then
+    echo "[!] Fehler: open_gc573 ist noch geladen und wird von einem Prozess blockiert."
+    echo "    Bitte prüfen mit: fuser -v /dev/video* /dev/snd/pcm*"
+    exit 1
+fi
 
 if grep -q "^cx511h " /proc/modules; then
     echo "[*] Entlade proprietären cx511h Treiber..."
