@@ -39,15 +39,11 @@ def save_settings(data: dict):
     except Exception:
         pass
 
-# Force X11 / xcb on Wayland so QWidget.winId() provides an X11 Window ID for mpv --wid embedding
-if "QT_QPA_PLATFORM" not in os.environ and os.environ.get("WAYLAND_DISPLAY"):
-    os.environ["QT_QPA_PLATFORM"] = "xcb"
-
 # PySide6 is optional when run with --cli
 try:
     from PySide6.QtWidgets import (
         QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-        QLabel, QPushButton, QComboBox, QCheckBox, QSlider, QFrame,
+        QGridLayout, QLabel, QPushButton, QComboBox, QCheckBox, QSlider, QFrame,
         QGroupBox, QMessageBox, QStackedLayout, QSizePolicy
     )
     from PySide6.QtCore import Qt, QTimer, QThread, Signal, QEvent
@@ -355,7 +351,7 @@ class GameStreamer:
         except Exception:
             return False
 
-    def start(self, preset_name: str = "Auto (HDMI Signal)", fullscreen: bool = False, volume: float = 1.0, wid: Optional[int] = None, vsync: bool = False) -> bool:
+    def start(self, preset_name: str = "Auto (HDMI Signal)", fullscreen: bool = False, volume: float = 1.0, vsync: bool = False) -> bool:
         if self.is_running:
             return True
 
@@ -398,14 +394,12 @@ class GameStreamer:
 
         if not self.force_mpv and os.path.isfile(native_bin) and os.access(native_bin, os.X_OK):
             cmd = [native_bin, "-d", self.vdev, "-a", self.adev]
-            if wid is not None:
-                cmd.extend(["-w", str(wid)])
-            elif fullscreen:
+            if fullscreen:
                 cmd.append("-f")
             if vsync:
                 cmd.append("--vsync")
             cmd.extend(["-v", f"{volume:.2f}"])
-            print(f"[*] Starte nativen EverLive Direct-Renderer (1-2 ms Hardware-Latenz): {' '.join(cmd)}")
+            print(f"[*] Starte nativen EverLive Direct-Renderer (Pure Native Wayland): {' '.join(cmd)}")
             try:
                 self.mpv_proc = subprocess.Popen(cmd, start_new_session=True)
                 self.is_running = True
@@ -441,19 +435,7 @@ class GameStreamer:
             "--input-default-bindings=yes",
         ]
 
-        mpv_env = dict(os.environ)
-        if wid is not None:
-            # Force X11 backend so mpv attaches directly to Qt XCB widget
-            mpv_env.pop("WAYLAND_DISPLAY", None)
-            mpv_cmd.extend([
-                f"--wid={wid}",
-                "--gpu-context=x11egl",
-                "--x11-bypass-compositor=no",
-                "--input-vo-keyboard=no",
-                "--input-cursor-passthrough=yes",
-                "--input-default-bindings=no",
-            ])
-        elif fullscreen:
+        if fullscreen:
             mpv_cmd.append("--fullscreen")
 
         try:
@@ -533,76 +515,45 @@ class GameStreamer:
 
 
 if HAS_QT:
-    class VideoViewport(QWidget):
-        """Native X11 window widget for direct embedded mpv rendering."""
-        def __init__(self, parent=None):
-            super().__init__(parent)
-            self.setAttribute(Qt.WA_NativeWindow, True)
-            self.setAttribute(Qt.WA_OpaquePaintEvent, True)
-            self.setStyleSheet("background-color: #050608;")
-            self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        def resizeEvent(self, event):
-            super().resizeEvent(event)
-            p = self.window()
-            if p and hasattr(p, "streamer") and p.streamer.mpv_proc:
-                try:
-                    p.streamer.mpv_proc.send_signal(signal.SIGWINCH)
-                except Exception:
-                    pass
-        def moveEvent(self, event):
-            super().moveEvent(event)
-            p = self.window()
-            if p and hasattr(p, "streamer") and p.streamer.mpv_proc:
-                try:
-                    p.streamer.mpv_proc.send_signal(signal.SIGWINCH)
-                except Exception:
-                    pass
-
-
     class MainWindow(QMainWindow):
         def __init__(self, streamer: GameStreamer, vsync: bool = False):
             super().__init__()
             self.streamer = streamer
             self.enable_vsync = vsync
-            self.is_fullscreen = False
             self.muted = False
             self.saved_cfg = load_settings()
 
             self.init_ui()
-
-            # Completely hide default QMainWindow menuBar & statusBar to eliminate top black bar offset in fullscreen
-            self.menuBar().hide()
-            self.menuBar().setFixedHeight(0)
-            self.statusBar().hide()
-            self.statusBar().setFixedHeight(0)
 
             # Signal monitor timer (1s polling)
             self.timer = QTimer(self)
             self.timer.timeout.connect(self.update_status)
             self.timer.start(1000)
 
-            # Auto-start stream inside viewport as soon as window is shown
-            QTimer.singleShot(200, self.auto_start_stream)
+            # Check if autostart is requested
+            if self.saved_cfg.get("autostart", False) or getattr(streamer, "_cli_autostart", False):
+                QTimer.singleShot(250, self.start_gaming_screen)
 
         def init_ui(self):
-            self.setWindowTitle("EverLive - Live Gamer 4K")
-            self.resize(1280, 780)
-            self.setMinimumSize(640, 420)
+            self.setWindowTitle("EverLive - Live Gamer 4K Console Hub")
+            self.resize(680, 520)
+            self.setMinimumSize(620, 480)
 
             # EverLive Dark Studio Theme
             self.setStyleSheet("""
                 QMainWindow {
-                    background-color: #0c0d12;
+                    background-color: #0b0d13;
                 }
-                QFrame#headerDeck {
-                    background-color: #141720;
-                    border-bottom: 1px solid #232736;
-                    padding: 4px 12px;
+                QFrame#cardFrame {
+                    background-color: #131722;
+                    border: 1px solid #232838;
+                    border-radius: 10px;
+                    padding: 14px;
                 }
                 QFrame#bottomBar {
                     background-color: #0f1118;
                     border-top: 1px solid #1c202e;
-                    padding: 2px 10px;
+                    padding: 4px 10px;
                 }
                 QLabel {
                     color: #e6edf3;
@@ -610,7 +561,7 @@ if HAS_QT:
                 }
                 QLabel#logoTitle {
                     color: #ffffff;
-                    font-size: 15px;
+                    font-size: 16px;
                     font-weight: 800;
                     letter-spacing: 0.5px;
                 }
@@ -619,7 +570,7 @@ if HAS_QT:
                     background-color: #2b1115;
                     border: 1px solid #5a1e25;
                     border-radius: 4px;
-                    padding: 2px 6px;
+                    padding: 2px 7px;
                     font-size: 10px;
                     font-weight: bold;
                     letter-spacing: 1px;
@@ -635,7 +586,7 @@ if HAS_QT:
                     color: #f0f6fc;
                     border: 1px solid #303749;
                     border-radius: 6px;
-                    padding: 4px 10px;
+                    padding: 6px 10px;
                     font-size: 12px;
                     min-height: 24px;
                 }
@@ -646,12 +597,20 @@ if HAS_QT:
                     border: none;
                     width: 20px;
                 }
+                QCheckBox {
+                    color: #c9d1d9;
+                    font-size: 12px;
+                    spacing: 6px;
+                }
+                QCheckBox:hover {
+                    color: #ffffff;
+                }
                 QPushButton {
                     background-color: #1f2533;
                     color: #e6edf3;
                     border: 1px solid #323b4e;
                     border-radius: 6px;
-                    padding: 5px 12px;
+                    padding: 6px 14px;
                     font-size: 12px;
                     font-weight: 600;
                 }
@@ -659,23 +618,29 @@ if HAS_QT:
                     background-color: #2b3346;
                     border-color: #58a6ff;
                 }
-                QPushButton#btnToggleLive {
-                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #da3633, stop:1 #f85149);
+                QPushButton#btnLaunchStart {
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1f7a37, stop:1 #2ea043);
                     color: white;
                     border: none;
+                    font-size: 15px;
                     font-weight: bold;
+                    border-radius: 8px;
+                    padding: 12px 20px;
                 }
-                QPushButton#btnToggleLive:hover {
-                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #f85149, stop:1 #ff7b72);
-                }
-                QPushButton#btnToggleStart {
-                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #238636, stop:1 #2ea043);
-                    color: white;
-                    border: none;
-                    font-weight: bold;
-                }
-                QPushButton#btnToggleStart:hover {
+                QPushButton#btnLaunchStart:hover {
                     background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #2ea043, stop:1 #3fb950);
+                }
+                QPushButton#btnLaunchStop {
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #b62324, stop:1 #da3633);
+                    color: white;
+                    border: none;
+                    font-size: 15px;
+                    font-weight: bold;
+                    border-radius: 8px;
+                    padding: 12px 20px;
+                }
+                QPushButton#btnLaunchStop:hover {
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #da3633, stop:1 #f85149);
                 }
                 QSlider::groove:horizontal {
                     height: 5px;
@@ -698,46 +663,119 @@ if HAS_QT:
             central_widget = QWidget()
             self.setCentralWidget(central_widget)
             root_layout = QVBoxLayout(central_widget)
-            root_layout.setContentsMargins(0, 0, 0, 0)
-            root_layout.setSpacing(0)
+            root_layout.setContentsMargins(18, 14, 18, 14)
+            root_layout.setSpacing(14)
 
             # -------------------------------------------------------------
-            # Top Deck: EverLive Branding & Quick Controls
+            # Top Bar: Brand, Badge & Signal Pill
             # -------------------------------------------------------------
-            self.header_deck = QFrame()
-            self.header_deck.setObjectName("headerDeck")
-            h_layout = QHBoxLayout(self.header_deck)
-            h_layout.setContentsMargins(12, 6, 12, 6)
-            h_layout.setSpacing(12)
+            top_bar = QHBoxLayout()
+            top_bar.setSpacing(10)
 
-            # Logo & Model
             lbl_logo = QLabel("🟣 EverLive")
             lbl_logo.setObjectName("logoTitle")
-            h_layout.addWidget(lbl_logo)
+            top_bar.addWidget(lbl_logo)
 
             lbl_badge = QLabel("LIVE GAMER 4K")
             lbl_badge.setObjectName("badgeModel")
-            h_layout.addWidget(lbl_badge)
+            top_bar.addWidget(lbl_badge)
 
-            # Dynamic Signal Pill
+            top_bar.addStretch(1)
+
             self.lbl_pill = QLabel("● PRÜFE SIGNAL...")
             self.lbl_pill.setObjectName("pillLive")
             self.lbl_pill.setStyleSheet("background-color: #2b2518; color: #d29922; border: 1px solid #7d5918;")
-            h_layout.addWidget(self.lbl_pill)
+            top_bar.addWidget(self.lbl_pill)
 
-            h_layout.addStretch(1)
+            root_layout.addLayout(top_bar)
 
-            # Resolution Preset
-            h_layout.addWidget(QLabel("Format:"))
+            # -------------------------------------------------------------
+            # Card 1: Hero Launcher (Separate Native Wayland Window)
+            # -------------------------------------------------------------
+            card_hero = QFrame()
+            card_hero.setObjectName("cardFrame")
+            v_hero = QVBoxLayout(card_hero)
+            v_hero.setSpacing(12)
+
+            h_sig_info = QHBoxLayout()
+            v_sig_text = QVBoxLayout()
+            v_sig_text.setSpacing(2)
+
+            self.lbl_hero_signal = QLabel("Warte auf HDMI-Signal...")
+            self.lbl_hero_signal.setStyleSheet("font-size: 15px; font-weight: bold; color: #ffffff;")
+            v_sig_text.addWidget(self.lbl_hero_signal)
+
+            self.lbl_hero_meta = QLabel("Prüfe Eingangsquelle (PS5 / Konsole)...")
+            self.lbl_hero_meta.setStyleSheet("font-size: 12px; color: #8b949e;")
+            v_sig_text.addWidget(self.lbl_hero_meta)
+
+            h_sig_info.addLayout(v_sig_text, 1)
+
+            lbl_engine_badge = QLabel("⚡ Pure Native Wayland")
+            lbl_engine_badge.setStyleSheet("""
+                background-color: #12281a; color: #3fb950; border: 1px solid #238636;
+                border-radius: 6px; padding: 4px 8px; font-size: 11px; font-weight: bold;
+            """)
+            h_sig_info.addWidget(lbl_engine_badge, 0, Qt.AlignVCenter)
+
+            v_hero.addLayout(h_sig_info)
+
+            # Big Action Launch Button
+            self.btn_launch = QPushButton("🎮 Gaming Screen starten")
+            self.btn_launch.setObjectName("btnLaunchStart")
+            self.btn_launch.setCursor(Qt.PointingHandCursor)
+            self.btn_launch.clicked.connect(self.toggle_stream)
+            v_hero.addWidget(self.btn_launch)
+
+            # Launch Options
+            h_opts = QHBoxLayout()
+            h_opts.setSpacing(18)
+
+            self.chk_fullscreen = QCheckBox("⛶ Direkt im Vollbild starten")
+            self.chk_fullscreen.setChecked(self.saved_cfg.get("fullscreen", True))
+            self.chk_fullscreen.toggled.connect(lambda val: save_settings({"fullscreen": val}))
+            h_opts.addWidget(self.chk_fullscreen)
+
+            self.chk_autostart = QCheckBox("⚡ Beim Start automatisch öffnen")
+            self.chk_autostart.setChecked(self.saved_cfg.get("autostart", False))
+            self.chk_autostart.toggled.connect(lambda val: save_settings({"autostart": val}))
+            h_opts.addWidget(self.chk_autostart)
+
+            self.chk_vsync = QCheckBox("🔒 VSync aktivieren (120 Hz Takt)")
+            self.chk_vsync.setChecked(self.saved_cfg.get("vsync", self.enable_vsync))
+            self.chk_vsync.toggled.connect(lambda val: save_settings({"vsync": val}))
+            h_opts.addWidget(self.chk_vsync)
+
+            h_opts.addStretch(1)
+            v_hero.addLayout(h_opts)
+
+            root_layout.addWidget(card_hero)
+
+            # -------------------------------------------------------------
+            # Card 2: Settings & Hardware Controls
+            # -------------------------------------------------------------
+            card_settings = QFrame()
+            card_settings.setObjectName("cardFrame")
+            grid = QGridLayout(card_settings)
+            grid.setHorizontalSpacing(14)
+            grid.setVerticalSpacing(12)
+
+            # Row 0: Preset & LED
+            lbl_preset = QLabel("Format / Preset:")
+            lbl_preset.setStyleSheet("font-weight: 600; color: #c9d1d9;")
+            grid.addWidget(lbl_preset, 0, 0)
+
             self.combo_presets = QComboBox()
             self.combo_presets.addItems(list(PRESETS.keys()))
             if "preset" in self.saved_cfg and self.saved_cfg["preset"] in PRESETS:
                 self.combo_presets.setCurrentText(self.saved_cfg["preset"])
             self.combo_presets.currentIndexChanged.connect(self.on_preset_changed)
-            h_layout.addWidget(self.combo_presets)
+            grid.addWidget(self.combo_presets, 0, 1)
 
-            # LED Lighting Combo
-            h_layout.addWidget(QLabel("LED:"))
+            lbl_led = QLabel("GC573 LED:")
+            lbl_led.setStyleSheet("font-weight: 600; color: #c9d1d9;")
+            grid.addWidget(lbl_led, 0, 2)
+
             self.combo_led = QComboBox()
             for name, val in LED_MODES.items():
                 self.combo_led.addItem(name, val)
@@ -757,176 +795,105 @@ if HAS_QT:
                 else:
                     self.combo_led.setEnabled(False)
             self.combo_led.currentIndexChanged.connect(self.on_led_changed)
-            h_layout.addWidget(self.combo_led)
+            grid.addWidget(self.combo_led, 0, 3)
 
-            # Audio Mute & Volume
+            # Row 1: Volume & Re-Sync
+            lbl_audio = QLabel("Lautstärke:")
+            lbl_audio.setStyleSheet("font-weight: 600; color: #c9d1d9;")
+            grid.addWidget(lbl_audio, 1, 0)
+
+            h_vol = QHBoxLayout()
+            h_vol.setSpacing(6)
             self.btn_mute = QPushButton("🔊")
-            self.btn_mute.setFixedWidth(36)
+            self.btn_mute.setFixedWidth(34)
             self.btn_mute.setCursor(Qt.PointingHandCursor)
             self.btn_mute.clicked.connect(self.toggle_mute)
-            h_layout.addWidget(self.btn_mute)
+            h_vol.addWidget(self.btn_mute)
 
             self.slider_vol = QSlider(Qt.Horizontal)
             self.slider_vol.setRange(0, 150)
             initial_vol = int(self.saved_cfg.get("volume", 1.0) * 100)
             self.slider_vol.setValue(initial_vol)
-            self.slider_vol.setFixedWidth(90)
             self.slider_vol.valueChanged.connect(self.on_volume_changed)
-            h_layout.addWidget(self.slider_vol)
+            h_vol.addWidget(self.slider_vol, 1)
 
             self.lbl_vol = QLabel(f"{initial_vol}%")
             self.lbl_vol.setFixedWidth(36)
             self.lbl_vol.setStyleSheet("color: #8b949e; font-size: 11px;")
-            h_layout.addWidget(self.lbl_vol)
+            h_vol.addWidget(self.lbl_vol)
+            grid.addLayout(h_vol, 1, 1)
 
-            # Stream Restart/Toggle Button
-            self.btn_toggle_stream = QPushButton("⏹ Stop")
-            self.btn_toggle_stream.setObjectName("btnToggleLive")
-            self.btn_toggle_stream.setCursor(Qt.PointingHandCursor)
-            self.btn_toggle_stream.clicked.connect(self.toggle_stream)
-            h_layout.addWidget(self.btn_toggle_stream)
+            lbl_sync = QLabel("HDMI Handshake:")
+            lbl_sync.setStyleSheet("font-weight: 600; color: #c9d1d9;")
+            grid.addWidget(lbl_sync, 1, 2)
 
-            # HDMI Re-Sync Button
-            self.btn_resync = QPushButton("🔄 Re-Sync")
+            self.btn_resync = QPushButton("🔄 HDMI Re-Sync")
             self.btn_resync.setCursor(Qt.PointingHandCursor)
-            self.btn_resync.setToolTip("HDMI Handshake & Signal neu aushandeln (Taste: H oder R)")
+            self.btn_resync.setToolTip("HDMI Handshake per Hardware-HPD neu auslösen (auch Taste 'H' im Spielfenster)")
             self.btn_resync.clicked.connect(self.force_resync)
-            h_layout.addWidget(self.btn_resync)
+            grid.addWidget(self.btn_resync, 1, 3)
 
-            # Fullscreen Button
-            self.btn_fs = QPushButton("⛶ Vollbild")
-            self.btn_fs.setCursor(Qt.PointingHandCursor)
-            self.btn_fs.clicked.connect(self.toggle_fullscreen)
-            h_layout.addWidget(self.btn_fs)
-
-            root_layout.addWidget(self.header_deck)
+            root_layout.addWidget(card_settings)
 
             # -------------------------------------------------------------
-            # Central Video Viewport (mpv embeds directly here)
+            # Bottom Info / Shortcut Guide
             # -------------------------------------------------------------
-            self.viewport = VideoViewport(central_widget)
-            self.viewport.installEventFilter(self)
-            root_layout.addWidget(self.viewport, 1)
+            bottom_box = QFrame()
+            bottom_box.setObjectName("bottomBar")
+            b_layout = QHBoxLayout(bottom_box)
+            b_layout.setContentsMargins(8, 4, 8, 4)
 
-            # -------------------------------------------------------------
-            # Bottom Status Bar
-            # -------------------------------------------------------------
-            self.bottom_bar = QFrame()
-            self.bottom_bar.setObjectName("bottomBar")
-            b_layout = QHBoxLayout(self.bottom_bar)
-            b_layout.setContentsMargins(10, 4, 10, 4)
-
-            self.lbl_vdev = QLabel(f"🎮 Video: {self.streamer.vdev}")
-            self.lbl_vdev.setStyleSheet("color: #8b949e; font-size: 11px;")
-            b_layout.addWidget(self.lbl_vdev)
-
-            self.btn_stats = QPushButton("📊 HUD Stats")
-            self.btn_stats.setCursor(Qt.PointingHandCursor)
-            self.btn_stats.setStyleSheet("""
-                QPushButton {
-                    background-color: #21262d; color: #c9d1d9; border: 1px solid #30363d;
-                    border-radius: 4px; padding: 4px 10px; font-size: 11px; font-weight: bold;
-                }
-                QPushButton:hover { background-color: #30363d; color: #58a6ff; border-color: #58a6ff; }
-            """)
-            self.btn_stats.clicked.connect(self.toggle_stats)
-            b_layout.addWidget(self.btn_stats)
+            lbl_vdev = QLabel(f"🎮 Video: {self.streamer.vdev} • Audio: {self.streamer.adev}")
+            lbl_vdev.setStyleSheet("color: #8b949e; font-size: 11px;")
+            b_layout.addWidget(lbl_vdev)
 
             b_layout.addStretch(1)
 
-            self.lbl_hint = QLabel("Tab: Stats • H/R: Re-Sync • Doppelklick / F11: Vollbild • M: Stumm • ESC: Fenster")
-            self.lbl_hint.setStyleSheet("color: #58a6ff; font-size: 11px;")
-            b_layout.addWidget(self.lbl_hint)
+            lbl_hints = QLabel("Im Spielfenster: Taste F = Vollbild • Tab = HUD Stats • M = Stumm • H = Re-Sync • Esc/Q = Beenden")
+            lbl_hints.setStyleSheet("color: #58a6ff; font-size: 11px;")
+            b_layout.addWidget(lbl_hints)
 
-            b_layout.addStretch(1)
+            root_layout.addWidget(bottom_box)
 
-            self.lbl_engine = QLabel("⚡ EverLive Direct-DMA Engine (< 2 ms Hardware-Latenz)")
-            self.lbl_engine.setStyleSheet("color: #3fb950; font-size: 11px; font-weight: bold;")
-            b_layout.addWidget(self.lbl_engine)
-
-            root_layout.addWidget(self.bottom_bar)
-
-            # Setup global shortcuts
-            QShortcut(QKeySequence("F11"), self, self.toggle_fullscreen)
-            QShortcut(QKeySequence("f"), self, self.toggle_fullscreen)
-            QShortcut(QKeySequence("Escape"), self, self.exit_fullscreen)
-            QShortcut(QKeySequence("Tab"), self, self.toggle_stats)
-            QShortcut(QKeySequence("i"), self, self.toggle_stats)
-            QShortcut(QKeySequence("h"), self, self.force_resync)
-            QShortcut(QKeySequence("r"), self, self.force_resync)
-            QShortcut(QKeySequence("m"), self, self.toggle_mute)
-            QShortcut(QKeySequence("q"), self, self.close)
-
+            # Initial status poll
             self.update_status()
-
-        def toggle_stats(self):
-            if self.streamer.mpv_proc and self.streamer.mpv_proc.poll() is None:
-                try:
-                    self.streamer.mpv_proc.send_signal(signal.SIGUSR1)
-                except Exception:
-                    pass
-
-        def force_resync(self, *args):
-            """Forces HDMI handshake renegotiation and restarts stream if active."""
-            if hasattr(self, "_resyncing") and self._resyncing:
-                return
-            self._resyncing = True
-            if hasattr(self, "btn_resync"):
-                self.btn_resync.setEnabled(False)
-            try:
-                was_running = self.streamer.is_running
-                if was_running:
-                    self.streamer.stop()
-                    self.btn_toggle_stream.setText("▶ Start")
-                    self.btn_toggle_stream.setObjectName("btnToggleStart")
-                    self.btn_toggle_stream.setStyle(self.btn_toggle_stream.style())
-                self.streamer.resync()
-                self.update_status()
-                if was_running:
-                    QTimer.singleShot(600, lambda: self._wait_and_restart_after_resync(12))
-            except Exception as e:
-                print(f"[!] Fehler bei HDMI Re-Sync: {e}")
-            finally:
-                QTimer.singleShot(2500, lambda: (setattr(self, "_resyncing", False), hasattr(self, "btn_resync") and self.btn_resync.setEnabled(True)))
-
-        def _wait_and_restart_after_resync(self, attempts=12):
-            if self.streamer.is_running:
-                return
-            sig = self.streamer.get_signal_info()
-            if sig.get("active") or attempts <= 1:
-                self.auto_start_stream()
-            else:
-                QTimer.singleShot(250, lambda: self._wait_and_restart_after_resync(attempts - 1))
-
-        def auto_start_stream(self):
-            if not self.streamer.is_running:
-                preset = self.combo_presets.currentText()
-                vol = self.slider_vol.value() / 100.0
-                wid = int(self.viewport.winId())
-                success = self.streamer.start(preset_name=preset, fullscreen=False, volume=vol, wid=wid, vsync=self.enable_vsync)
-                if success:
-                    self.btn_toggle_stream.setText("⏹ Stop")
-                    self.btn_toggle_stream.setObjectName("btnToggleLive")
-                    self.btn_toggle_stream.setStyle(self.btn_toggle_stream.style())
-                    set_audio_volume(self.slider_vol.value())
-                    QTimer.singleShot(600, lambda: set_audio_volume(self.slider_vol.value()))
-                    QTimer.singleShot(1500, lambda: set_audio_volume(self.slider_vol.value()))
 
         def toggle_stream(self):
             if self.streamer.is_running:
                 self.streamer.stop()
-                self.btn_toggle_stream.setText("▶ Start")
-                self.btn_toggle_stream.setObjectName("btnToggleStart")
-                self.btn_toggle_stream.setStyle(self.btn_toggle_stream.style())
+                self.btn_launch.setText("🎮 Gaming Screen starten")
+                self.btn_launch.setObjectName("btnLaunchStart")
+                self.btn_launch.setStyle(self.btn_launch.style())
             else:
-                self.auto_start_stream()
+                self.start_gaming_screen()
+
+        def start_gaming_screen(self):
+            if self.streamer.is_running:
+                return
+            preset = self.combo_presets.currentText()
+            vol = self.slider_vol.value() / 100.0
+            is_fs = self.chk_fullscreen.isChecked()
+            is_vsync = self.chk_vsync.isChecked()
+            save_settings({
+                "preset": preset,
+                "volume": vol,
+                "fullscreen": is_fs,
+                "vsync": is_vsync,
+            })
+            success = self.streamer.start(preset_name=preset, fullscreen=is_fs, volume=vol, vsync=is_vsync)
+            if success:
+                self.btn_launch.setText("⏹ Gaming Screen beenden")
+                self.btn_launch.setObjectName("btnLaunchStop")
+                self.btn_launch.setStyle(self.btn_launch.style())
+                set_audio_volume(self.slider_vol.value())
+                QTimer.singleShot(600, lambda: set_audio_volume(self.slider_vol.value()))
 
         def on_preset_changed(self):
             preset = self.combo_presets.currentText()
             save_settings({"preset": preset})
             if self.streamer.is_running:
                 self.streamer.stop()
-                QTimer.singleShot(150, self.auto_start_stream)
+                QTimer.singleShot(150, self.start_gaming_screen)
 
         def on_led_changed(self, index: int):
             mode = self.combo_led.currentData()
@@ -944,88 +911,60 @@ if HAS_QT:
             if not self.muted:
                 set_audio_volume(val)
 
-        def toggle_fullscreen(self):
-            if not self.is_fullscreen:
-                self.is_fullscreen = True
-                self.header_deck.hide()
-                self.bottom_bar.hide()
-                self.showFullScreen()
-                self.btn_fs.setText("⛶ Fenster")
+        def force_resync(self, *args):
+            """Forces HDMI handshake renegotiation and restarts stream if active."""
+            if hasattr(self, "_resyncing") and self._resyncing:
+                return
+            self._resyncing = True
+            if hasattr(self, "btn_resync"):
+                self.btn_resync.setEnabled(False)
+            try:
+                was_running = self.streamer.is_running
+                if was_running:
+                    self.streamer.stop()
+                    self.btn_launch.setText("🎮 Gaming Screen starten")
+                    self.btn_launch.setObjectName("btnLaunchStart")
+                    self.btn_launch.setStyle(self.btn_launch.style())
+                self.streamer.resync()
+                self.update_status()
+                if was_running:
+                    QTimer.singleShot(600, lambda: self._wait_and_restart_after_resync(12))
+            except Exception as e:
+                print(f"[!] Fehler bei HDMI Re-Sync: {e}")
+            finally:
+                QTimer.singleShot(2500, lambda: (setattr(self, "_resyncing", False), hasattr(self, "btn_resync") and self.btn_resync.setEnabled(True)))
+
+        def _wait_and_restart_after_resync(self, attempts=12):
+            if self.streamer.is_running:
+                return
+            sig = self.streamer.get_signal_info()
+            if sig.get("active") or attempts <= 1:
+                self.start_gaming_screen()
             else:
-                self.is_fullscreen = False
-                self.header_deck.show()
-                self.bottom_bar.show()
-                self.showNormal()
-                self.btn_fs.setText("⛶ Vollbild")
-
-            if hasattr(self, "streamer") and self.streamer.mpv_proc:
-                try:
-                    self.streamer.mpv_proc.send_signal(signal.SIGWINCH)
-                except Exception:
-                    pass
-            for delay in (50, 150, 300, 500):
-                QTimer.singleShot(delay, self.notify_streamer_winch)
-
-        def notify_streamer_winch(self):
-            if hasattr(self, "streamer") and self.streamer.mpv_proc:
-                try:
-                    self.streamer.mpv_proc.send_signal(signal.SIGWINCH)
-                except Exception:
-                    pass
-
-        def exit_fullscreen(self):
-            if self.is_fullscreen:
-                self.toggle_fullscreen()
-
-        def keyPressEvent(self, event):
-            if event.key() == Qt.Key_Escape:
-                if self.is_fullscreen:
-                    self.toggle_fullscreen()
-                    event.accept()
-                    return
-            elif event.key() in (Qt.Key_F11, Qt.Key_F):
-                self.toggle_fullscreen()
-                event.accept()
-                return
-            elif event.key() in (Qt.Key_Tab, Qt.Key_I):
-                self.toggle_stats()
-                event.accept()
-                return
-            elif event.key() in (Qt.Key_H, Qt.Key_R):
-                self.force_resync()
-                event.accept()
-                return
-            elif event.key() == Qt.Key_M:
-                self.toggle_mute()
-                event.accept()
-                return
-            elif event.key() == Qt.Key_Q:
-                self.close()
-                event.accept()
-                return
-            super().keyPressEvent(event)
-
-        def eventFilter(self, obj, event):
-            if obj == self.viewport:
-                if event.type() == QEvent.MouseButtonDblClick:
-                    self.toggle_fullscreen()
-                    return True
-            return super().eventFilter(obj, event)
+                QTimer.singleShot(250, lambda: self._wait_and_restart_after_resync(attempts - 1))
 
         def update_status(self):
+            # If the gaming screen is active, do NOT poll v4l2-ctl (avoids 1Hz I2C/V4L2 lock stalls)
+            if self.streamer.is_running:
+                if not self.streamer.poll():
+                    # Window was closed by user
+                    self.btn_launch.setText("🎮 Gaming Screen starten")
+                    self.btn_launch.setObjectName("btnLaunchStart")
+                    self.btn_launch.setStyle(self.btn_launch.style())
+                return
+
             info = self.streamer.get_signal_info()
             if info["locked"]:
                 hdr_str = f" • {info['hdr']}" if info.get("hdr") else ""
-                self.lbl_pill.setText(f"● LIVE {info['resolution']} @ {info['framerate']}{hdr_str}")
+                self.lbl_pill.setText(f"● LIVE: {info['resolution']} @ {info['framerate']}{hdr_str}")
                 self.lbl_pill.setStyleSheet("background-color: #12281a; color: #3fb950; border: 1px solid #238636;")
+                self.lbl_hero_signal.setText(f"HDMI Signal: {info['resolution']} @ {info['framerate']}")
+                self.lbl_hero_meta.setText(f"Status: Signal synchronisiert • Farbraum: {info.get('hdr', 'SDR')} • Audio: 8 Kanäle LPCM")
             else:
                 self.lbl_pill.setText("○ KEIN HDMI-SIGNAL")
                 self.lbl_pill.setStyleSheet("background-color: #2b1313; color: #f85149; border: 1px solid #7d2323;")
-
-            if self.streamer.is_running and not self.streamer.poll():
-                self.btn_toggle_stream.setText("▶ Start")
-                self.btn_toggle_stream.setObjectName("btnToggleStart")
-                self.btn_toggle_stream.setStyle(self.btn_toggle_stream.style())
+                self.lbl_hero_signal.setText("Warte auf HDMI-Signal...")
+                self.lbl_hero_meta.setText("Bitte HDMI-Quelle (z.B. PS5) einschalten und Kabelverbindung prüfen.")
 
         def closeEvent(self, event):
             self.streamer.stop()
@@ -1065,6 +1004,9 @@ def main():
             sys.exit(0)
 
     streamer = GameStreamer(vdev=args.device, adev=args.audio, force_mpv=args.mpv)
+    if args.fullscreen:
+        streamer._cli_autostart = True
+
     print(f"[*] GC573 Hardware: Video={streamer.vdev}, Audio={streamer.adev}")
 
     # Graceful shutdown on Ctrl+C
@@ -1092,8 +1034,6 @@ def main():
         app.setApplicationName("EverLive")
         window = MainWindow(streamer, vsync=args.vsync)
         window.show()
-        if args.fullscreen:
-            window.toggle_fullscreen()
         sys.exit(app.exec())
 
 

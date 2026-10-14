@@ -222,6 +222,7 @@ usermod -aG video,audio "${TARGET_USER}" 2>/dev/null || true
 echo -e "\n${BLUE}[5/5] Installiere EverLive Desktop-Starter ins Anwendungsmenü...${NC}"
 APPS_DIR="${TARGET_HOME}/.local/share/applications"
 mkdir -p "${APPS_DIR}"
+rm -f "${APPS_DIR}/gc573-ps5.desktop"
 
 cat > "${APPS_DIR}/everlive.desktop" <<EOF
 [Desktop Entry]

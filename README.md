@@ -49,11 +49,15 @@ After installation, simply launch the game screen from your application menu (**
 
 - **2560×1440 @ 120 FPS Verified on PlayStation 5:** 120.35 Hz HDMI 2.0 capture verified on real PS5 hardware (*The Finals*, *Fortnite 120Hz Mode*, PS5 Dashboard).
 - **Retro Scalers & Non-Integer Cadence (RetroTINK 4K, 59.94 Hz NTSC / 50 Hz PAL):** Built-in rate tolerance ($\pm 2\text{ Hz}$) and floating-point timing detection allow non-standard console timings, retro scalers (RetroTINK 4K Pro, OSSC), and NTSC framerates (59.94 Hz, 29.97 Hz, 119.88 Hz) to stream smoothly with exact two-decimal precision (e.g. `59.94 FPS (16.68ms)`).
-- **Low-Latency Direct Rendering (Experimental):** Direct engine optimizations (`everlive_display`) minimize micro-stutters and buffer-induced queue buildup in physical PS5 & scaler testing, delivering stable, responsive frame delivery (~1–3 ms internal DMA-to-texture upload pass).
+- **Low-Latency Native Direct Rendering (Experimental):** Direct engine optimizations (`everlive_display`) eliminate micro-stutters and buffer-induced queue buildup in physical PS5 & scaler testing. In initial physical tests on PlayStation 5 at 1440p @ 120 FPS over 15+ minutes of continuous fast-paced gameplay, the stream ran completely lag- and jitter-free (*still experimental, verified on PS5 120Hz hardware*).
 - **Aspect-Ratio-Preserving Centered Scaling (Letterbox / Pillarbox):** Preserves native aspect ratios across all display configurations. Displays clean black borders on 16:10 laptop screens, 21:9 ultrawide monitors, and 4:3 retro signals without stretching or visual distortion in both windowed and fullscreen modes.
-- **All-in-One EverLive Linux Studio (`everlive_viewer.py`):** Fully integrated desktop capture studio with an embedded live video viewport that auto-starts immediately upon launch. Features live signal diagnostics (e.g. `● LIVE 2560x1440 @ 120 FPS • HDR10`), on-the-fly resolution preset selection, dedicated **"🔄 Re-Sync"** HDMI handshake button, RGB lighting dropdown, real-time volume & mute controls, and double-click / <kbd>F11</kbd> borderless fullscreen.
+- **Pure Native Wayland Architecture (Console Hub + Dedicated Game Window):**
+  - **Why We Moved Away from Embedded X11 Windows:** Previous versions attempted to embed the video renderer into the Qt GUI via X11 window reparenting (`XReparentWindow` / `QT_QPA_PLATFORM=xcb`). Under modern Wayland compositors (KDE KWin, GNOME Mutter, Hyprland), nested X11 windows incur composite double-buffering, prevent Direct Scanout, break Wayland tearing protocols, and introduce micro-stutter due to compositor repaint mismatches.
+  - **The Modern Decoupled Solution:** EverLive now runs as a sleek **Console Hub** (native Wayland Qt UI) for configuration (presets, live signal diagnostics, on-the-fly RGB LED controls, volume slider, autostart), and launches the video stream as a **pure native Wayland display window** (`everlive_display`).
+  - **Direct Scanout & Zero-Overhead Tearing:** The standalone display window connects directly to Wayland protocols, enabling unthrottled presentation, adaptive sync / VRR, and Direct Scanout in fullscreen.
+  - **Zero Lock Contention During Gameplay:** While the gaming window is active, background V4L2/I2C hardware polling is automatically suspended so the HDMI receiver and PCIe DMA channels run completely uninterrupted.
 - **Dynamic On-the-Fly HDR Switching:** Seamlessly toggle HDR on or off on your console at any time without freezing the video stream or requiring a restart. The driver adapts its FPGA colorimetry dynamically on the fly.
-- **Sub-Frame Direct Render Pipeline:** Built-in native C direct rendering engine (`everlive_display`) maps V4L2 DMA buffers directly to GPU textures via SDL2 unthrottled presentation (with Wayland tearing support via Xwayland). The internal buffer-to-display pass takes ~1–3 ms as measured by monotonic timestamps (note: this measures the software upload step, excluding external HDMI link transmission, hardware capture processing, and physical monitor response).
+- **Sub-Frame Direct Render Pipeline:** Built-in native C direct rendering engine (`everlive_display`) maps V4L2 DMA buffers directly to GPU textures via SDL2 unthrottled presentation (with Wayland tearing support). The internal buffer-to-display pass takes ~1–3 ms as measured by monotonic timestamps (note: this measures the software upload step, excluding external HDMI link transmission, hardware capture processing, and physical monitor response).
 - **Universal Multi-Channel Audio Pipeline (7.1, 5.1 & Stereo):** Captures multi-channel console LPCM audio (8-channel 7.1 on PS5/Xbox/PC, 6-channel 5.1, or 2-channel stereo on Nintendo Switch/Steam Deck/retro consoles) with automatic PipeWire downmixing to any stereo headset or surround setup with low latency (including automatic ALSA `plughw` fallback).
 - **Hardware RGB LED Control & Live Switching (Breakthrough):**
   - **Cracked Factory Blinking Loop:** Reverse-engineered the Artix-7 FPGA MMIO lighting engine (BAR 0 `0x0800`–`0x086c` and script RAM `0x2008`), permanently solving the card's annoying factory red blinking on Linux without requiring Windows software.
@@ -68,11 +72,11 @@ After installation, simply launch the game screen from your application menu (**
 
 ---
 
-## 🎮 EverLive Desktop Studio (Windowed & Fullscreen)
+## 🎮 EverLive Desktop Studio & Console Hub
 
 ![EverLive Studio UI on Linux](docs/everlive_ui_windowed.png)
 
-*EverLive running in windowed studio mode on Linux (KDE Plasma Wayland): Live PS5 1440p HDMI stream with real-time HUD stats, LED hardware control, volume slider, and one-click fullscreen.*
+*EverLive Console Hub and Native Wayland Game Window: Live signal diagnostics, format selection, on-the-fly hardware RGB LED control, and seamless 1-click launch into pure Wayland direct presentation.*
 
 ---
 
@@ -91,16 +95,24 @@ https://github.com/Everlite/EverLive/raw/main/docs/thefinals_demo.mp4
 ## Architecture
 
 ```mermaid
-flowchart LR
-  ps5["PS5 / Console / HDMI Source"] -->|HDMI 2.0 1440p120| gc573["AVerMedia GC573"]
-  gc573 -->|PCIe SG-DMA Video| v4l2["/dev/video2"]
-  gc573 -->|PCIe SG-DMA Audio| alsa["hw:CARD=A4K,DEV=0"]
-  
-  v4l2 -->|Zero-Copy DMA mmap| renderer["EverLive Display Engine<br/>SDL2 Direct Texture Upload<br/>Latency: 1-3 ms"]
-  renderer -->|Unthrottled Tearing / VRR| screen["Monitor / 120 Hz Desktop"]
-  
-  alsa -->|48 kHz 8ch LPCM| pw["PipeWire Audio Bridge<br/>Latency: 10 ms"]
-  pw -->|Auto SIMD Downmix| speakers["Headset / Speakers"]
+flowchart TD
+  subgraph Hardware["Console & Hardware Layer"]
+    ps5["PS5 / Console (1440p @ 120 FPS)"] -->|HDMI 2.0| gc573["AVerMedia GC573 (Live Gamer 4K)"]
+    gc573 -->|PCIe SG-DMA Video (3 MMAP Buffers)| v4l2["V4L2 Video Device (/dev/video*)"]
+    gc573 -->|PCIe SG-DMA Audio (8ch LPCM)| alsa["ALSA PCM Capture (hw:CARD=A4K)"]
+    gc573 -.->|Hardware MMIO BAR0| sysfs["Sysfs RGB Control (/sys/.../led_mode)"]
+  end
+
+  subgraph EverLive["EverLive Linux Suite"]
+    hub["EverLive Console Hub (Qt / Wayland)<br/>• Preset Selection<br/>• RGB LED Control<br/>• Signal Monitor (Suspended in Game)"]
+    hub -.->|1-Click Launch| game["EverLive Display Engine (C / SDL2)<br/>Pure Native Wayland Window"]
+    
+    v4l2 -->|Zero-Copy DMA mmap| game
+    game -->|Direct Scanout / Tearing / VRR| screen["120 Hz Monitor / Desktop"]
+    
+    alsa -->|Low-Latency Bridge| pw["PipeWire Audio Engine"]
+    pw -->|Auto SIMD Downmix| speakers["Stereo Headset / Surround Sound"]
+  end
 ```
 
 ---

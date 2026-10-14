@@ -33,7 +33,7 @@
 #include <glob.h>
 #include "font8x8.h"
 
-#define BUFFER_COUNT 6
+#define BUFFER_COUNT 3
 
 static const char *detect_vdev(void)
 {
@@ -821,16 +821,6 @@ int main(int argc, char *argv[])
         if (ioctl(fd, VIDIOC_DQBUF, &buf) < 0)
             continue;
 
-        static uint32_t last_seq = 0;
-        static bool has_seq = false;
-        if (has_seq && buf.sequence <= last_seq) {
-            /* Out-of-order or duplicate frame: return immediately without rendering */
-            ioctl(fd, VIDIOC_QBUF, &buf);
-            continue;
-        }
-        last_seq = buf.sequence;
-        has_seq = true;
-
         /* Calculate exact capture-to-display latency */
         struct timespec now_ts;
         clock_gettime(CLOCK_MONOTONIC, &now_ts);
@@ -840,24 +830,20 @@ int main(int argc, char *argv[])
         if (lat_us < 0) lat_us = 0;
 
         /* Low-Latency Backlog Catch-Up:
-         * If latency exceeds 1.5 frame periods (> 13 ms at 120Hz or > 25 ms at 60Hz),
-         * a backlog has accumulated (e.g. from window resize, CPU hitch, or compositor stall).
-         * Drain immediately to the freshest frame so input latency stays minimal (< 8 ms)! */
-        uint64_t stale_thresh_us = (live_fps > 90.0) ? 13000 : 25000;
+         * Only trigger catch-up if latency exceeds > 2 full frame periods (> 18 ms at 120Hz or > 32 ms at 60Hz).
+         * In that case, check if a fresher buffer is already waiting in the queue.
+         * If so, fast-forward to the newest frame to keep input latency razor-sharp (< 8 ms)! */
+        uint64_t stale_thresh_us = (live_fps > 90.0) ? 18000 : 32000;
         if ((uint64_t)lat_us > stale_thresh_us) {
             struct v4l2_buffer next_buf = {};
             next_buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
             next_buf.memory = V4L2_MEMORY_MMAP;
-            while (ioctl(fd, VIDIOC_DQBUF, &next_buf) == 0) {
+            if (ioctl(fd, VIDIOC_DQBUF, &next_buf) == 0) {
                 ioctl(fd, VIDIOC_QBUF, &buf);
                 buf = next_buf;
-                last_seq = buf.sequence;
                 buf_time_us = (uint64_t)buf.timestamp.tv_sec * 1000000ULL + buf.timestamp.tv_usec;
                 lat_us = (int64_t)(now_us - buf_time_us);
                 if (lat_us < 0) lat_us = 0;
-                memset(&next_buf, 0, sizeof(next_buf));
-                next_buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-                next_buf.memory = V4L2_MEMORY_MMAP;
             }
         }
         lat_ms = (double)lat_us / 1000.0;
@@ -899,8 +885,8 @@ int main(int argc, char *argv[])
         uint64_t expected = (frame_delta_us < 12500) ? 8333 : 16666;
         int64_t diff = (int64_t)frame_delta_us - (int64_t)expected;
         if (diff < 0) diff = -diff;
-        /* Count jitter on delivery stalls (> 2.5 ms deviation) */
-        if (diff > 2500) {
+        /* Count jitter on genuine delivery stalls (> 5.5 ms deviation) */
+        if (diff > 5500) {
             jitter_count++;
         }
 
@@ -1056,6 +1042,9 @@ int main(int argc, char *argv[])
                 snprintf(title, sizeof(title), "EverLive - %ux%u @ %.2f FPS | Latenz: %.1f ms | Vol: %d%%",
                          width, height, live_fps, lat_ms, g_muted ? 0 : (int)(g_volume * 100.0f));
                 SDL_SetWindowTitle(window, title);
+                printf("[*] Stream: %ux%u @ %.2f FPS | Latenz: %.1f ms | Jitter: %u/s\n",
+                       width, height, live_fps, lat_ms, live_jitter);
+                fflush(stdout);
             }
         }
     }
