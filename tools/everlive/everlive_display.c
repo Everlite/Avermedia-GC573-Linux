@@ -33,7 +33,7 @@
 #include <glob.h>
 #include "font8x8.h"
 
-#define BUFFER_COUNT 3
+#define BUFFER_COUNT 6
 
 static const char *detect_vdev(void)
 {
@@ -326,10 +326,13 @@ int main(int argc, char *argv[])
     const char *vdev = NULL;
     const char *adev = NULL;
     bool start_fullscreen = false;
+    bool enable_vsync = false;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-f") || !strcmp(argv[i], "--fullscreen"))
             start_fullscreen = true;
+        else if (!strcmp(argv[i], "--vsync"))
+            enable_vsync = true;
         else if (!strcmp(argv[i], "-d") && i + 1 < argc)
             vdev = argv[++i];
         else if (!strcmp(argv[i], "-a") && i + 1 < argc)
@@ -345,13 +348,17 @@ int main(int argc, char *argv[])
         else if (!strcmp(argv[i], "--no-audio") || !strcmp(argv[i], "-n"))
             adev = "none";
         else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
-            printf("Usage: %s [-f|--fullscreen] [-d /dev/videoX] [-a hw:CARD,DEV|none] [-w wid] [--no-audio]\n", argv[0]);
+            printf("Usage: %s [-f|--fullscreen] [--vsync] [-d /dev/videoX] [-a hw:CARD,DEV|none] [-w wid] [--no-audio]\n", argv[0]);
             return 0;
         }
     }
 
-    /* Mesa / AMD Radeon GPU optimization: disable VBlank wait to eliminate swap stalls */
-    setenv("vblank_mode", "0", 1);
+    /* Mesa / AMD Radeon GPU optimization */
+    if (enable_vsync) {
+        setenv("vblank_mode", "1", 1);
+    } else {
+        setenv("vblank_mode", "0", 1);
+    }
     setenv("mesa_glthread", "true", 1);
 
     if (g_embed_wid > 0) {
@@ -484,10 +491,10 @@ int main(int argc, char *argv[])
     }
 
     /* Hints for lowest latency on Wayland & X11 */
-    SDL_SetHint(SDL_HINT_RENDER_VSYNC, "0");
+    SDL_SetHint(SDL_HINT_RENDER_VSYNC, enable_vsync ? "1" : "0");
     SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengl");
     SDL_SetHint(SDL_HINT_RENDER_BATCHING, "1");
-    SDL_SetHint("SDL_VIDEO_WAYLAND_TEARING", "1");
+    SDL_SetHint("SDL_VIDEO_WAYLAND_TEARING", enable_vsync ? "0" : "1");
     SDL_SetHint("SDL_VIDEO_WAYLAND_ALLOW_DATACONTROL", "1");
     if (start_fullscreen) {
         SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "1");
@@ -814,6 +821,16 @@ int main(int argc, char *argv[])
         if (ioctl(fd, VIDIOC_DQBUF, &buf) < 0)
             continue;
 
+        static uint32_t last_seq = 0;
+        static bool has_seq = false;
+        if (has_seq && buf.sequence <= last_seq) {
+            /* Out-of-order or duplicate frame: return immediately without rendering */
+            ioctl(fd, VIDIOC_QBUF, &buf);
+            continue;
+        }
+        last_seq = buf.sequence;
+        has_seq = true;
+
         /* Calculate exact capture-to-display latency */
         struct timespec now_ts;
         clock_gettime(CLOCK_MONOTONIC, &now_ts);
@@ -825,19 +842,22 @@ int main(int argc, char *argv[])
         /* Low-Latency Backlog Catch-Up:
          * If latency exceeds 1.5 frame periods (> 13 ms at 120Hz or > 25 ms at 60Hz),
          * a backlog has accumulated (e.g. from window resize, CPU hitch, or compositor stall).
-         * In that case, check if a fresher buffer is already waiting in the queue.
-         * If so, fast-forward to the newest frame to keep input latency razor-sharp (< 8 ms)! */
+         * Drain immediately to the freshest frame so input latency stays minimal (< 8 ms)! */
         uint64_t stale_thresh_us = (live_fps > 90.0) ? 13000 : 25000;
         if ((uint64_t)lat_us > stale_thresh_us) {
             struct v4l2_buffer next_buf = {};
             next_buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
             next_buf.memory = V4L2_MEMORY_MMAP;
-            if (ioctl(fd, VIDIOC_DQBUF, &next_buf) == 0) {
+            while (ioctl(fd, VIDIOC_DQBUF, &next_buf) == 0) {
                 ioctl(fd, VIDIOC_QBUF, &buf);
                 buf = next_buf;
+                last_seq = buf.sequence;
                 buf_time_us = (uint64_t)buf.timestamp.tv_sec * 1000000ULL + buf.timestamp.tv_usec;
                 lat_us = (int64_t)(now_us - buf_time_us);
                 if (lat_us < 0) lat_us = 0;
+                memset(&next_buf, 0, sizeof(next_buf));
+                next_buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+                next_buf.memory = V4L2_MEMORY_MMAP;
             }
         }
         lat_ms = (double)lat_us / 1000.0;

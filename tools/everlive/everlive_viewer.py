@@ -355,10 +355,11 @@ class GameStreamer:
         except Exception:
             return False
 
-    def start(self, preset_name: str = "Auto (HDMI Signal)", fullscreen: bool = False, volume: float = 1.0, wid: Optional[int] = None) -> bool:
+    def start(self, preset_name: str = "Auto (HDMI Signal)", fullscreen: bool = False, volume: float = 1.0, wid: Optional[int] = None, vsync: bool = False) -> bool:
         if self.is_running:
             return True
 
+        self.vsync = vsync
         if not os.path.exists(self.vdev):
             print(f"[!] Fehler: Videogerät {self.vdev} existiert nicht.")
             return False
@@ -401,6 +402,8 @@ class GameStreamer:
                 cmd.extend(["-w", str(wid)])
             elif fullscreen:
                 cmd.append("-f")
+            if vsync:
+                cmd.append("--vsync")
             cmd.extend(["-v", f"{volume:.2f}"])
             print(f"[*] Starte nativen EverLive Direct-Renderer (1-2 ms Hardware-Latenz): {' '.join(cmd)}")
             try:
@@ -557,9 +560,10 @@ if HAS_QT:
 
 
     class MainWindow(QMainWindow):
-        def __init__(self, streamer: GameStreamer):
+        def __init__(self, streamer: GameStreamer, vsync: bool = False):
             super().__init__()
             self.streamer = streamer
+            self.enable_vsync = vsync
             self.is_fullscreen = False
             self.muted = False
             self.saved_cfg = load_settings()
@@ -899,7 +903,7 @@ if HAS_QT:
                 preset = self.combo_presets.currentText()
                 vol = self.slider_vol.value() / 100.0
                 wid = int(self.viewport.winId())
-                success = self.streamer.start(preset_name=preset, fullscreen=False, volume=vol, wid=wid)
+                success = self.streamer.start(preset_name=preset, fullscreen=False, volume=vol, wid=wid, vsync=self.enable_vsync)
                 if success:
                     self.btn_toggle_stream.setText("⏹ Stop")
                     self.btn_toggle_stream.setObjectName("btnToggleLive")
@@ -1032,6 +1036,7 @@ def main():
     parser = argparse.ArgumentParser(description="EverLive - Live Gamer 4K Console Gaming Screen")
     parser.add_argument("-f", "--fullscreen", action="store_true", help="Direkt im Vollbild starten")
     parser.add_argument("-p", "--preset", default="Auto (HDMI Signal)", choices=list(PRESETS.keys()), help="Auflösungs-Preset")
+    parser.add_argument("--vsync", action="store_true", help="Aktiviert VSync für ruckelfreie Präsentation auf passenden Monitoren")
     parser.add_argument("--cli", action="store_true", help="Startet direkt ohne GUI")
     parser.add_argument("--mpv", action="store_true", help="Erzwingt mpv als Video-Engine anstelle von everlive_display")
     parser.add_argument("--led", type=str, default=None,
@@ -1076,7 +1081,7 @@ def main():
         if not info["locked"]:
             print("[!] Warnung: Es wurde aktuell kein aktives HDMI-Signal auf der GC573 erkannt.")
             print("    Bitte prüfen, ob die Quelle eingeschaltet ist und ein Bild ausgibt.")
-        if not streamer.start(preset_name=args.preset, fullscreen=args.fullscreen, volume=args.volume):
+        if not streamer.start(preset_name=args.preset, fullscreen=args.fullscreen, volume=args.volume, vsync=args.vsync):
             sys.exit(1)
         print("[+] Fenster geöffnet. Drücke 'q' im Fenster oder Strg+C zum Beenden.")
         while streamer.poll():
@@ -1085,7 +1090,7 @@ def main():
     else:
         app = QApplication(sys.argv)
         app.setApplicationName("EverLive")
-        window = MainWindow(streamer)
+        window = MainWindow(streamer, vsync=args.vsync)
         window.show()
         if args.fullscreen:
             window.toggle_fullscreen()
