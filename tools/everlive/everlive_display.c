@@ -33,7 +33,7 @@
 #include <glob.h>
 #include "font8x8.h"
 
-#define BUFFER_COUNT 4
+#define BUFFER_COUNT 3
 
 static const char *detect_vdev(void)
 {
@@ -276,7 +276,7 @@ static void *audio_supervisor_thread(void *arg)
     return NULL;
 }
 
-/* 8x8 Bitmap Text Rendering */
+/* 8x8 Bitmap Text Rendering (horizontal run-length batched for high performance) */
 static void draw_char(SDL_Renderer *r, char c, int x, int y, int scale, SDL_Color color)
 {
     uint8_t uc = (uint8_t)c;
@@ -285,10 +285,16 @@ static void draw_char(SDL_Renderer *r, char c, int x, int y, int scale, SDL_Colo
     SDL_SetRenderDrawColor(r, color.r, color.g, color.b, color.a);
     for (int row = 0; row < 8; row++) {
         uint8_t b = bitmap[row];
-        for (int col = 0; col < 8; col++) {
+        int col = 0;
+        while (col < 8) {
             if ((b >> col) & 1) {
-                SDL_Rect rc = { x + col * scale, y + row * scale, scale, scale };
+                int start_col = col;
+                while (col < 8 && ((b >> col) & 1))
+                    col++;
+                SDL_Rect rc = { x + start_col * scale, y + row * scale, (col - start_col) * scale, scale };
                 SDL_RenderFillRect(r, &rc);
+            } else {
+                col++;
             }
         }
     }
@@ -608,6 +614,18 @@ int main(int argc, char *argv[])
     bool dragging_volume = false;
 
     int cur_w = 0, cur_h = 0;
+
+    /* Drain any startup backlog accumulated during SDL, window & audio initialization */
+    struct v4l2_buffer drain_buf = {};
+    drain_buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    drain_buf.memory = V4L2_MEMORY_MMAP;
+    while (ioctl(fd, VIDIOC_DQBUF, &drain_buf) == 0) {
+        ioctl(fd, VIDIOC_QBUF, &drain_buf);
+        memset(&drain_buf, 0, sizeof(drain_buf));
+        drain_buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        drain_buf.memory = V4L2_MEMORY_MMAP;
+    }
+
     while (g_running) {
         uint32_t now_ticks = SDL_GetTicks();
         if (g_need_geom_check > 0) {
@@ -801,6 +819,25 @@ int main(int argc, char *argv[])
         uint64_t buf_time_us = (uint64_t)buf.timestamp.tv_sec * 1000000ULL + buf.timestamp.tv_usec;
         int64_t lat_us = (int64_t)(now_us - buf_time_us);
         if (lat_us < 0) lat_us = 0;
+
+        /* Low-Latency Backlog Catch-Up:
+         * If latency exceeds 1.5 frame periods (> 13 ms at 120Hz or > 25 ms at 60Hz),
+         * a backlog has accumulated (e.g. from window resize, CPU hitch, or compositor stall).
+         * In that case, check if a fresher buffer is already waiting in the queue.
+         * If so, fast-forward to the newest frame to keep input latency razor-sharp (< 8 ms)! */
+        uint64_t stale_thresh_us = (live_fps > 90.0) ? 13000 : 25000;
+        if ((uint64_t)lat_us > stale_thresh_us) {
+            struct v4l2_buffer next_buf = {};
+            next_buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+            next_buf.memory = V4L2_MEMORY_MMAP;
+            if (ioctl(fd, VIDIOC_DQBUF, &next_buf) == 0) {
+                ioctl(fd, VIDIOC_QBUF, &buf);
+                buf = next_buf;
+                buf_time_us = (uint64_t)buf.timestamp.tv_sec * 1000000ULL + buf.timestamp.tv_usec;
+                lat_us = (int64_t)(now_us - buf_time_us);
+                if (lat_us < 0) lat_us = 0;
+            }
+        }
         lat_ms = (double)lat_us / 1000.0;
 
         /* Direct GPU texture upload from DMA buffer */
