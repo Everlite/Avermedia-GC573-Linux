@@ -16,16 +16,24 @@
 #include <linux/pm.h>
 #include <linux/slab.h>
 #include <linux/sysfs.h>
+#include <linux/version.h>
 
 #include "gc573.h"
 
 #define GC555_BRIDGE_BAR		0
 #define GC555_INPUT_EDID_SIZE		256
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0)
 static ssize_t
 input_edid_read(struct file *file, struct kobject *kobj,
 		const struct bin_attribute *attr, char *buf, loff_t offset,
 		size_t count)
+#else
+static ssize_t
+input_edid_read(struct file *file, struct kobject *kobj,
+		struct bin_attribute *attr, char *buf, loff_t offset,
+		size_t count)
+#endif
 {
 	struct gc555_dev *gc555 = dev_get_drvdata(kobj_to_dev(kobj));
 	u8 edid[GC555_INPUT_EDID_SIZE];
@@ -42,7 +50,11 @@ input_edid_read(struct file *file, struct kobject *kobj,
 	return count;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0)
 static const struct bin_attribute input_edid_attr = {
+#else
+static struct bin_attribute input_edid_attr = {
+#endif
 	.attr = {
 		.name = "input_edid",
 		.mode = 0444,
@@ -153,10 +165,18 @@ static int gc555_probe(struct pci_dev *pdev,
 		return dev_err_probe(&pdev->dev, ret,
 				     "32-bit DMA is unavailable\n");
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0)
 	regs = pcim_iomap_region(pdev, GC555_BRIDGE_BAR, "gc555");
 	if (IS_ERR(regs))
 		return dev_err_probe(&pdev->dev, PTR_ERR(regs),
 				     "failed to map BAR0\n");
+#else
+	ret = pcim_iomap_regions(pdev, BIT(GC555_BRIDGE_BAR), "gc555");
+	if (ret)
+		return dev_err_probe(&pdev->dev, ret,
+				     "failed to map BAR0\n");
+	regs = pcim_iomap_table(pdev)[GC555_BRIDGE_BAR];
+#endif
 
 	gc555 = devm_kzalloc(&pdev->dev, sizeof(*gc555), GFP_KERNEL);
 	if (!gc555)
