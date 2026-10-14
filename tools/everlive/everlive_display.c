@@ -623,12 +623,7 @@ int main(int argc, char *argv[])
                         SDL_GetWindowSize(window, &win_w, &win_h);
                         if ((int)gw != win_w || (int)gh != win_h) {
                             SDL_SetWindowSize(window, (int)gw, (int)gh);
-                        }
-                        static int last_rx = -999, last_ry = -999;
-                        if (rx != last_rx || ry != last_ry) {
-                            last_rx = rx;
-                            last_ry = ry;
-                            SDL_SetWindowPosition(window, rx, ry);
+                            SDL_RenderSetViewport(renderer, NULL);
                         }
                     }
                     XCloseDisplay(x_dpy);
