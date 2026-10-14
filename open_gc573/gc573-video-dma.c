@@ -91,6 +91,7 @@ struct gc555_video_dma {
 	struct list_head ready_buffers;
 	struct list_head done_buffers;
 	struct gc555_video_dma_buffer *active[GC555_VIDEO_DMA_CHANNELS];
+	struct workqueue_struct *completion_wq;
 	struct work_struct completion_work;
 	struct delayed_work watchdog_work;
 	struct completion termination;
@@ -483,7 +484,8 @@ static void gc555_video_dma_irq(void *context, u32 status,
 	if (status & GC555_VIDEO_DMA_IRQ_TERMINATED)
 		complete(&video_dma->termination);
 	if (schedule_completion)
-		schedule_work(&video_dma->completion_work);
+		queue_work(video_dma->completion_wq,
+			   &video_dma->completion_work);
 	if (schedule_recovery)
 		mod_delayed_work(system_wq, &video_dma->watchdog_work, 0);
 }
@@ -867,7 +869,8 @@ int gc555_video_dma_queue(struct gc555_dev *gc555, void *cookie,
 	mutex_unlock(&video_dma->control_lock);
 
 	if (schedule_completion)
-		schedule_work(&video_dma->completion_work);
+		queue_work(video_dma->completion_wq,
+			   &video_dma->completion_work);
 	return ret;
 }
 
@@ -1088,9 +1091,17 @@ int gc555_video_dma_init(struct gc555_dev *gc555)
 			  gc555_video_dma_watchdog_work);
 	init_completion(&video_dma->termination);
 
+	video_dma->completion_wq = alloc_ordered_workqueue("gc573_dma",
+							   WQ_HIGHPRI | WQ_MEM_RECLAIM);
+	if (!video_dma->completion_wq) {
+		kfree(video_dma);
+		return -ENOMEM;
+	}
+
 	ret = gc555_dma_register_video_irq(gc555, gc555_video_dma_irq,
 					  video_dma);
 	if (ret) {
+		destroy_workqueue(video_dma->completion_wq);
 		kfree(video_dma);
 		return ret;
 	}
@@ -1111,6 +1122,8 @@ void gc555_video_dma_cleanup(struct gc555_dev *gc555)
 	video_dma = gc555->video_dma;
 	gc555_video_dma_stop(gc555);
 	gc555_dma_unregister_video_irq(gc555, video_dma);
+	if (video_dma->completion_wq)
+		destroy_workqueue(video_dma->completion_wq);
 	list_for_each_entry_safe(buffer, next, &video_dma->all_buffers,
 				 all_node) {
 		buffer->registered = false;

@@ -876,7 +876,7 @@ gc555_video_buffer_complete(void *cookie, u64 completion_ns, void *context)
 
 	last_published_ns = atomic64_read(&video->last_published_ns);
 	if (last_published_ns && completion_ns <= last_published_ns)
-		return GC555_VIDEO_DMA_RECYCLE;
+		completion_ns = last_published_ns + 1;
 
 	if (format->format == GC555_VIDEO_FORMAT_P010)
 		ret = gc555_video_unpack_p010(video, buffer,
