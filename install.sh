@@ -65,7 +65,7 @@ detect_and_install_deps() {
         ! command -v pw-play >/dev/null 2>&1 && MISSING_PKGS+=(pipewire)
         ! command -v wpctl >/dev/null 2>&1 && MISSING_PKGS+=(wireplumber)
         ! command -v mpv >/dev/null 2>&1 && MISSING_PKGS+=(mpv)
-        ! pacman -Q libxcb-cursor >/dev/null 2>&1 && MISSING_PKGS+=(libxcb-cursor)
+        ! pacman -Q xcb-util-cursor >/dev/null 2>&1 && MISSING_PKGS+=(xcb-util-cursor)
         ! sudo -u "${TARGET_USER}" python3 -c 'import PySide6' >/dev/null 2>&1 && MISSING_PKGS+=(pyside6)
         
         # Clang/LLVM Prüfen falls Kernel mit Clang gebaut wurde (z.B. CachyOS)
