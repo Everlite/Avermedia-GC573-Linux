@@ -70,6 +70,7 @@ struct gc555_fpga_video_config {
 	u32 output_width;
 	u32 output_height;
 	u32 input_frame_rate_hz;
+	u32 input_frame_rate_x100;
 	u32 output_frame_rate_hz;
 	enum gc555_video_input_class input_class;
 	enum gc555_video_encoding input_encoding;
@@ -1124,6 +1125,7 @@ gc555_fpga_build_video_config(const struct gc555_video_signal *input,
 		.output_width = output_width,
 		.output_height = output_height,
 		.input_frame_rate_hz = input->frame_rate_hz,
+		.input_frame_rate_x100 = input->frame_rate_x100,
 		.output_frame_rate_hz = output_frame_rate_hz,
 		.input_class = input->input_class,
 		.input_encoding = input->encoding,
@@ -1221,9 +1223,19 @@ gc555_fpga_configure_locked(struct gc555_fpga *fpga,
 	if (!ret)
 		ret = gc555_fpga_update_bits(fpga, GC555_FPGA_VIP_CTRL,
 					     BIT(5), 0);
-	if (!ret)
+	if (!ret) {
+		u32 frame_period;
+
+		if (config->input_frame_rate_x100 >= 500 &&
+		    config->input_frame_rate_x100 <= (GC555_FPGA_MAX_FRAME_RATE * 100))
+			frame_period = div_u64((u64)GC555_FPGA_CLOCK_HZ * 100,
+					       config->input_frame_rate_x100);
+		else
+			frame_period = GC555_FPGA_CLOCK_HZ / frame_rate;
+
 		ret = gc555_fpga_write(fpga, GC555_FPGA_VIP_FRAME_PERIOD,
-					GC555_FPGA_CLOCK_HZ / frame_rate);
+				       frame_period);
+	}
 	if (!ret)
 		ret = gc555_fpga_update_bits(fpga, GC555_FPGA_VIP_CTRL,
 					     BIT(7), 0);
@@ -1299,10 +1311,12 @@ int gc555_fpga_set_output_enabled(struct gc555_dev *gc555, bool enabled)
 	return ret;
 }
 
-int gc555_fpga_set_frame_rate(struct gc555_dev *gc555, u32 frame_rate_hz)
+int gc555_fpga_set_frame_rate(struct gc555_dev *gc555, u32 frame_rate_hz,
+			      u32 frame_rate_x100)
 {
 	struct gc555_fpga *fpga;
 	u32 frame_rate;
+	u32 frame_period;
 	int ret;
 
 	if (!gc555 || !gc555->fpga)
@@ -1310,12 +1324,19 @@ int gc555_fpga_set_frame_rate(struct gc555_dev *gc555, u32 frame_rate_hz)
 	fpga = gc555->fpga;
 	frame_rate = clamp(frame_rate_hz, 5U, GC555_FPGA_MAX_FRAME_RATE);
 
+	if (frame_rate_x100 >= 500 &&
+	    frame_rate_x100 <= (GC555_FPGA_MAX_FRAME_RATE * 100))
+		frame_period = div_u64((u64)GC555_FPGA_CLOCK_HZ * 100,
+				       frame_rate_x100);
+	else
+		frame_period = GC555_FPGA_CLOCK_HZ / frame_rate;
+
 	mutex_lock(&fpga->lock);
 	ret = gc555_fpga_update_bits(fpga, GC555_FPGA_VIP_FRAME_RATE,
 				     GENMASK(31, 16), frame_rate << 16);
 	if (!ret)
 		ret = gc555_fpga_write(fpga, GC555_FPGA_VIP_FRAME_PERIOD,
-				       GC555_FPGA_CLOCK_HZ / frame_rate);
+				       frame_period);
 	mutex_unlock(&fpga->lock);
 
 	return ret;

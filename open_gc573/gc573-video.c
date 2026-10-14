@@ -612,7 +612,7 @@ static void gc555_video_monitor_work(struct work_struct *work)
 			video->stream_signal.frame_rate_hz = signal.frame_rate_hz;
 			video->frame_rate_hz = signal.frame_rate_hz;
 			spin_unlock_irqrestore(&video->queue_lock, flags);
-			gc555_fpga_set_frame_rate(gc555, signal.frame_rate_hz);
+			gc555_fpga_set_frame_rate(gc555, signal.frame_rate_hz, signal.frame_rate_x100);
 		}
 		if ((signal.hdr_mode != video->stream_signal.hdr_mode ||
 		     signal.colorimetry != video->stream_signal.colorimetry) &&
@@ -859,7 +859,8 @@ gc555_video_buffer_complete(void *cookie, u64 completion_ns, void *context)
 		stream_signal.frame_rate_hz = current_signal.frame_rate_hz;
 		spin_unlock_irqrestore(&video->queue_lock, flags);
 		if (video->gc555)
-			gc555_fpga_set_frame_rate(video->gc555, current_signal.frame_rate_hz);
+			gc555_fpga_set_frame_rate(video->gc555, current_signal.frame_rate_hz,
+						  current_signal.frame_rate_x100);
 	}
 
 	if (current_signal.hdr_mode != stream_signal.hdr_mode ||

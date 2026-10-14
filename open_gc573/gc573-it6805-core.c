@@ -4294,6 +4294,7 @@ int gc555_it6805_get_video_signal(struct gc555_it6805 *it6805,
 	sample.height = it6805_active_height(runtime);
 	sample.pixel_clock_khz = runtime->timing.pixel_clock_khz;
 	sample.frame_rate_hz = runtime->timing.frame_rate_hz;
+	sample.frame_rate_x100 = runtime->timing.field_rate_x100;
 	sample.hfrontporch = runtime->timing.hfront;
 	sample.hsync = runtime->timing.hsync;
 	sample.hbackporch = runtime->timing.hback;

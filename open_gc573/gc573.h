@@ -182,6 +182,7 @@ struct gc555_video_signal {
 	u32 height;
 	u32 pixel_clock_khz;
 	u32 frame_rate_hz;
+	u32 frame_rate_x100;
 	u16 hfrontporch;
 	u16 hsync;
 	u16 hbackporch;
@@ -290,7 +291,8 @@ int gc555_fpga_set_output_enabled(struct gc555_dev *gc555, bool enabled);
 int gc555_fpga_set_color_control(struct gc555_dev *gc555,
 				 enum gc555_fpga_color_control control,
 				 u32 value);
-int gc555_fpga_set_frame_rate(struct gc555_dev *gc555, u32 frame_rate_hz);
+int gc555_fpga_set_frame_rate(struct gc555_dev *gc555, u32 frame_rate_hz,
+			      u32 frame_rate_x100);
 
 int gc555_link_init(struct gc555_dev *gc555);
 int gc555_link_get_video_signal(struct gc555_dev *gc555,

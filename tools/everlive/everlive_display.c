@@ -33,7 +33,7 @@
 #include <glob.h>
 #include "font8x8.h"
 
-#define BUFFER_COUNT 8
+#define BUFFER_COUNT 4
 
 static const char *detect_vdev(void)
 {
@@ -794,20 +794,6 @@ int main(int argc, char *argv[])
         if (ioctl(fd, VIDIOC_DQBUF, &buf) < 0)
             continue;
 
-        /* DRAIN: If multiple buffers arrived (e.g. during a presentation swap),
-         * dequeue until we reach the freshest one and return older ones immediately.
-         * This guarantees zero backlog, zero lag spikes, and perfect frame pacing! */
-        struct v4l2_buffer next_buf = {};
-        next_buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-        next_buf.memory = V4L2_MEMORY_MMAP;
-        while (ioctl(fd, VIDIOC_DQBUF, &next_buf) == 0) {
-            ioctl(fd, VIDIOC_QBUF, &buf);
-            buf = next_buf;
-            memset(&next_buf, 0, sizeof(next_buf));
-            next_buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-            next_buf.memory = V4L2_MEMORY_MMAP;
-        }
-
         /* Calculate exact capture-to-display latency */
         struct timespec now_ts;
         clock_gettime(CLOCK_MONOTONIC, &now_ts);
@@ -854,8 +840,8 @@ int main(int argc, char *argv[])
         uint64_t expected = (frame_delta_us < 12500) ? 8333 : 16666;
         int64_t diff = (int64_t)frame_delta_us - (int64_t)expected;
         if (diff < 0) diff = -diff;
-        /* Count jitter only on genuine delivery stalls (> 5.5 ms deviation) */
-        if (diff > 5500) {
+        /* Count jitter on delivery stalls (> 2.5 ms deviation) */
+        if (diff > 2500) {
             jitter_count++;
         }
 
