@@ -37,7 +37,7 @@ Unlike the proprietary vendor driver package, `open_gc573` requires **no binary 
                                      v
                        Xilinx Artix-7 FPGA (VIP)
                          (gc573-fpga.c)
-                         - Reg 0x103c: Frame Period (1.2375M cycles @ 120Hz)
+                         - Reg 0x103c: Frame Period (148.5 MHz / rate; fractional rate when known)
                          - Reg 0x1080: Target FPS (120 << 16)
                          - Reg 0x1088: Pixel Mode (0x3 = Dual-Px DDR)
                                      |
