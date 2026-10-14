@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 #include <linux/atomic.h>
+#include <linux/version.h>
 #include <linux/dma-mapping.h>
 #include <linux/errno.h>
 #include <linux/fs.h>
@@ -1671,7 +1672,9 @@ static const struct v4l2_ioctl_ops gc555_video_ioctl_ops = {
 	.vidioc_streamon = vb2_ioctl_streamon,
 	.vidioc_streamoff = vb2_ioctl_streamoff,
 	.vidioc_expbuf = vb2_ioctl_expbuf,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 10, 0)
 	.vidioc_remove_bufs = vb2_ioctl_remove_bufs,
+#endif
 	.vidioc_subscribe_event = gc555_video_subscribe_event,
 	.vidioc_unsubscribe_event = v4l2_event_unsubscribe,
 };
