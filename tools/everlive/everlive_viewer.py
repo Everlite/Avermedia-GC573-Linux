@@ -401,6 +401,7 @@ class GameStreamer:
                 cmd.extend(["-w", str(wid)])
             elif fullscreen:
                 cmd.append("-f")
+            cmd.extend(["-v", f"{volume:.2f}"])
             print(f"[*] Starte nativen EverLive Direct-Renderer (1-2 ms Hardware-Latenz): {' '.join(cmd)}")
             try:
                 self.mpv_proc = subprocess.Popen(cmd, start_new_session=True)
@@ -539,6 +540,14 @@ if HAS_QT:
             self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         def resizeEvent(self, event):
             super().resizeEvent(event)
+            p = self.window()
+            if p and hasattr(p, "streamer") and p.streamer.mpv_proc:
+                try:
+                    p.streamer.mpv_proc.send_signal(signal.SIGWINCH)
+                except Exception:
+                    pass
+        def moveEvent(self, event):
+            super().moveEvent(event)
             p = self.window()
             if p and hasattr(p, "streamer") and p.streamer.mpv_proc:
                 try:
@@ -887,6 +896,8 @@ if HAS_QT:
                     self.btn_toggle_stream.setObjectName("btnToggleLive")
                     self.btn_toggle_stream.setStyle(self.btn_toggle_stream.style())
                     set_audio_volume(self.slider_vol.value())
+                    QTimer.singleShot(600, lambda: set_audio_volume(self.slider_vol.value()))
+                    QTimer.singleShot(1500, lambda: set_audio_volume(self.slider_vol.value()))
 
         def toggle_stream(self):
             if self.streamer.is_running:
@@ -939,7 +950,8 @@ if HAS_QT:
                     self.streamer.mpv_proc.send_signal(signal.SIGWINCH)
                 except Exception:
                     pass
-            QTimer.singleShot(100, self.notify_streamer_winch)
+            for delay in (50, 150, 300, 500):
+                QTimer.singleShot(delay, self.notify_streamer_winch)
 
         def notify_streamer_winch(self):
             if hasattr(self, "streamer") and self.streamer.mpv_proc:

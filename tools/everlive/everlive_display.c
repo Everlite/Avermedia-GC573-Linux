@@ -147,12 +147,12 @@ static void sig_handler(int sig)
     stop_audio_pipeline();
 }
 
-static volatile sig_atomic_t g_need_geom_check = 1;
+static volatile sig_atomic_t g_need_geom_check = 30;
 
 static void sigwinch_handler(int sig)
 {
     (void)sig;
-    g_need_geom_check = 1;
+    g_need_geom_check = 30;
 }
 
 static void sigusr1_handler(int sig)
@@ -330,6 +330,12 @@ int main(int argc, char *argv[])
             adev = argv[++i];
         else if ((!strcmp(argv[i], "-w") || !strcmp(argv[i], "--wid")) && i + 1 < argc)
             g_embed_wid = (uintptr_t)strtoull(argv[++i], NULL, 0);
+        else if ((!strcmp(argv[i], "-v") || !strcmp(argv[i], "--volume")) && i + 1 < argc) {
+            float v = strtof(argv[++i], NULL);
+            if (v >= 0.0f && v <= 1.5f) {
+                g_volume = v;
+            }
+        }
         else if (!strcmp(argv[i], "--no-audio") || !strcmp(argv[i], "-n"))
             adev = "none";
         else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
@@ -604,8 +610,8 @@ int main(int argc, char *argv[])
     int cur_w = 0, cur_h = 0;
     while (g_running) {
         uint32_t now_ticks = SDL_GetTicks();
-        if (g_need_geom_check) {
-            g_need_geom_check = 0;
+        if (g_need_geom_check > 0) {
+            g_need_geom_check--;
             if (g_embed_wid > 0) {
                 Display *x_dpy = XOpenDisplay(NULL);
                 if (x_dpy) {
@@ -776,8 +782,9 @@ int main(int argc, char *argv[])
             } else if (ev.type == SDL_WINDOWEVENT) {
                 if (ev.window.event == SDL_WINDOWEVENT_RESIZED ||
                     ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED ||
-                    ev.window.event == SDL_WINDOWEVENT_EXPOSED) {
-                    g_need_geom_check = true;
+                    ev.window.event == SDL_WINDOWEVENT_EXPOSED ||
+                    ev.window.event == SDL_WINDOWEVENT_MOVED) {
+                    g_need_geom_check = 30;
                 }
             }
         }
