@@ -316,17 +316,7 @@ class GameStreamer:
                 info["resolution"] = f"{w}x{h}"
                 info["framerate"] = fps_str
 
-                try:
-                    fmt_out = subprocess.check_output(
-                        ["v4l2-ctl", "-d", self.vdev, "--get-fmt-video"],
-                        stderr=subprocess.DEVNULL, timeout=0.8
-                    ).decode()
-                    if "SMPTE 2084" in fmt_out or "P010" in fmt_out:
-                        info["hdr"] = "HDR10"
-                    else:
-                        info["hdr"] = "SDR"
-                except Exception:
-                    info["hdr"] = "SDR"
+                info["hdr"] = self.hdr_label() or "SDR"
         except Exception:
             # Kein aktiver HDMI-Signal-Lock über DV-Timings vorhanden
             info["locked"] = False
@@ -335,6 +325,34 @@ class GameStreamer:
             info["hdr"] = ""
 
         return info
+
+    def hdr_label(self, fallback: bool = True) -> str:
+        """SDR, HDR10 or HLG from the driver's cached metadata. No HDMI I2C."""
+        if not self.vdev or not os.path.exists(self.vdev):
+            return ""
+        try:
+            out = subprocess.check_output(
+                ["v4l2-ctl", "-d", self.vdev, "-C", "hdr_mode"],
+                stderr=subprocess.DEVNULL, timeout=0.8
+            ).decode()
+            for line in out.splitlines():
+                if "hdr_mode" in line and ":" in line:
+                    val = int(line.split(":")[-1].strip())
+                    return {0: "SDR", 1: "HDR10", 2: "HDR10", 3: "HLG"}.get(val, "SDR")
+        except Exception:
+            pass
+        if not fallback:
+            return ""
+        try:
+            fmt_out = subprocess.check_output(
+                ["v4l2-ctl", "-d", self.vdev, "--get-fmt-video"],
+                stderr=subprocess.DEVNULL, timeout=0.8
+            ).decode()
+            if "SMPTE 2084" in fmt_out or "P010" in fmt_out:
+                return "HDR10"
+        except Exception:
+            pass
+        return ""
 
     def resync(self) -> bool:
         """Forces hardware HDMI HPD re-sync and updates timings via v4l2-ctl query."""
@@ -943,23 +961,36 @@ if HAS_QT:
             else:
                 QTimer.singleShot(250, lambda: self._wait_and_restart_after_resync(attempts - 1))
 
+        def _show_live(self, info):
+            hdr_str = f" • {info['hdr']}" if info.get("hdr") else ""
+            self.lbl_pill.setText(f"● LIVE: {info['resolution']} @ {info['framerate']}{hdr_str}")
+            self.lbl_pill.setStyleSheet("background-color: #12281a; color: #3fb950; border: 1px solid #238636;")
+            self.lbl_hero_signal.setText(f"HDMI Signal: {info['resolution']} @ {info['framerate']}")
+            self.lbl_hero_meta.setText(f"Status: Signal synchronisiert • Farbraum: {info.get('hdr', 'SDR')} • Audio: 8 Kanäle LPCM")
+
         def update_status(self):
-            # If the gaming screen is active, do NOT poll v4l2-ctl (avoids 1Hz I2C/V4L2 lock stalls)
+            # While the gaming screen is open, only read the cached HDR control.
+            # query-dv-timings hits the HDMI receiver and stalls the stream.
             if self.streamer.is_running:
                 if not self.streamer.poll():
                     # Window was closed by user
                     self.btn_launch.setText("🎮 Gaming Screen starten")
                     self.btn_launch.setObjectName("btnLaunchStart")
                     self.btn_launch.setStyle(self.btn_launch.style())
+                    return
+                live = getattr(self, "_live", None)
+                hdr = self.streamer.hdr_label(fallback=False)
+                if live and live.get("locked") and hdr:
+                    live = dict(live)
+                    live["hdr"] = hdr
+                    self._live = live
+                    self._show_live(live)
                 return
 
             info = self.streamer.get_signal_info()
+            self._live = info
             if info["locked"]:
-                hdr_str = f" • {info['hdr']}" if info.get("hdr") else ""
-                self.lbl_pill.setText(f"● LIVE: {info['resolution']} @ {info['framerate']}{hdr_str}")
-                self.lbl_pill.setStyleSheet("background-color: #12281a; color: #3fb950; border: 1px solid #238636;")
-                self.lbl_hero_signal.setText(f"HDMI Signal: {info['resolution']} @ {info['framerate']}")
-                self.lbl_hero_meta.setText(f"Status: Signal synchronisiert • Farbraum: {info.get('hdr', 'SDR')} • Audio: 8 Kanäle LPCM")
+                self._show_live(info)
             else:
                 self.lbl_pill.setText("○ KEIN HDMI-SIGNAL")
                 self.lbl_pill.setStyleSheet("background-color: #2b1313; color: #f85149; border: 1px solid #7d2323;")

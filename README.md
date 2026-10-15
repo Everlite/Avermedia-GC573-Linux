@@ -57,9 +57,9 @@ After installation, launch **EverLive** from your application menu, or run:
   - **How it works now:** The **EverLive Console Hub** (Qt, runs natively on Wayland) handles setup: signal status, format preset, RGB LED, volume, HDMI re-sync and launch options. The video stream runs in its **own top-level window** (`everlive_display`, SDL2) that talks to the compositor directly.
   - **Native Wayland window:** If your SDL2 comes from **sdl2-compat / SDL3** (e.g. Arch, CachyOS), the game window is a native Wayland client. With classic SDL2 builds (e.g. older Ubuntu/Mint releases), SDL uses X11 by default, so on Wayland it runs through Xwayland. On X11 sessions it always runs natively.
   - **Non-blocking presentation:** VSync is off by default. Frames are presented as soon as they arrive and never wait for vblank. In fullscreen, compositors such as KWin can use direct scanout automatically. VSync can be turned on in the hub if you prefer.
-  - **No hardware polling while you play:** While the game window is open, the hub stops polling HDMI signal status (`v4l2-ctl`). This avoids a once-per-second stall on the HDMI receiver's I2C bus and the V4L2 device.
+  - **No HDMI polling while you play:** While the game window is open, the hub does not query DV timings. That avoids a once-per-second stall on the HDMI receiver's I2C bus. It still reads the cached `hdr_mode` control once a second, so the label can follow an HDR change.
 - **Aspect-ratio-preserving scaling (letterbox / pillarbox):** Keeps the source aspect ratio on 16:10, 21:9 and 4:3 setups with black borders and no stretching, in both windowed and fullscreen mode.
-- **Live HDR switching:** Toggle HDR on your console at any time without restarting the stream. The driver updates the colorimetry on the fly.
+- **Live HDR switching:** HDR10 (PQ) and HLG come from the HDMI DRM InfoFrame. At the same resolution the driver updates the color matrix only and leaves DMA running, so the game window stays up. The Console Hub label follows that metadata (`SDR`, `HDR10`, or `HLG`). Switching HDR on a PlayStation 5 during capture was verified. The pixels stay in the selected capture format (usually YUYV); PQ and HLG are not tone-mapped to SDR. P010 is the 10-bit capture format.
 - **Direct render pipeline:** `everlive_display` maps the V4L2 DMA buffers and uploads each frame to an SDL2 OpenGL texture (`SDL_UpdateTexture`). The HUD latency number is taken before that upload and before `SDL_RenderPresent`. It is not the time until the panel shows the frame.
 - **Multi-channel audio (7.1, 5.1 & stereo):** Captures console LPCM audio from ALSA (tries 8ch, then 6ch, then 2ch; falls back to `plughw` automatically) and plays it through PipeWire (`pw-play`, 10 ms latency target) as the stream **`gc573-audio`**. PipeWire mixes it down to your stereo headset or surround setup.
 - **Hardware RGB LED control (reverse-engineered):**
@@ -124,11 +124,11 @@ flowchart TD
   end
 
   subgraph EverLive["EverLive Linux Suite"]
-    hub["EverLive Console Hub (Qt)<br/>Presets, RGB, Volume, Re-Sync<br/>Signal polling paused while playing"]
+    hub["EverLive Console Hub (Qt)<br/>Presets, RGB, Volume, Re-Sync<br/>DV timings paused while playing"]
     hub -.->|Launch| game["everlive_display (C / SDL2)<br/>Separate top-level window<br/>Wayland or X11"]
     hub -.-> sysfs
 
-    v4l2 -->|"Zero-copy mmap, texture upload"| game
+    v4l2 -->|"mmap, then SDL texture upload"| game
     game -->|"VSync off by default"| screen["120 Hz Monitor"]
 
     alsa -->|arecord| pw["PipeWire (pw-play, 10 ms)"]
@@ -215,7 +215,7 @@ echo "options open_gc573 led_mode=1" | sudo tee /etc/modprobe.d/open_gc573.conf
 >
 > - **HDMI signal loss on game / mode switch:** When a game changes the console's video mode or refresh rate (e.g. from the 60 Hz PS5 home menu to a 120 Hz game like *The Finals*), the IT6805 HDMI receiver can occasionally lose lock.
 >   - **Software re-sync:** Click **🔄 HDMI Re-Sync** in the Console Hub or press <kbd>h</kbd> / <kbd>r</kbd> in the game window. This pulses HDMI hot-plug, re-queries the timings and restarts the stream. Replugging the cable is usually not necessary.
->   - **Next step:** An automatic re-lock handler in the driver is in development, so you won't need to press the button.
+>   - There is no automatic re-lock in the driver. Use the button or the hotkey.
 > - **Refresh-rate mismatch (120.35 Hz vs. 120.00 Hz):** The PS5 outputs ~120.35 Hz. On a fixed 120.00 Hz monitor with **VSync enabled**, the extra 0.35 frames per second build up, and one frame is dropped about every 3 seconds. With VSync off (default), presentation doesn't wait for vblank, so this doesn't happen.
 > - **SDL backend:** The game window runs natively on Wayland only with sdl2-compat / SDL3. With classic SDL2 it runs through Xwayland (see *Highlights*). You can force a backend with `SDL_VIDEODRIVER=wayland` or `SDL_VIDEODRIVER=x11`.
 > - **Active development:** DMA queue tuning, buffer recycling and HDMI audio compatibility across more sources are still being improved.

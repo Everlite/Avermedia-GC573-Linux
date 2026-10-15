@@ -15,7 +15,8 @@ Unlike the proprietary vendor driver package, `open_gc573` requires **no binary 
 - **1440p @ 120 FPS Native Capture:** Verified on real hardware (PlayStation 5 / PC). EDID and V4L2 mode tables advertise 2560×1440 @ 120 Hz CVT-RB. The ITE6805 under-read (~100 fps at ~413 MHz) is dynamically rescaled to 120, and VIP register `0x1080[31:16]` maintains unthrottled 120 FPS capture.
 - **Dynamic FPGA Clocking:** Automatically calculates and programs internal VIP Frame Period (`0x103c` @ 148.5 MHz) to prevent hardware frame rate decimation.
 - **High-Bandwidth DDR Dual-Pixel Mode:** Enables dual-pixel DDR mode (`0x3` in VIP Pixel Mode `0x1088`) for >400 MHz pixel clocks (1440p120, 4K60).
-- **Format Flexibility:** Supports NV12, YUYV (YUY2), RGB32, and P010 (HDR10).
+- **Format Flexibility:** Supports NV12, YUYV (YUY2), RGB32, and P010 (10-bit).
+- **Live HDR metadata:** PQ and HLG are classified from the DRM InfoFrame. A colorimetry or HDR change at the same resolution updates the color matrix and does not reset the VIP or DMA. Userspace reads the read-only V4L2 control `hdr_mode` (`0` SDR, `1` PQ, `2` PQ BT.2020, `3` HLG). YUYV PQ is reported as transfer function SMPTE 2084.
 - **ALSA Multi-Channel & Stereo HDMI Audio:** Native ALSA capture device supporting 8-channel (7.1 surround), 6-channel (5.1 surround), and 2-channel stereo LPCM.
 - **On-the-Fly Hardware RGB Control:** Sysfs attribute `led_mode` (BAR 0 `0x0800`–`0x086c` & script RAM `0x2008`) permanently solves the factory blinking loop and enables instant color switching (Off, Blue, Green, Red, Cyan, Magenta, Yellow, White) without stream restarts.
 - **Subsystem Auto-Detection:** Automatically binds to both PCIe GC573 (`1461:5730`) and Thunderbolt GC555 (`1461:5550`).
@@ -38,7 +39,7 @@ Unlike the proprietary vendor driver package, `open_gc573` requires **no binary 
                        Xilinx Artix-7 FPGA (VIP)
                          (gc573-fpga.c)
                          - Reg 0x103c: Frame Period (148.5 MHz / rate; fractional rate when known)
-                         - Reg 0x1080: Target FPS (120 << 16)
+                         - Reg 0x1080: Target FPS (rate << 16)
                          - Reg 0x1088: Pixel Mode (0x3 = Dual-Px DDR)
                                      |
                                      v

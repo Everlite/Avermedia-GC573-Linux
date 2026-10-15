@@ -1070,6 +1070,7 @@ gc555_fpga_validate_config(const struct gc555_fpga_video_config *config)
 	     !(native_4k_high_rate || native_4k_low_rate) &&
 	     !native_cea_yuv) ||
 	    (config->input_hdr_mode != GC555_VIDEO_HDR_SDR &&
+	     config->input_hdr_mode != GC555_VIDEO_HDR_HLG &&
 	     !native_hdr_p010) ||
 	    !input_mode_supported ||
 	    (!native_cea_yuv &&
@@ -1284,6 +1285,59 @@ int gc555_fpga_configure(struct gc555_dev *gc555,
 		gc555_fpga_update_bits(fpga, GC555_FPGA_VIP_CTRL, BIT(0), 0);
 	else
 		fpga->configured = true;
+	mutex_unlock(&fpga->lock);
+
+	return ret;
+}
+
+int gc555_fpga_update_color_path(struct gc555_dev *gc555,
+				 const struct gc555_video_signal *input,
+				 enum gc555_video_format output_format,
+				 u32 output_width, u32 output_height,
+				 u32 output_frame_rate_hz)
+{
+	struct gc555_fpga_video_config config;
+	struct gc555_fpga *fpga;
+	int ret;
+
+	if (!gc555 || !input)
+		return -EINVAL;
+	fpga = gc555->fpga;
+	if (!fpga)
+		return -ENODEV;
+
+	ret = gc555_fpga_build_video_config(input, output_format, output_width,
+					    output_height, output_frame_rate_hz,
+					    &config);
+	if (ret && ret != -EOPNOTSUPP)
+		return ret;
+
+	mutex_lock(&fpga->lock);
+	if (!fpga->configured)
+		ret = 0;
+	else
+		ret = gc555_fpga_program_color_path(fpga, &config);
+	mutex_unlock(&fpga->lock);
+
+	return ret;
+}
+
+int gc555_fpga_reset_vip(struct gc555_dev *gc555)
+{
+	struct gc555_fpga *fpga;
+	int ret;
+
+	if (!gc555 || !gc555->fpga)
+		return -ENODEV;
+
+	fpga = gc555->fpga;
+	mutex_lock(&fpga->lock);
+	fpga->configured = false;
+	ret = gc555_fpga_write(fpga, GC555_FPGA_VIP_RESET, 0);
+	if (!ret)
+		usleep_range(5000, 6000);
+	if (!ret)
+		ret = gc555_fpga_write(fpga, GC555_FPGA_VIP_RESET, 3);
 	mutex_unlock(&fpga->lock);
 
 	return ret;

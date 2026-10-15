@@ -609,6 +609,14 @@ static void gc555_video_dma_stop_locked(struct gc555_video_dma *video_dma,
 		dev_warn(video_dma->gc555->dev,
 			 "video DMA termination timed out\n");
 
+	/*
+	 * Watchdog stop: the VIP may already have been reset under a live
+	 * DMA. Pulse it back out of reset so the next STREAMON can arm it.
+	 */
+	if (!cancel_watchdog && was_streaming &&
+	    !gc555_dma_device_lost(video_dma->gc555))
+		gc555_fpga_reset_vip(video_dma->gc555);
+
 	if (hardware_accessible)
 		gc555_dma_update_register_bits(
 			video_dma->gc555, GC555_VIDEO_DMA_INTERRUPT_ENABLE,
@@ -949,11 +957,11 @@ int gc555_video_dma_start(struct gc555_dev *gc555)
 		mutex_unlock(&video_dma->control_lock);
 		return 0;
 	}
-	if (video_dma->failed) {
-		spin_unlock_irqrestore(&video_dma->state_lock, flags);
-		ret = -EPIPE;
-		goto unlock;
-	}
+	/*
+	 * start_streaming already reset the DMA engine and reprogrammed
+	 * the VIP. The flag only recorded the previous stall.
+	 */
+	video_dma->failed = false;
 	have_ready = !list_empty(&video_dma->ready_buffers);
 	spin_unlock_irqrestore(&video_dma->state_lock, flags);
 	if (!have_ready) {

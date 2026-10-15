@@ -71,6 +71,7 @@
 #define IT6805_DRM_PACKET_TYPE	0x87
 #define IT6805_DRM_EOTF_MASK	GENMASK(2, 0)
 #define IT6805_DRM_EOTF_PQ	2
+#define IT6805_DRM_EOTF_HLG	3
 #define IT6805_TMDS_SAMPLE_COUNT	10
 #define IT6805_TMDS_SAMPLE_DELAY_MS	10
 #define IT6805_TMDS_SAMPLE_BIAS	10
@@ -2896,12 +2897,16 @@ static enum gc555_video_hdr_mode
 it6805_classify_hdr(const struct it6805_runtime *runtime,
 		    const struct it6805_drm_info *drm)
 {
+	u8 eotf;
 	bool bt2020;
 
+	eotf = drm->static_metadata.eotf & IT6805_DRM_EOTF_MASK;
 	if (drm->raw[0] != IT6805_DRM_PACKET_TYPE ||
-	    (drm->static_metadata.eotf & IT6805_DRM_EOTF_MASK) !=
-	    IT6805_DRM_EOTF_PQ)
+	    (eotf != IT6805_DRM_EOTF_PQ && eotf != IT6805_DRM_EOTF_HLG))
 		return GC555_VIDEO_HDR_SDR;
+
+	if (eotf == IT6805_DRM_EOTF_HLG)
+		return GC555_VIDEO_HDR_HLG;
 
 	bt2020 = runtime->avi.colorimetry == 3 &&
 		 runtime->avi.extended_colorimetry >= 5 &&

@@ -818,8 +818,11 @@ int main(int argc, char *argv[])
         struct v4l2_buffer buf = {};
         buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         buf.memory = V4L2_MEMORY_MMAP;
-        if (ioctl(fd, VIDIOC_DQBUF, &buf) < 0)
+        if (ioctl(fd, VIDIOC_DQBUF, &buf) < 0) {
+            if (errno == EIO || errno == EPIPE || errno == ENODEV)
+                g_running = 0;
             continue;
+        }
 
         /* Calculate exact capture-to-display latency */
         struct timespec now_ts;

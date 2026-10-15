@@ -30,6 +30,7 @@
 
 #define GC555_VIDEO_MIN_QUEUED_BUFFERS	2U
 #define GC555_VIDEO_POLL_MS		100U
+#define GC555_CID_HDR_MODE		(V4L2_CID_USER_BASE + 0x1000)
 #define GC555_VIDEO_DEFAULT_WIDTH	1920U
 #define GC555_VIDEO_DEFAULT_HEIGHT	1080U
 #define GC555_VIDEO_DEFAULT_RATE	60U
@@ -400,7 +401,10 @@ gc555_video_set_colorimetry(const struct gc555_video_format_info *format,
 		pix->ycbcr_enc = V4L2_YCBCR_ENC_709;
 		break;
 	}
-	pix->xfer_func = V4L2_XFER_FUNC_DEFAULT;
+	pix->xfer_func = (signal &&
+			  (signal->hdr_mode == GC555_VIDEO_HDR_PQ ||
+			   signal->hdr_mode == GC555_VIDEO_HDR_PQ_BT2020)) ?
+		V4L2_XFER_FUNC_SMPTE2084 : V4L2_XFER_FUNC_DEFAULT;
 	pix->quantization = V4L2_QUANTIZATION_FULL_RANGE;
 }
 
@@ -448,6 +452,7 @@ static int gc555_video_get_volatile_ctrl(struct v4l2_ctrl *ctrl)
 	struct gc555_video *video =
 		container_of(ctrl->handler, struct gc555_video, ctrl_handler);
 	struct gc555_dev *gc555 = READ_ONCE(video->gc555);
+	unsigned long flags;
 	bool present;
 	int ret;
 
@@ -460,6 +465,12 @@ static int gc555_video_get_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		if (!ret)
 			ctrl->val = present;
 		return ret;
+	case GC555_CID_HDR_MODE:
+		spin_lock_irqsave(&video->queue_lock, flags);
+		ctrl->val = video->signal_valid ?
+			video->cached_signal.hdr_mode : GC555_VIDEO_HDR_SDR;
+		spin_unlock_irqrestore(&video->queue_lock, flags);
+		return 0;
 	default:
 		return -EINVAL;
 	}
@@ -500,6 +511,18 @@ static const struct v4l2_ctrl_ops gc555_video_ctrl_ops = {
 	.g_volatile_ctrl = gc555_video_get_volatile_ctrl,
 };
 
+static const struct v4l2_ctrl_config gc555_ctrl_hdr_mode = {
+	.ops = &gc555_video_ctrl_ops,
+	.id = GC555_CID_HDR_MODE,
+	.name = "hdr_mode",
+	.type = V4L2_CTRL_TYPE_INTEGER,
+	.min = GC555_VIDEO_HDR_SDR,
+	.max = GC555_VIDEO_HDR_HLG,
+	.step = 1,
+	.def = GC555_VIDEO_HDR_SDR,
+	.flags = V4L2_CTRL_FLAG_READ_ONLY | V4L2_CTRL_FLAG_VOLATILE,
+};
+
 static bool gc555_video_signal_equal(const struct gc555_video_signal *a,
 				     const struct gc555_video_signal *b)
 {
@@ -521,9 +544,9 @@ gc555_video_stream_compatible(const struct gc555_video_signal *sample,
 {
 	/*
 	 * Frame transport dimensions and bus layout must match.
-	 * HDR and colorimetry changes (e.g. toggling HDR on/off on console)
-	 * are handled dynamically in the DMA completion callback without
-	 * dropping frames or requiring a stream restart.
+	 * HDR and colorimetry changes keep the same pixel layout.
+	 * The monitor updates the color matrix only. A full VIP
+	 * reconfigure while DMA is live stops the engine.
 	 */
 	return sample->width == stream->width &&
 	       sample->height == stream->height &&
@@ -625,11 +648,18 @@ static void gc555_video_monitor_work(struct work_struct *work)
 			video->stream_signal.hdr_mode = signal.hdr_mode;
 			video->stream_signal.colorimetry = signal.colorimetry;
 			spin_unlock_irqrestore(&video->queue_lock, flags);
-			gc555_fpga_configure(gc555, &signal,
-					     video->format_info->format,
-					     video->pix.width, video->pix.height,
-					     signal.frame_rate_hz);
+			ret = gc555_fpga_update_color_path(gc555, &signal,
+							  video->format_info->format,
+							  video->pix.width,
+							  video->pix.height,
+							  signal.frame_rate_hz);
+			if (ret)
+				dev_warn(gc555->dev,
+					 "HDR color path update failed: %d\n",
+					 ret);
 		}
+		gc555_video_set_colorimetry(video->format_info, &signal,
+					    &video->pix);
 	}
 	if (device_lost && vb2_is_streaming(&video->queue))
 		vb2_queue_error(&video->queue);
@@ -864,15 +894,8 @@ gc555_video_buffer_complete(void *cookie, u64 completion_ns, void *context)
 	}
 
 	if (current_signal.hdr_mode != stream_signal.hdr_mode ||
-	    current_signal.colorimetry != stream_signal.colorimetry) {
-		spin_lock_irqsave(&video->queue_lock, flags);
-		video->stream_signal.hdr_mode = current_signal.hdr_mode;
-		video->stream_signal.colorimetry = current_signal.colorimetry;
-		stream_signal.hdr_mode = current_signal.hdr_mode;
-		stream_signal.colorimetry = current_signal.colorimetry;
-		spin_unlock_irqrestore(&video->queue_lock, flags);
+	    current_signal.colorimetry != stream_signal.colorimetry)
 		mod_delayed_work(system_wq, &video->monitor_work, 0);
-	}
 
 	last_published_ns = atomic64_read(&video->last_published_ns);
 	if (last_published_ns && completion_ns <= last_published_ns)
@@ -1550,6 +1573,8 @@ static const char *gc555_video_hdr_name(enum gc555_video_hdr_mode hdr)
 		return "HDR10 PQ";
 	case GC555_VIDEO_HDR_PQ_BT2020:
 		return "HDR10 PQ BT.2020";
+	case GC555_VIDEO_HDR_HLG:
+		return "HLG";
 	}
 
 	return "unknown";
@@ -1729,7 +1754,7 @@ int gc555_video_init(struct gc555_dev *gc555)
 		goto free_video;
 	video->v4l2_dev.release = gc555_video_final_release;
 
-	v4l2_ctrl_handler_init(&video->ctrl_handler, 5);
+	v4l2_ctrl_handler_init(&video->ctrl_handler, 6);
 	v4l2_ctrl_new_std(&video->ctrl_handler, &gc555_video_ctrl_ops,
 			  V4L2_CID_BRIGHTNESS, 0, 0x3ff, 1, 0x200);
 	v4l2_ctrl_new_std(&video->ctrl_handler, &gc555_video_ctrl_ops,
@@ -1744,6 +1769,7 @@ int gc555_video_init(struct gc555_dev *gc555)
 	if (power_present)
 		power_present->flags |= V4L2_CTRL_FLAG_READ_ONLY |
 					V4L2_CTRL_FLAG_VOLATILE;
+	v4l2_ctrl_new_custom(&video->ctrl_handler, &gc555_ctrl_hdr_mode, NULL);
 	ret = video->ctrl_handler.error;
 	if (ret)
 		goto put_v4l2_device;

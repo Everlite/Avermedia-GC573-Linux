@@ -154,6 +154,7 @@ enum gc555_video_hdr_mode {
 	GC555_VIDEO_HDR_SDR,
 	GC555_VIDEO_HDR_PQ,
 	GC555_VIDEO_HDR_PQ_BT2020,
+	GC555_VIDEO_HDR_HLG,
 };
 
 enum gc555_hdcp_level {
@@ -291,6 +292,12 @@ int gc555_fpga_set_output_enabled(struct gc555_dev *gc555, bool enabled);
 int gc555_fpga_set_color_control(struct gc555_dev *gc555,
 				 enum gc555_fpga_color_control control,
 				 u32 value);
+int gc555_fpga_update_color_path(struct gc555_dev *gc555,
+				 const struct gc555_video_signal *input,
+				 enum gc555_video_format output_format,
+				 u32 output_width, u32 output_height,
+				 u32 output_frame_rate_hz);
+int gc555_fpga_reset_vip(struct gc555_dev *gc555);
 int gc555_fpga_set_frame_rate(struct gc555_dev *gc555, u32 frame_rate_hz,
 			      u32 frame_rate_x100);
 
