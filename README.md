@@ -76,9 +76,9 @@ After installation, launch **EverLive** from your application menu, or run:
 
 ## 🎮 EverLive Console Hub & Game Window
 
-![EverLive on Linux](docs/everlive_ui_windowed.png)
+![EverLive on Linux](docs/everlive_hub_window.png)
 
-*Screenshot of the previous embedded "studio" layout. The current version opens the stream in a separate native game window launched from the Console Hub. A new screenshot will follow.*
+*Console Hub on the desktop, capture in its own window. The hub does not embed the video.*
 
 **Console Hub (`everlive_viewer.py`):**
 - Live HDMI signal status (e.g. `● LIVE: 2560x1440 @ 120.35 FPS • SDR`)
