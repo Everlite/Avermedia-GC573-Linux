@@ -51,9 +51,12 @@ After installation, launch **EverLive** from your application menu, or run:
 ## Highlights & Verified Capabilities
 
 - **2560×1440 @ 120 FPS verified on PlayStation 5:** 120.35 Hz HDMI 2.0 capture verified on real PS5 hardware (*The Finals*, *Fortnite 120Hz Mode*, PS5 Dashboard).
-- **Retro scalers & non-integer refresh rates (RetroTINK 4K, 59.94 Hz NTSC / 50 Hz PAL):** A measured rate within ±2 Hz of a mode in the driver's table is accepted. The Console Hub and game window HUD print refresh rates to two decimal places (e.g. `59.94 FPS (16.68ms)`). Supports custom and high refresh modes including `3840x1080` (RetroTINK 4K 120Hz BFI mode), `1920x1080 @ 180Hz`, and `1920x1200` WUXGA.
-- **Graceful Standby & Auto-Connect:** If launched before the console or video source is powered on or connected, the game window opens immediately displaying a clean Standby screen (*"Warte auf HDMI-Signal..."*) instead of exiting, and seamlessly transitions into active video playback once the HDMI handshake completes.
-- **Hot Resolution Switching:** If the console or scaler changes output resolution during active playback (e.g. 4K Dashboard $\leftrightarrow$ 1440p 120Hz $\leftrightarrow$ 1080p), the game window detects the new timings, re-allocates V4L2 buffers and GPU textures on the fly, and resumes playback without black-screening or requiring a window restart.
+- **Retro scalers & non-integer refresh rates (RetroTINK 4K, 59.94 Hz NTSC / 50 Hz PAL, 480i / 240p):** A measured rate within ±2 Hz of a mode in the driver's table is accepted. The Console Hub and game window HUD print refresh rates to two decimal places (e.g. `59.94 FPS (16.68ms)`) with `p` (progressive) and `i` (interlaced) indicators. Full support for custom and legacy retro modes:
+  - **480i & 576i Interlaced (CEA-861 HDMI Pixel Repetition):** Decodes 2x pixel-repeated HDMI transport (`1440x480i` / `1440x576i`) with automatic 4:3 aspect-ratio letterboxing.
+  - **240p Retro Modes:** Supports high-bandwidth pixel-repeated 240p (`1440x240` / `2880x240 @ 60Hz`) with dual-pixel DDR mode and clean 4:3 integer rendering.
+  - **Ultrawide & High Refresh:** `3840x1080` (RetroTINK 4K 120Hz BFI mode with 2x vertical restoration), `1920x1080 @ 180Hz`, and `1920x1200` WUXGA.
+- **Graceful Standby & Auto-Connect:** If launched before the console or video source is powered on or connected, the game window opens immediately displaying a clean Standby screen (*"Waiting for HDMI signal..."*) instead of exiting, and seamlessly transitions into active video playback once the HDMI handshake completes.
+- **Hot Resolution Switching:** If the console or scaler changes output resolution during active playback (e.g. 4K Dashboard $\leftrightarrow$ 1440p 120Hz $\leftrightarrow$ 1080p $\leftrightarrow$ 480i), the game window catches kernel `V4L2_EVENT_SOURCE_CHANGE` events on the fly, re-allocates V4L2 buffers and GPU textures gracefully, and resumes playback without black-screening or requiring a window restart.
 - **Low-latency direct rendering (experimental):** `everlive_display` asks for a 3-buffer V4L2 queue. While playback stays under the threshold it shows frames in order. If the time since the DMA timestamp exceeds about 18 ms at 120 Hz, or about 32 ms at 60 Hz, it skips one queued frame. It does not empty the whole queue in one step.
 - **Separate console hub + game window (no more X11 embedding):**
   - **Why the hub no longer embeds the video:** Earlier versions passed the Qt widget to `everlive_display -w` (`SDL_CreateWindowFrom`) and forced the X11 video driver. On Wayland that path runs through Xwayland. The nested window is composited with the hub, and a size check in the renderer called `SDL_SetWindowSize` on that foreign window. The Console Hub does not pass `-w` anymore. The flag still exists on the renderer.
@@ -84,10 +87,10 @@ After installation, launch **EverLive** from your application menu, or run:
 *Console Hub on the desktop, capture in its own window. The hub does not embed the video.*
 
 **Console Hub (`everlive_viewer.py`):**
-- Live HDMI signal status capsule (e.g. `● 2560x1440 @ 120 FPS • SDR`)
-- Format preset (Auto / 1440p120 / 1080p120 / 1080p60 / 2160p60 …)
-- Hardware RGB LED dropdown with live color previews, volume slider + mute, **Signal synchronisieren** button
-- **Gaming Screen starten** with options: *start in fullscreen* (checked by default), *open automatically on launch*, *enable VSync*, *Streamer Mode (Clean Feed)*
+- Live HDMI signal status capsule (e.g. `● 2560x1440p @ 120 FPS • SDR` or `● 720x480i @ 59.94 FPS • SDR`)
+- Format preset dropdown (Auto / 4K / 1440p / 1080p / 720p / 480p / 576p / 240p / Ultrawide)
+- Hardware RGB LED dropdown with live color previews, volume slider + mute, **Re-sync Signal** button
+- **Start Gaming Screen** with options: *start in fullscreen* (checked by default), *open automatically on launch*, *enable VSync*, *Streamer Mode (Clean Feed)*
 
 **Command-line options:**
 ```bash
@@ -236,7 +239,7 @@ echo "options open_gc573 led_mode=1" | sudo tee /etc/modprobe.d/open_gc573.conf
 
 | Device | Interface | PCI Subsystem | Support Status | Notes |
 |:---|:---|:---:|:---:|:---|
-| **AVerMedia Live Gamer 4K (GC573)** | PCIe Gen2 x4 | `1461:5730` | **Verified on Hardware** | Tested with PlayStation 5 (1440p120, 1080p, 4K60) and RetroTINK 4K Pro (59.94 Hz NTSC). |
+| **AVerMedia Live Gamer 4K (GC573)** | PCIe Gen2 x4 | `1461:5730` | **Verified on Hardware** | Tested with PlayStation 5 (1440p120, 1080p, 4K60) and RetroTINK 4K Pro (59.94 Hz NTSC, 480p, 480i, 240p). |
 | **AVerMedia Live Gamer BOLT (GC555)** | Thunderbolt 3 | `1461:5550` | **Should work (untested)** | Code inherited from ostrich's clean-room driver; not yet tested on real hardware by Everlite. Testers welcome! |
 
 - **Linux distributions tested:** CachyOS, Arch Linux, Linux Mint 22.3 (Cinnamon), Ubuntu, Debian.
@@ -322,6 +325,7 @@ Join our official community on Discord:
 ## Acknowledgements
 
 - **[Everlite](https://github.com/Everlite)**: Project initiator; EverLive gaming suite, PS5 1440p120 hardware tuning, low-latency direct renderer and PipeWire audio.
+- **[Haxman](https://github.com/haxman)**: Hardware verification on RetroTINK 4K Pro, modelines analysis, and extensive testing of 480p, 480i, 240p retro scaler modes and resolution switching.
 - **[ostrich](https://github.com/ostrich)**: Author of the [gc555](https://github.com/ostrich/gc555) driver. His clean-room reverse-engineering of the Artix-7 registers and the FPGA DMA ring is the foundation of `open_gc573`.
 - **[Lou Perret](https://github.com/lou-perret)**: Capture stability fixes, ALSA audio constraints and 4K VM measurements.
 - **[derrod](https://github.com/derrod)**: Early Linux reverse-engineering work on AVerMedia capture devices.
