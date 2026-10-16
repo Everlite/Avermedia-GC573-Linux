@@ -45,7 +45,7 @@ struct gc555_video_format_info {
 struct gc555_video_mode {
 	u16 width;
 	u16 height;
-	u8 rates[8];
+	u8 rates[12];
 	u8 rate_count;
 };
 
@@ -124,11 +124,13 @@ static const struct gc555_video_mode gc555_video_modes[] = {
 	{ 1360, 765, { 60 }, 1 },
 	{ 1440, 900, { 60 }, 1 },
 	{ 1680, 1050, { 60 }, 1 },
-	{ 1920, 1080, { 24, 25, 30, 50, 60, 120, 144, 240 }, 8 },
+	{ 1920, 1080, { 24, 25, 30, 50, 60, 120, 144, 180, 240 }, 9 },
+	{ 1920, 1200, { 60 }, 1 },
 	{ 2560, 1080, { 60, 144 }, 2 },
 	{ 2560, 1440, { 60, 120, 144 }, 3 },
-	{ 3840, 2160, { 24, 25, 30, 50, 60 }, 5 },
 	{ 3440, 1440, { 50, 60, 100 }, 3 },
+	{ 3840, 1080, { 60, 120 }, 2 },
+	{ 3840, 2160, { 24, 25, 30, 50, 60 }, 5 },
 };
 
 static const struct gc555_video_format_info *
@@ -196,13 +198,13 @@ gc555_video_mode_supports_p010(const struct gc555_video_mode *mode)
 	case 1680:
 		return mode->height == 1050;
 	case 1920:
-		return mode->height == 1080;
+		return mode->height == 1080 || mode->height == 1200;
 	case 2560:
 		return mode->height == 1080 || mode->height == 1440;
 	case 3440:
 		return mode->height == 1440;
 	case 3840:
-		return mode->height == 2160;
+		return mode->height == 2160 || mode->height == 1080;
 	default:
 		return false;
 	}

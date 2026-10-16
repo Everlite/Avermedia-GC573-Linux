@@ -321,6 +321,142 @@ static void update_fullscreen(SDL_Window *window, bool enable)
     }
 }
 
+struct stream_ctx {
+    int fd;
+    bool active;
+    uint32_t width;
+    uint32_t height;
+    uint32_t pixelformat;
+    uint32_t bytesperline;
+    uint32_t sdl_format;
+    struct v4l2_mmap_buffer buffers[BUFFER_COUNT];
+    unsigned int buffer_count;
+    SDL_Texture *texture;
+};
+
+static void stream_stop(struct stream_ctx *ctx)
+{
+    if (!ctx) return;
+    if (ctx->active) {
+        enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        ioctl(ctx->fd, VIDIOC_STREAMOFF, &type);
+        ctx->active = false;
+    }
+    for (unsigned int i = 0; i < ctx->buffer_count; i++) {
+        if (ctx->buffers[i].start && ctx->buffers[i].start != MAP_FAILED) {
+            munmap(ctx->buffers[i].start, ctx->buffers[i].length);
+            ctx->buffers[i].start = NULL;
+        }
+    }
+    if (ctx->buffer_count > 0) {
+        struct v4l2_requestbuffers req = {};
+        req.count = 0;
+        req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        req.memory = V4L2_MEMORY_MMAP;
+        ioctl(ctx->fd, VIDIOC_REQBUFS, &req);
+        ctx->buffer_count = 0;
+    }
+    if (ctx->texture) {
+        SDL_DestroyTexture(ctx->texture);
+        ctx->texture = NULL;
+    }
+}
+
+static bool stream_start(struct stream_ctx *ctx, SDL_Renderer *renderer)
+{
+    stream_stop(ctx);
+
+    /* Hardware DV-Timings vom HDMI-Empfaenger synchronisieren */
+    struct v4l2_dv_timings dv = {};
+    if (ioctl(ctx->fd, VIDIOC_QUERY_DV_TIMINGS, &dv) == 0) {
+        ioctl(ctx->fd, VIDIOC_S_DV_TIMINGS, &dv);
+    }
+
+    struct v4l2_format fmt = {};
+    fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    if (ioctl(ctx->fd, VIDIOC_G_FMT, &fmt) < 0) {
+        return false;
+    }
+
+    ctx->width = fmt.fmt.pix.width;
+    ctx->height = fmt.fmt.pix.height;
+    ctx->pixelformat = fmt.fmt.pix.pixelformat;
+    ctx->bytesperline = fmt.fmt.pix.bytesperline;
+
+    if (ctx->width == 0 || ctx->height == 0) {
+        return false;
+    }
+
+    if (ctx->pixelformat == V4L2_PIX_FMT_YUYV)
+        ctx->sdl_format = SDL_PIXELFORMAT_YUY2;
+    else if (ctx->pixelformat == V4L2_PIX_FMT_NV12)
+        ctx->sdl_format = SDL_PIXELFORMAT_NV12;
+    else
+        ctx->sdl_format = SDL_PIXELFORMAT_YUY2;
+
+    struct v4l2_requestbuffers req = {};
+    req.count = BUFFER_COUNT;
+    req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    req.memory = V4L2_MEMORY_MMAP;
+    if (ioctl(ctx->fd, VIDIOC_REQBUFS, &req) < 0 || req.count == 0) {
+        return false;
+    }
+    ctx->buffer_count = req.count;
+
+    for (unsigned int i = 0; i < req.count; i++) {
+        struct v4l2_buffer buf = {};
+        buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        buf.memory = V4L2_MEMORY_MMAP;
+        buf.index = i;
+        if (ioctl(ctx->fd, VIDIOC_QUERYBUF, &buf) < 0) {
+            stream_stop(ctx);
+            return false;
+        }
+        ctx->buffers[i].length = buf.length;
+        ctx->buffers[i].start = mmap(NULL, buf.length, PROT_READ | PROT_WRITE, MAP_SHARED, ctx->fd, buf.m.offset);
+        if (ctx->buffers[i].start == MAP_FAILED) {
+            stream_stop(ctx);
+            return false;
+        }
+        if (ioctl(ctx->fd, VIDIOC_QBUF, &buf) < 0) {
+            stream_stop(ctx);
+            return false;
+        }
+    }
+
+    enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    if (ioctl(ctx->fd, VIDIOC_STREAMON, &type) < 0) {
+        stream_stop(ctx);
+        return false;
+    }
+
+    ctx->texture = SDL_CreateTexture(
+        renderer,
+        ctx->sdl_format,
+        SDL_TEXTUREACCESS_STREAMING,
+        (int)ctx->width, (int)ctx->height
+    );
+    if (!ctx->texture) {
+        stream_stop(ctx);
+        return false;
+    }
+
+    /* Leere eventuelle Alt-Puffer aus der V4L2 Queue fuer minimale Latenz */
+    struct v4l2_buffer drain_buf = {};
+    drain_buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    drain_buf.memory = V4L2_MEMORY_MMAP;
+    while (ioctl(ctx->fd, VIDIOC_DQBUF, &drain_buf) == 0) {
+        ioctl(ctx->fd, VIDIOC_QBUF, &drain_buf);
+        memset(&drain_buf, 0, sizeof(drain_buf));
+        drain_buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        drain_buf.memory = V4L2_MEMORY_MMAP;
+    }
+
+    ctx->active = true;
+    printf("[+] HDMI Stream aktiv: %ux%u (%u bytes/line)\n", ctx->width, ctx->height, ctx->bytesperline);
+    return true;
+}
+
 int main(int argc, char *argv[])
 {
     const char *vdev = NULL;
@@ -387,97 +523,20 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    /* Query hardware DV timings from HDMI receiver and apply to capture device */
-    struct v4l2_dv_timings dv = {};
-    if (ioctl(fd, VIDIOC_QUERY_DV_TIMINGS, &dv) == 0) {
-        if (ioctl(fd, VIDIOC_S_DV_TIMINGS, &dv) == 0) {
-            printf("[*] GC573 HDMI Signal synchronisiert: %ux%u\n",
-                   dv.bt.width, dv.bt.height);
+    /* Versuche ein initiales Signal abzufragen fuer optimale Standard-Fenstergroesse */
+    uint32_t init_w = 1920, init_h = 1080;
+    struct v4l2_dv_timings init_dv = {};
+    if (ioctl(fd, VIDIOC_QUERY_DV_TIMINGS, &init_dv) == 0 && init_dv.bt.width > 0 && init_dv.bt.height > 0) {
+        init_w = init_dv.bt.width;
+        init_h = init_dv.bt.height;
+        ioctl(fd, VIDIOC_S_DV_TIMINGS, &init_dv);
+    } else {
+        struct v4l2_format init_fmt = {};
+        init_fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        if (ioctl(fd, VIDIOC_G_FMT, &init_fmt) == 0 && init_fmt.fmt.pix.width > 0 && init_fmt.fmt.pix.height > 0) {
+            init_w = init_fmt.fmt.pix.width;
+            init_h = init_fmt.fmt.pix.height;
         }
-    }
-
-    struct v4l2_format fmt = {};
-    fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    if (ioctl(fd, VIDIOC_G_FMT, &fmt) < 0) {
-        fprintf(stderr, "[Error] VIDIOC_G_FMT fehlgeschlagen: %s\n", strerror(errno));
-        close(fd);
-        return 1;
-    }
-
-    uint32_t width = fmt.fmt.pix.width;
-    uint32_t height = fmt.fmt.pix.height;
-    uint32_t pixelformat = fmt.fmt.pix.pixelformat;
-    uint32_t bytesperline = fmt.fmt.pix.bytesperline;
-
-    char fourcc[5] = {
-        (char)(pixelformat & 0xff),
-        (char)((pixelformat >> 8) & 0xff),
-        (char)((pixelformat >> 16) & 0xff),
-        (char)((pixelformat >> 24) & 0xff),
-        0
-    };
-    printf("[*] GC573 Signal: %ux%u (%s, %u bytes/line)\n", width, height, fourcc, bytesperline);
-
-    uint32_t sdl_format;
-    if (pixelformat == V4L2_PIX_FMT_YUYV)
-        sdl_format = SDL_PIXELFORMAT_YUY2;
-    else if (pixelformat == V4L2_PIX_FMT_NV12)
-        sdl_format = SDL_PIXELFORMAT_NV12;
-    else {
-        fprintf(stderr, "[!] Unbekanntes Pixelformat %s, versuche YUY2\n", fourcc);
-        sdl_format = SDL_PIXELFORMAT_YUY2;
-    }
-
-    /* Request 4 mmap buffers */
-    struct v4l2_requestbuffers req = {};
-    req.count = BUFFER_COUNT;
-    req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    req.memory = V4L2_MEMORY_MMAP;
-    if (ioctl(fd, VIDIOC_REQBUFS, &req) < 0) {
-        fprintf(stderr, "[Error] VIDIOC_REQBUFS fehlgeschlagen: %s\n", strerror(errno));
-        close(fd);
-        return 1;
-    }
-
-    struct v4l2_mmap_buffer buffers[BUFFER_COUNT];
-    for (unsigned int i = 0; i < req.count; i++) {
-        struct v4l2_buffer buf = {};
-        buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-        buf.memory = V4L2_MEMORY_MMAP;
-        buf.index = i;
-        if (ioctl(fd, VIDIOC_QUERYBUF, &buf) < 0) {
-            fprintf(stderr, "[Error] VIDIOC_QUERYBUF fehlgeschlagen: %s\n", strerror(errno));
-            close(fd);
-            return 1;
-        }
-        buffers[i].length = buf.length;
-        buffers[i].start = mmap(NULL, buf.length, PROT_READ | PROT_WRITE, MAP_SHARED, fd, buf.m.offset);
-        if (buffers[i].start == MAP_FAILED) {
-            fprintf(stderr, "[Error] mmap fehlgeschlagen: %s\n", strerror(errno));
-            close(fd);
-            return 1;
-        }
-        if (ioctl(fd, VIDIOC_QBUF, &buf) < 0) {
-            fprintf(stderr, "[Error] VIDIOC_QBUF fehlgeschlagen: %s\n", strerror(errno));
-            close(fd);
-            return 1;
-        }
-    }
-
-    enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    if (ioctl(fd, VIDIOC_STREAMON, &type) < 0) {
-        if (errno == ENOLINK) {
-            fprintf(stderr, "\n[Error] VIDIOC_STREAMON fehlgeschlagen: Kein aktives HDMI-Signal (ENOLINK: Link has been severed).\n");
-            fprintf(stderr, "        Der HDMI-Receiver der GC573 hat noch keinen Signal-Lock von der Videoquelle erhalten.\n");
-            fprintf(stderr, "        Bitte prüfen:\n");
-            fprintf(stderr, "        - Ist die Bildquelle (z.B. RetroTINK-4K / Konsole) eingeschaltet und sendet Bild?\n");
-            fprintf(stderr, "        - Ist das HDMI-Kabel am GC573 HDMI-IN (Eingang) angeschlossen?\n");
-            fprintf(stderr, "        - Tipp: Einmal das HDMI-Kabel kurz ab- und wieder anstecken, um den Handshake neu auszulösen.\n\n");
-        } else {
-            fprintf(stderr, "[Error] VIDIOC_STREAMON fehlgeschlagen: %s\n", strerror(errno));
-        }
-        close(fd);
-        return 1;
     }
 
     /* Initialize SDL2 */
@@ -507,21 +566,21 @@ int main(int argc, char *argv[])
     if (g_embed_wid > 0) {
         window = SDL_CreateWindowFrom((void *)g_embed_wid);
     } else {
-        int win_w = (width > 0) ? (int)width : 1920;
-        int win_h = (height > 0) ? (int)height : 1080;
+        int win_w = (int)init_w;
+        int win_h = (int)init_h;
         Uint32 win_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
         if (start_fullscreen) {
             win_flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
             g_fullscreen = true;
         }
 
-        /* In multi-monitor setups (e.g. 1440p120 + 1080p165 + 1080p60), select the matching display */
+        /* In multi-monitor setups, select matching display */
         int target_display = 0;
         int num_displays = SDL_GetNumVideoDisplays();
         for (int d = 0; d < num_displays; d++) {
             SDL_DisplayMode dm;
             if (SDL_GetCurrentDisplayMode(d, &dm) == 0) {
-                if ((uint32_t)dm.w == width && (uint32_t)dm.h == height) {
+                if ((uint32_t)dm.w == init_w && (uint32_t)dm.h == init_h) {
                     target_display = d;
                     break;
                 }
@@ -576,26 +635,16 @@ int main(int argc, char *argv[])
     /* Unthrottle swap interval for zero-delay presentation */
     SDL_GL_SetSwapInterval(0);
 
-    SDL_SetRenderDrawColor(renderer, 0, 0, 20, 255);
+    SDL_SetRenderDrawColor(renderer, 13, 17, 23, 255);
     SDL_RenderClear(renderer);
     SDL_RenderPresent(renderer);
     if (g_embed_wid == 0) {
         SDL_RaiseWindow(window);
     }
 
-    SDL_Texture *texture = SDL_CreateTexture(
-        renderer,
-        sdl_format,
-        SDL_TEXTUREACCESS_STREAMING,
-        (int)width, (int)height
-    );
-    if (!texture) {
-        fprintf(stderr, "[Error] SDL_CreateTexture fehlgeschlagen: %s\n", SDL_GetError());
-        SDL_DestroyRenderer(renderer);
-        SDL_DestroyWindow(window);
-        SDL_Quit();
-        close(fd);
-        return 1;
+    struct stream_ctx ctx = { .fd = fd };
+    if (!stream_start(&ctx, renderer)) {
+        printf("[*] Kein HDMI-Signal beim Start - Standby-Modus aktiv (Auto-Connect laeuft)...\n");
     }
 
     /* Setup Audio Pipeline (PipeWire 10ms with native surround mixing) */
@@ -606,11 +655,12 @@ int main(int argc, char *argv[])
         pthread_create(&audio_tid, NULL, audio_supervisor_thread, (void *)adev);
     }
 
-    printf("[+] Direct Display aktiv! Hotkeys: [F11/f] Vollbild, [m] Mute, [Scroll] Lautstaerke, [Tab] Stats, [Esc/q] Beenden\n");
+    printf("[+] Direct Display aktiv! Hotkeys: [F11/f] Vollbild, [m] Mute, [Scroll] Lautstaerke, [Tab] Stats, [h/r] Re-Sync, [Esc/q] Beenden\n");
 
     struct pollfd pfd = { .fd = fd, .events = POLLIN };
     uint64_t frame_count = 0;
     uint32_t last_title_time = SDL_GetTicks();
+    uint32_t last_retry_time = SDL_GetTicks();
     g_last_mouse_time = SDL_GetTicks();
 
     double lat_ms = 0.0;
@@ -619,19 +669,7 @@ int main(int argc, char *argv[])
     uint32_t jitter_count = 0;
 
     bool dragging_volume = false;
-
     int cur_w = 0, cur_h = 0;
-
-    /* Drain any startup backlog accumulated during SDL, window & audio initialization */
-    struct v4l2_buffer drain_buf = {};
-    drain_buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    drain_buf.memory = V4L2_MEMORY_MMAP;
-    while (ioctl(fd, VIDIOC_DQBUF, &drain_buf) == 0) {
-        ioctl(fd, VIDIOC_QBUF, &drain_buf);
-        memset(&drain_buf, 0, sizeof(drain_buf));
-        drain_buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-        drain_buf.memory = V4L2_MEMORY_MMAP;
-    }
 
     while (g_running) {
         uint32_t now_ticks = SDL_GetTicks();
@@ -657,8 +695,8 @@ int main(int argc, char *argv[])
         }
         SDL_GetRendererOutputSize(renderer, &cur_w, &cur_h);
         if (cur_w <= 0 || cur_h <= 0) {
-            cur_w = width > 0 ? (int)width : 1920;
-            cur_h = height > 0 ? (int)height : 1080;
+            cur_w = ctx.width > 0 ? (int)ctx.width : (int)init_w;
+            cur_h = ctx.height > 0 ? (int)ctx.height : (int)init_h;
         }
 
         /* HUD dimensions */
@@ -780,26 +818,11 @@ int main(int argc, char *argv[])
                             printf("[*] Hardware HDMI HPD Re-Sync Impuls ausgeloest\n");
                         }
                         globfree(&hg);
-                        usleep(250000);
                     }
-                    enum v4l2_buf_type stype = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-                    ioctl(fd, VIDIOC_STREAMOFF, &stype);
-                    struct v4l2_dv_timings new_dv = {};
-                    if (ioctl(fd, VIDIOC_QUERY_DV_TIMINGS, &new_dv) == 0) {
-                        if (ioctl(fd, VIDIOC_S_DV_TIMINGS, &new_dv) == 0) {
-                            printf("[*] HDMI Re-Sync: %ux%u\n", new_dv.bt.width, new_dv.bt.height);
-                        }
-                    }
-                    for (unsigned int i = 0; i < req.count; i++) {
-                        struct v4l2_buffer b = {};
-                        b.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-                        b.memory = V4L2_MEMORY_MMAP;
-                        b.index = i;
-                        ioctl(fd, VIDIOC_QBUF, &b);
-                    }
-                    ioctl(fd, VIDIOC_STREAMON, &stype);
+                    stream_stop(&ctx);
                     snprintf(g_toast_custom, sizeof(g_toast_custom), "HDMI RE-SYNC");
                     g_toast_time = SDL_GetTicks();
+                    last_retry_time = 0;
                 }
             } else if (ev.type == SDL_WINDOWEVENT) {
                 if (ev.window.event == SDL_WINDOWEVENT_RESIZED ||
@@ -811,16 +834,139 @@ int main(int argc, char *argv[])
             }
         }
 
+        /* Wenn kein aktiver Stream vorhanden ist: Versuche Re-Connect und zeige Standby-UI */
+        if (!ctx.active) {
+            if (now_ticks - last_retry_time >= 400) {
+                last_retry_time = now_ticks;
+                if (stream_start(&ctx, renderer)) {
+                    printf("[+] HDMI-Signal erkannt und synchronisiert: %ux%u!\n", ctx.width, ctx.height);
+                    snprintf(g_toast_custom, sizeof(g_toast_custom), "SIGNAL LOCKED");
+                    g_toast_time = SDL_GetTicks();
+                }
+            }
+
+            if (!ctx.active) {
+                SDL_SetRenderDrawColor(renderer, 13, 17, 23, 255);
+                SDL_RenderClear(renderer);
+
+                int card_w = 480;
+                int card_h = 160;
+                int card_x = (cur_w - card_w) / 2;
+                int card_y = (cur_h - card_h) / 2 - 20;
+
+                SDL_Rect card_rect = { card_x, card_y, card_w, card_h };
+                SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+                SDL_SetRenderDrawColor(renderer, 22, 27, 34, 230);
+                SDL_RenderFillRect(renderer, &card_rect);
+                SDL_SetRenderDrawColor(renderer, 56, 139, 253, 180);
+                SDL_RenderDrawRect(renderer, &card_rect);
+
+                draw_string(renderer, "EVERLIVE GAMING SCREEN", card_x + 65, card_y + 25, 2, (SDL_Color){240, 246, 252, 255});
+                draw_string(renderer, "Warte auf HDMI-Signal...", card_x + 140, card_y + 70, 1, (SDL_Color){210, 153, 34, 255});
+                draw_string(renderer, "Konsole oder Bildquelle einschalten", card_x + 105, card_y + 98, 1, (SDL_Color){139, 148, 158, 255});
+                draw_string(renderer, "[H] Re-Sync  *  [Esc] Beenden", card_x + 130, card_y + 126, 1, (SDL_Color){88, 166, 255, 255});
+
+                /* HUD zeichnen damit Lautstaerke/Exit nutzbar bleiben */
+                if (g_hud_visible) {
+                    SDL_Rect hud_bg = { hud_x, hud_y, hud_w, hud_h };
+                    SDL_SetRenderDrawColor(renderer, 15, 18, 26, 215);
+                    SDL_RenderFillRect(renderer, &hud_bg);
+                    SDL_SetRenderDrawColor(renderer, 50, 65, 95, 230);
+                    SDL_RenderDrawRect(renderer, &hud_bg);
+
+                    SDL_Rect btn_vol = { hud_x + 10, hud_y + 10, 48, 24 };
+                    SDL_SetRenderDrawColor(renderer, g_muted ? 180 : 35, g_muted ? 40 : 45, g_muted ? 40 : 60, 200);
+                    SDL_RenderFillRect(renderer, &btn_vol);
+                    draw_string(renderer, g_muted ? "MUTE" : "VOL", hud_x + 14, hud_y + 14, 1, (SDL_Color){255, 255, 255, 255});
+
+                    SDL_SetRenderDrawColor(renderer, 35, 42, 56, 255);
+                    SDL_RenderFillRect(renderer, &slider_rect);
+                    int filled_w = (int)(slider_rect.w * (g_volume / 1.5f));
+                    if (filled_w > slider_rect.w) filled_w = slider_rect.w;
+                    if (filled_w > 0 && !g_muted) {
+                        SDL_Rect fill_rect = { slider_rect.x, slider_rect.y, filled_w, slider_rect.h };
+                        SDL_SetRenderDrawColor(renderer, 56, 139, 253, 255);
+                        SDL_RenderFillRect(renderer, &fill_rect);
+                    }
+                    int handle_x = slider_rect.x + filled_w - 4;
+                    if (handle_x < slider_rect.x) handle_x = slider_rect.x;
+                    if (handle_x > slider_rect.x + slider_rect.w - 6) handle_x = slider_rect.x + slider_rect.w - 6;
+                    SDL_Rect handle_rect = { handle_x, slider_rect.y - 3, 7, 16 };
+                    SDL_SetRenderDrawColor(renderer, 240, 246, 252, 255);
+                    SDL_RenderFillRect(renderer, &handle_rect);
+
+                    char vol_txt[16];
+                    if (g_muted) snprintf(vol_txt, sizeof(vol_txt), "OFF");
+                    else snprintf(vol_txt, sizeof(vol_txt), "%3d%%", (int)(g_volume * 100.0f));
+                    draw_string(renderer, vol_txt, hud_x + 202, hud_y + 18, 1, (SDL_Color){200, 215, 235, 255});
+
+                    draw_string(renderer, "STANDBY", hud_x + 260, hud_y + 18, 1, (SDL_Color){210, 153, 34, 255});
+
+                    SDL_Rect sep = { hud_x + 460, hud_y + 10, 1, 24 };
+                    SDL_SetRenderDrawColor(renderer, 50, 65, 95, 180);
+                    SDL_RenderFillRect(renderer, &sep);
+
+                    SDL_Rect btn_full = { hud_x + 534, hud_y + 10, 54, 24 };
+                    SDL_SetRenderDrawColor(renderer, 28, 35, 48, 200);
+                    SDL_RenderFillRect(renderer, &btn_full);
+                    draw_string(renderer, g_fullscreen ? "WNDW" : "FULL", hud_x + 539, hud_y + 18, 1, (SDL_Color){220, 230, 245, 255});
+
+                    if (g_embed_wid == 0) {
+                        SDL_Rect btn_exit = { hud_x + 596, hud_y + 10, 48, 24 };
+                        SDL_SetRenderDrawColor(renderer, 150, 30, 30, 200);
+                        SDL_RenderFillRect(renderer, &btn_exit);
+                        draw_string(renderer, "EXIT", hud_x + 603, hud_y + 18, 1, (SDL_Color){255, 255, 255, 255});
+                    }
+                }
+
+                if (now_ticks - last_title_time >= 1000) {
+                    last_title_time = now_ticks;
+                    if (g_embed_wid == 0) {
+                        char title[180];
+                        snprintf(title, sizeof(title), "EverLive - Warte auf HDMI-Signal... | Vol: %d%%",
+                                 g_muted ? 0 : (int)(g_volume * 100.0f));
+                        SDL_SetWindowTitle(window, title);
+                    }
+                }
+
+                SDL_RenderPresent(renderer);
+                SDL_Delay(16);
+                continue;
+            }
+        }
+
+        /* Auf Hardware-Aufloesungswechsel mitten im Betrieb pruefen (alle 30 Frames) */
+        if (frame_count % 30 == 0) {
+            struct v4l2_dv_timings check_dv = {};
+            if (ioctl(fd, VIDIOC_QUERY_DV_TIMINGS, &check_dv) == 0) {
+                if (check_dv.bt.width > 0 && check_dv.bt.height > 0 &&
+                    (check_dv.bt.width != ctx.width || check_dv.bt.height != ctx.height)) {
+                    printf("[*] HDMI Aufloesungswechsel erkannt: %ux%u -> %ux%u\n",
+                           ctx.width, ctx.height, check_dv.bt.width, check_dv.bt.height);
+                    stream_stop(&ctx);
+                    stream_start(&ctx, renderer);
+                    continue;
+                }
+            }
+        }
+
         int poll_ret = poll(&pfd, 1, 50);
-        if (poll_ret <= 0)
+        if (poll_ret <= 0) {
+            if (pfd.revents & (POLLERR | POLLHUP)) {
+                printf("[*] HDMI-Signal unterbrochen, wechsle in Standby...\n");
+                stream_stop(&ctx);
+            }
             continue;
+        }
 
         struct v4l2_buffer buf = {};
         buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         buf.memory = V4L2_MEMORY_MMAP;
         if (ioctl(fd, VIDIOC_DQBUF, &buf) < 0) {
-            if (errno == EIO || errno == EPIPE || errno == ENODEV)
-                g_running = 0;
+            if (errno == EAGAIN)
+                continue;
+            printf("[*] Video-Puffer ungueltig (%s), wechsle in Re-Sync/Standby...\n", strerror(errno));
+            stream_stop(&ctx);
             continue;
         }
 
@@ -833,9 +979,7 @@ int main(int argc, char *argv[])
         if (lat_us < 0) lat_us = 0;
 
         /* Low-Latency Backlog Catch-Up:
-         * Only trigger catch-up if latency exceeds > 2 full frame periods (> 18 ms at 120Hz or > 32 ms at 60Hz).
-         * In that case, check if a fresher buffer is already waiting in the queue.
-         * If so, fast-forward to the newest frame to keep input latency razor-sharp (< 8 ms)! */
+         * Trigger catch-up if latency exceeds > 2 full frame periods (> 18 ms at 120Hz or > 32 ms at 60Hz). */
         uint64_t stale_thresh_us = (live_fps > 90.0) ? 18000 : 32000;
         if ((uint64_t)lat_us > stale_thresh_us) {
             struct v4l2_buffer next_buf = {};
@@ -852,19 +996,19 @@ int main(int argc, char *argv[])
         lat_ms = (double)lat_us / 1000.0;
 
         /* Direct GPU texture upload from DMA buffer */
-        SDL_UpdateTexture(texture, NULL, buffers[buf.index].start, (int)bytesperline);
+        SDL_UpdateTexture(ctx.texture, NULL, ctx.buffers[buf.index].start, (int)ctx.bytesperline);
 
         /* Return buffer to driver immediately so PCIe DMA never starves */
         ioctl(fd, VIDIOC_QBUF, &buf);
 
         /* Aspect-ratio preserving letterboxed scaling */
         SDL_Rect dest_rect;
-        if (width > 0 && height > 0 && cur_w > 0 && cur_h > 0) {
-            double scale_w = (double)cur_w / (double)width;
-            double scale_h = (double)cur_h / (double)height;
+        if (ctx.width > 0 && ctx.height > 0 && cur_w > 0 && cur_h > 0) {
+            double scale_w = (double)cur_w / (double)ctx.width;
+            double scale_h = (double)cur_h / (double)ctx.height;
             double scale = (scale_w < scale_h) ? scale_w : scale_h;
-            dest_rect.w = (int)(width * scale);
-            dest_rect.h = (int)(height * scale);
+            dest_rect.w = (int)(ctx.width * scale);
+            dest_rect.h = (int)(ctx.height * scale);
             dest_rect.x = (cur_w - dest_rect.w) / 2;
             dest_rect.y = (cur_h - dest_rect.h) / 2;
         } else {
@@ -876,7 +1020,7 @@ int main(int argc, char *argv[])
 
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
-        SDL_RenderCopy(renderer, texture, NULL, &dest_rect);
+        SDL_RenderCopy(renderer, ctx.texture, NULL, &dest_rect);
 
         frame_count++;
 
@@ -951,7 +1095,7 @@ int main(int argc, char *argv[])
 
             /* Signal Info Badge */
             char sig_txt[32];
-            snprintf(sig_txt, sizeof(sig_txt), "%ux%u@%.2f", width, height, live_fps > 0.0 ? live_fps : 60.0);
+            snprintf(sig_txt, sizeof(sig_txt), "%ux%u@%.2f", ctx.width, ctx.height, live_fps > 0.0 ? live_fps : 60.0);
             draw_string(renderer, sig_txt, hud_x + 260, hud_y + 18, 1, (SDL_Color){63, 185, 80, 255});
 
             /* Separator */
@@ -1043,10 +1187,10 @@ int main(int argc, char *argv[])
             if (g_embed_wid == 0) {
                 char title[180];
                 snprintf(title, sizeof(title), "EverLive - %ux%u @ %.2f FPS | Latenz: %.1f ms | Vol: %d%%",
-                         width, height, live_fps, lat_ms, g_muted ? 0 : (int)(g_volume * 100.0f));
+                         ctx.width, ctx.height, live_fps, lat_ms, g_muted ? 0 : (int)(g_volume * 100.0f));
                 SDL_SetWindowTitle(window, title);
                 printf("[*] Stream: %ux%u @ %.2f FPS | Latenz: %.1f ms | Jitter: %u/s\n",
-                       width, height, live_fps, lat_ms, live_jitter);
+                       ctx.width, ctx.height, live_fps, lat_ms, live_jitter);
                 fflush(stdout);
             }
         }
@@ -1057,12 +1201,9 @@ int main(int argc, char *argv[])
         pthread_join(audio_tid, NULL);
     }
 
-    ioctl(fd, VIDIOC_STREAMOFF, &type);
-    for (unsigned int i = 0; i < req.count; i++)
-        munmap(buffers[i].start, buffers[i].length);
+    stream_stop(&ctx);
     close(fd);
 
-    SDL_DestroyTexture(texture);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();

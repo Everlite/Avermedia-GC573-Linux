@@ -2580,7 +2580,7 @@ static bool it6805_rescale_frame_rate(u32 frame_rate_hz, u32 pixel_clock_khz,
 	static const u32 std_khz[] = {
 		25200, 27000, 74250, 148500, 241500, 297000, 483400, 594000,
 	};
-	static const u8 std_fps[] = { 24, 25, 30, 50, 60, 120, 144, 240 };
+	static const u8 std_fps[] = { 24, 25, 30, 50, 60, 120, 144, 180, 240 };
 	u32 ref = 0, ref_diff = 0, scaled, i;
 
 	if (!rate)
@@ -2647,7 +2647,7 @@ static u8 it6805_normalize_frame_rate(u32 frame_rate_x100,
 				     u32 pixel_clock_khz)
 {
 	static const u8 nominal_rates[] = {
-		24, 25, 30, 50, 60, 75, 100, 120, 144, 240,
+		24, 25, 30, 50, 60, 75, 100, 120, 144, 180, 240,
 	};
 	u32 best_error = ~0U;
 	u8 best_rate = 0;
