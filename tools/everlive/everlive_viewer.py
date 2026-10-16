@@ -388,6 +388,24 @@ class GameStreamer:
             pass
         return ""
 
+    def get_active_resolution(self) -> Optional[str]:
+        """Reads active driver streaming resolution without touching HDMI I2C."""
+        if not self.vdev or not os.path.exists(self.vdev):
+            return None
+        try:
+            out = subprocess.check_output(
+                ["v4l2-ctl", "-d", self.vdev, "--get-fmt-video"],
+                stderr=subprocess.DEVNULL, timeout=0.5
+            ).decode()
+            m = re.search(r"Width/Height\s*:\s*(\d+)/(\d+)", out)
+            if m:
+                w, h = int(m.group(1)), int(m.group(2))
+                if w > 0 and h > 0:
+                    return f"{w}x{h}"
+        except Exception:
+            pass
+        return None
+
     def resync(self) -> bool:
         """Forces hardware HDMI HPD re-sync and updates timings via v4l2-ctl query."""
         trigger_hpd_pulse()
@@ -1144,7 +1162,7 @@ if HAS_QT:
             self.lbl_hero_meta.setText(f"Signal synchronisiert • Farbraum: {hdr_val} • 8ch LPCM (PipeWire)")
 
         def update_status(self):
-            # While the gaming screen is open, only read the cached HDR control.
+            # While the gaming screen is open, only read the cached driver format and HDR control.
             # query-dv-timings hits the HDMI receiver and stalls the stream.
             if self.streamer.is_running:
                 if not self.streamer.poll():
@@ -1154,12 +1172,20 @@ if HAS_QT:
                     self.btn_launch.setStyle(self.btn_launch.style())
                     return
                 live = getattr(self, "_live", None)
+                active_res = self.streamer.get_active_resolution()
                 hdr = self.streamer.hdr_label(fallback=False)
-                if live and live.get("locked") and hdr:
+                if live and live.get("locked"):
+                    updated = False
                     live = dict(live)
-                    live["hdr"] = hdr
-                    self._live = live
-                    self._show_live(live)
+                    if active_res and active_res != live.get("resolution"):
+                        live["resolution"] = active_res
+                        updated = True
+                    if hdr and hdr != live.get("hdr"):
+                        live["hdr"] = hdr
+                        updated = True
+                    if updated:
+                        self._live = live
+                        self._show_live(live)
                 return
 
             info = self.streamer.get_signal_info()

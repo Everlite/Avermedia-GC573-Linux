@@ -2588,9 +2588,7 @@ static bool it6805_rescale_frame_rate(u32 frame_rate_hz, u32 pixel_clock_khz,
 	if (!frame_rate_hz || !pixel_clock_khz)
 		return false;
 	for (i = 0; i < ARRAY_SIZE(std_fps); i++) {
-		u32 diff = frame_rate_hz > std_fps[i] ?
-			   frame_rate_hz - std_fps[i] : std_fps[i] - frame_rate_hz;
-		if (diff <= 2 || (diff * 100 <= (u32)std_fps[i] * 3)) {
+		if (frame_rate_hz == std_fps[i]) {
 			*rate = std_fps[i];
 			return true;
 		}

@@ -590,7 +590,7 @@ int main(int argc, char *argv[])
         window = SDL_CreateWindowFrom((void *)g_embed_wid);
     } else {
         int win_w = (int)init_w;
-        int win_h = (int)init_h;
+        int win_h = (init_w == 3840 && init_h == 1080) ? 2160 : (int)init_h;
         Uint32 win_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
         if (start_fullscreen) {
             win_flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
@@ -1104,11 +1104,14 @@ int main(int argc, char *argv[])
         /* Aspect-ratio preserving letterboxed scaling */
         SDL_Rect dest_rect;
         if (ctx.width > 0 && ctx.height > 0 && cur_w > 0 && cur_h > 0) {
+            /* 3840x1080 is an anamorphic half-vertical 4K120 signal (e.g. RetroTINK 4K Pro)
+             * that requires 2x vertical stretching to restore the intended 16:9 aspect ratio. */
+            int eff_h = (ctx.width == 3840 && ctx.height == 1080) ? (ctx.height * 2) : ctx.height;
             double scale_w = (double)cur_w / (double)ctx.width;
-            double scale_h = (double)cur_h / (double)ctx.height;
+            double scale_h = (double)cur_h / (double)eff_h;
             double scale = (scale_w < scale_h) ? scale_w : scale_h;
             dest_rect.w = (int)(ctx.width * scale);
-            dest_rect.h = (int)(ctx.height * scale);
+            dest_rect.h = (int)(eff_h * scale);
             dest_rect.x = (cur_w - dest_rect.w) / 2;
             dest_rect.y = (cur_h - dest_rect.h) / 2;
         } else {
