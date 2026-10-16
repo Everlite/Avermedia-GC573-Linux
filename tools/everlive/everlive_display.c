@@ -29,7 +29,9 @@
 #include <pthread.h>
 #include <time.h>
 #include <SDL.h>
+#include <SDL_syswm.h>
 #include <X11/Xlib.h>
+#include <X11/Xutil.h>
 #include <glob.h>
 #include "font8x8.h"
 
@@ -580,6 +582,8 @@ int main(int argc, char *argv[])
         SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "0");
     }
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
+    SDL_SetHint("SDL_X11_WM_CLASS", "EverLive");
+    SDL_SetHint("SDL_VIDEO_WAYLAND_WM_CLASS", "EverLive");
 
     SDL_Window *window = NULL;
     if (g_embed_wid > 0) {
@@ -648,6 +652,16 @@ int main(int argc, char *argv[])
             if (icon) {
                 SDL_SetWindowIcon(window, icon);
                 SDL_FreeSurface(icon);
+            }
+
+            /* Explicitly set X11 WM_CLASS to 'EverLive' to match everlive.desktop in Dock and App Switcher */
+            SDL_SysWMinfo wmInfo;
+            SDL_VERSION(&wmInfo.version);
+            if (SDL_GetWindowWMInfo(window, &wmInfo) && wmInfo.subsystem == SDL_SYSWM_X11) {
+                XClassHint hint;
+                hint.res_name = (char *)"everlive";
+                hint.res_class = (char *)"EverLive";
+                XSetClassHint(wmInfo.info.x11.display, wmInfo.info.x11.window, &hint);
             }
         }
         if (start_fullscreen && window) {
