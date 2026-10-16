@@ -79,15 +79,15 @@ After installation, launch **EverLive** from your application menu, or run:
 
 ## 🎮 EverLive Console Hub & Game Window
 
-![EverLive on Linux](docs/everlive_hub_window.png)
+![EverLive on Linux](docs/everlive_hub_preview.png)
 
 *Console Hub on the desktop, capture in its own window. The hub does not embed the video.*
 
 **Console Hub (`everlive_viewer.py`):**
-- Live HDMI signal status (e.g. `● LIVE: 2560x1440 @ 120.35 FPS • SDR`)
+- Live HDMI signal status capsule (e.g. `● 2560x1440 @ 120 FPS • SDR`)
 - Format preset (Auto / 1440p120 / 1080p120 / 1080p60 / 2160p60 …)
-- RGB LED dropdown, volume slider + mute, **🔄 HDMI Re-Sync** button
-- **🎮 Gaming Screen starten** with options: *start in fullscreen* (checked by default), *open automatically on launch*, *enable VSync*
+- Hardware RGB LED dropdown with live color previews, volume slider + mute, **Signal synchronisieren** button
+- **Gaming Screen starten** with options: *start in fullscreen* (checked by default), *open automatically on launch*, *enable VSync*, *Streamer Mode (Clean Feed)*
 
 **Command-line options:**
 ```bash
