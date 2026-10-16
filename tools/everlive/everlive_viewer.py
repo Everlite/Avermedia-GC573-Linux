@@ -48,8 +48,8 @@ try:
         QGridLayout, QLabel, QPushButton, QComboBox, QCheckBox, QSlider, QFrame,
         QGroupBox, QMessageBox, QStackedLayout, QSizePolicy
     )
-    from PySide6.QtCore import Qt, QTimer, QThread, Signal, QEvent
-    from PySide6.QtGui import QFont, QIcon, QColor, QPalette, QKeySequence, QShortcut
+    from PySide6.QtCore import Qt, QTimer, QThread, Signal, QEvent, QUrl
+    from PySide6.QtGui import QFont, QIcon, QColor, QPalette, QKeySequence, QShortcut, QDesktopServices
     HAS_QT = True
 except ImportError:
     HAS_QT = False
@@ -648,6 +648,18 @@ if HAS_QT:
                     background-color: #2b3346;
                     border-color: #58a6ff;
                 }
+                QPushButton#btnDiscord {
+                    background-color: #5865F2;
+                    color: #ffffff;
+                    border: none;
+                    border-radius: 6px;
+                    padding: 4px 10px;
+                    font-size: 11px;
+                    font-weight: bold;
+                }
+                QPushButton#btnDiscord:hover {
+                    background-color: #4752c4;
+                }
                 QPushButton#btnLaunchStart {
                     background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1f7a37, stop:1 #2ea043);
                     color: white;
@@ -711,6 +723,13 @@ if HAS_QT:
             top_bar.addWidget(lbl_badge)
 
             top_bar.addStretch(1)
+
+            btn_discord = QPushButton("💬 Discord")
+            btn_discord.setObjectName("btnDiscord")
+            btn_discord.setCursor(Qt.PointingHandCursor)
+            btn_discord.setToolTip("Tritt der EverLive Discord-Community bei (Feedback & Hardware-Support)")
+            btn_discord.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://discord.com/invite/D2XFhkPMmc")))
+            top_bar.addWidget(btn_discord)
 
             self.lbl_pill = QLabel("● PRÜFE SIGNAL...")
             self.lbl_pill.setObjectName("pillLive")
