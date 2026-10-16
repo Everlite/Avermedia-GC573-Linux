@@ -429,14 +429,20 @@ class GameStreamer:
             except Exception as e:
                 print(f"[*] Hinweis beim Setzen des Formats: {e}")
         else:
-            # Auto (HDMI Signal): Hardware DV-Timings vom HDMI-Signal abfragen und anwenden (z.B. 4K 3840x2160)
-            try:
-                subprocess.run(
-                    ["v4l2-ctl", "-d", self.vdev, "--set-dv-bt-timings", "query"],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2.0
-                )
-            except Exception:
-                pass
+            # Auto (HDMI Signal): Synchronous v4l2 query only needed for mpv fallback.
+            # Native everlive_display manages DV-Timings and Standby asynchronously without blocking GUI.
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            native_bin = os.path.join(script_dir, "everlive_display")
+            if not os.path.isfile(native_bin):
+                native_bin = os.path.join(script_dir, "gc573_display")
+            if self.force_mpv or not (os.path.isfile(native_bin) and os.access(native_bin, os.X_OK)):
+                try:
+                    subprocess.run(
+                        ["v4l2-ctl", "-d", self.vdev, "--set-dv-bt-timings", "query"],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1.0
+                    )
+                except Exception:
+                    pass
 
         # Prefer native high-performance everlive_display binary (< 2 ms display latency)
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1205,7 +1211,7 @@ def main():
             sys.exit(0)
 
     streamer = GameStreamer(vdev=args.device, adev=args.audio, force_mpv=args.mpv)
-    if args.fullscreen:
+    if args.fullscreen or args.streamer_mode:
         streamer._cli_autostart = True
 
     print(f"[*] GC573 Hardware: Video={streamer.vdev}, Audio={streamer.adev}")

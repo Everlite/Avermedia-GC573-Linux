@@ -2578,7 +2578,7 @@ static bool it6805_rescale_frame_rate(u32 frame_rate_hz, u32 pixel_clock_khz,
 				      u8 *rate)
 {
 	static const u32 std_khz[] = {
-		25200, 27000, 74250, 148500, 241500, 297000, 483400, 594000,
+		25200, 27000, 74250, 148500, 241500, 297000, 445500, 483400, 594000,
 	};
 	static const u8 std_fps[] = { 24, 25, 30, 50, 60, 120, 144, 180, 240 };
 	u32 ref = 0, ref_diff = 0, scaled, i;
@@ -2588,15 +2588,18 @@ static bool it6805_rescale_frame_rate(u32 frame_rate_hz, u32 pixel_clock_khz,
 	if (!frame_rate_hz || !pixel_clock_khz)
 		return false;
 	for (i = 0; i < ARRAY_SIZE(std_fps); i++) {
-		if (frame_rate_hz == std_fps[i]) {
+		u32 diff = frame_rate_hz > std_fps[i] ?
+			   frame_rate_hz - std_fps[i] : std_fps[i] - frame_rate_hz;
+		if (diff <= 2 || (diff * 100 <= (u32)std_fps[i] * 3)) {
 			*rate = std_fps[i];
 			return true;
 		}
 	}
 	/*
 	 * Only an under-read of the nearest standard clock counts. 1440p120
-	 * measures ~494 MHz, which is also 83% of the 594 MHz 4K clock, and
-	 * scaling against that clock turns 120 into 144.
+	 * arrives as ~100 fps at ~413 MHz; 483.4 MHz is the CVT-RB clock. Rescale
+	 * against that clock before the nearest-rate pick, or 100 wins over 120.
+	 * A rate that is already a standard step is left alone.
 	 */
 	for (i = 0; i < ARRAY_SIZE(std_khz); i++) {
 		u32 diff = pixel_clock_khz > std_khz[i] ?
@@ -2621,8 +2624,7 @@ static bool it6805_rescale_frame_rate(u32 frame_rate_hz, u32 pixel_clock_khz,
 			return true;
 		}
 	}
-	*rate = min_t(u32, scaled, U8_MAX);
-	return true;
+	return false;
 }
 
 static u8 it6805_normalize_frame_rate(u32 frame_rate_x100,
@@ -2641,6 +2643,8 @@ static void it6805_framerate_selfcheck(void)
 	WARN_ON(!it6805_rescale_frame_rate(51, 126457, &rate) || rate != 60);
 	WARN_ON(!it6805_rescale_frame_rate(60, 126457, &rate) || rate != 60);
 	WARN_ON(it6805_normalize_frame_rate(12200, 494440) != 120);
+	WARN_ON(it6805_normalize_frame_rate(18000, 445500) != 180);
+	WARN_ON(it6805_normalize_frame_rate(17900, 445500) != 180);
 }
 
 static u8 it6805_normalize_frame_rate(u32 frame_rate_x100,

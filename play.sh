@@ -35,6 +35,13 @@ if ! grep -q "^open_gc573 " /proc/modules; then
     fi
 fi
 
+# Auto-compile native renderer if missing or source is newer
+if [ ! -f "${SCRIPT_DIR}/tools/everlive/everlive_display" ] || [ "${SCRIPT_DIR}/tools/everlive/everlive_display.c" -nt "${SCRIPT_DIR}/tools/everlive/everlive_display" ]; then
+    echo "[*] Kompiliere EverLive Direct-Renderer (everlive_display)..."
+    gcc -O3 -march=native -o "${SCRIPT_DIR}/tools/everlive/everlive_display" "${SCRIPT_DIR}/tools/everlive/everlive_display.c" $(sdl2-config --cflags --libs 2>/dev/null) -lX11 -lpthread 2>/dev/null || true
+    ln -sf everlive_display "${SCRIPT_DIR}/tools/everlive/gc573_display" 2>/dev/null || true
+fi
+
 if [ -x "${SCRIPT_DIR}/tools/everlive/.venv/bin/python3" ]; then
     exec "${SCRIPT_DIR}/tools/everlive/.venv/bin/python3" "${VIEWER}" "$@"
 elif [ -x "${SCRIPT_DIR}/tools/everlive/.venv/bin/python" ]; then
