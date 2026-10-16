@@ -392,6 +392,9 @@ static bool stream_start(struct stream_ctx *ctx, SDL_Renderer *renderer)
         sfmt.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
         sfmt.fmt.pix.field = dv_interlaced ? V4L2_FIELD_INTERLACED : V4L2_FIELD_NONE;
         ioctl(ctx->fd, VIDIOC_S_FMT, &sfmt);
+    } else {
+        /* Timings not locked yet - stay in standby, do not attempt streaming with stale format */
+        return false;
     }
 
     struct v4l2_format fmt = {};
@@ -713,7 +716,7 @@ int main(int argc, char *argv[])
 
     struct stream_ctx ctx = { .fd = fd };
     if (!stream_start(&ctx, renderer)) {
-        printf("[*] Kein HDMI-Signal beim Start - Standby-Modus aktiv (Auto-Connect laeuft)...\n");
+        printf("[*] No HDMI signal at launch - standby mode active (waiting for signal)...\n");
     }
 
     /* Setup Audio Pipeline (PipeWire 10ms with native surround mixing) */
@@ -724,9 +727,14 @@ int main(int argc, char *argv[])
         pthread_create(&audio_tid, NULL, audio_supervisor_thread, (void *)adev);
     }
 
-    printf("[+] Direct Display aktiv! Hotkeys: [F11/f] Vollbild, [m] Mute, [Scroll] Lautstaerke, [Tab] Stats, [h/r] Re-Sync, [Esc/q] Beenden\n");
+    printf("[+] Direct Display active! Hotkeys: [F11/f] Fullscreen, [m] Mute, [Scroll] Volume, [Tab] Stats, [h/r] Re-Sync, [Esc/q] Exit\n");
 
-    struct pollfd pfd = { .fd = fd, .events = POLLIN };
+    /* Subscribe to driver resolution change events for seamless auto-switching */
+    struct v4l2_event_subscription sub = {};
+    sub.type = V4L2_EVENT_SOURCE_CHANGE;
+    ioctl(fd, VIDIOC_SUBSCRIBE_EVENT, &sub);
+
+    struct pollfd pfd = { .fd = fd, .events = POLLIN | POLLPRI };
     uint64_t frame_count = 0;
     uint32_t last_title_time = SDL_GetTicks();
     uint32_t last_retry_time = SDL_GetTicks();
@@ -909,7 +917,7 @@ int main(int argc, char *argv[])
                         if (hf) {
                             fputs("1\n", hf);
                             fclose(hf);
-                            printf("[*] Hardware HDMI HPD Re-Sync Impuls ausgeloest\n");
+                            printf("[*] Hardware HDMI HPD re-sync pulse triggered\n");
                         }
                         globfree(&hg);
                     }
@@ -928,12 +936,12 @@ int main(int argc, char *argv[])
             }
         }
 
-        /* Wenn kein aktiver Stream vorhanden ist: Versuche Re-Connect und zeige Standby-UI */
+        /* If no active stream, attempt reconnect and render standby UI */
         if (!ctx.active) {
             if (now_ticks - last_retry_time >= 300) {
                 last_retry_time = now_ticks;
                 if (stream_start(&ctx, renderer)) {
-                    printf("[+] HDMI-Signal erkannt und synchronisiert: %ux%u!\n", ctx.width, ctx.height);
+                    printf("[+] HDMI signal detected and locked: %ux%u%c!\n", ctx.width, ctx.height, ctx.interlaced ? 'i' : 'p');
                     snprintf(g_toast_custom, sizeof(g_toast_custom), "SIGNAL LOCKED");
                     g_toast_time = SDL_GetTicks();
                     last_frame_ticks = SDL_GetTicks();
@@ -1043,13 +1051,23 @@ int main(int argc, char *argv[])
         uint32_t now_ticks_poll = SDL_GetTicks();
         uint32_t elapsed_since_frame = (now_ticks_poll >= last_frame_ticks) ? (now_ticks_poll - last_frame_ticks) : 0;
 
+        if (poll_ret > 0 && (pfd.revents & POLLPRI)) {
+            struct v4l2_event ev = {};
+            while (ioctl(fd, VIDIOC_DQEVENT, &ev) == 0) {
+                if (ev.type == V4L2_EVENT_SOURCE_CHANGE) {
+                    printf("[*] Hardware source resolution change event received! Switching to standby...\n");
+                    stream_stop(&ctx);
+                }
+            }
+        }
+
         if (poll_ret <= 0) {
             if (ctx.active && elapsed_since_frame > 500) {
-                printf("[*] HDMI Frame-Stall erkannt (%u ms ohne Frame, Aufloesungswechsel?), wechsle in Standby...\n",
+                printf("[*] HDMI Frame-Stall detected (%u ms without frame), switching to standby...\n",
                        elapsed_since_frame);
                 stream_stop(&ctx);
             } else if (pfd.revents & (POLLERR | POLLHUP)) {
-                printf("[*] HDMI-Signal unterbrochen, wechsle in Standby...\n");
+                printf("[*] HDMI signal disconnected, switching to standby...\n");
                 stream_stop(&ctx);
             }
             continue;
@@ -1061,12 +1079,12 @@ int main(int argc, char *argv[])
         if (ioctl(fd, VIDIOC_DQBUF, &buf) < 0) {
             if (errno == EAGAIN) {
                 if (ctx.active && elapsed_since_frame > 500) {
-                    printf("[*] HDMI Frame-Stall (EAGAIN > 500 ms), wechsle in Standby...\n");
+                    printf("[*] HDMI Frame-Stall (EAGAIN > 500 ms), switching to standby...\n");
                     stream_stop(&ctx);
                 }
                 continue;
             }
-            printf("[*] Video-Puffer ungueltig (%s), wechsle in Re-Sync/Standby...\n", strerror(errno));
+            printf("[*] Video buffer invalid (%s), switching to standby...\n", strerror(errno));
             stream_stop(&ctx);
             continue;
         }

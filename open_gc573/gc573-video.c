@@ -1391,9 +1391,9 @@ gc555_video_fill_dv_timings_cap(struct v4l2_dv_timings_cap *cap)
 {
 	memset(cap, 0, sizeof(*cap));
 	cap->type = V4L2_DV_BT_656_1120;
-	cap->bt.min_width = 640;
+	cap->bt.min_width = 320;
 	cap->bt.max_width = 3840;
-	cap->bt.min_height = 480;
+	cap->bt.min_height = 240;
 	cap->bt.max_height = 2160;
 	cap->bt.min_pixelclock = 13500000ULL;
 	cap->bt.max_pixelclock = 600000000ULL;

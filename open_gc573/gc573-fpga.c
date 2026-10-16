@@ -1197,6 +1197,10 @@ gc555_fpga_validate_config(const struct gc555_fpga_video_config *config)
 	if (native_cea_yuv &&
 	    config->input_sampling == GC555_VIDEO_SAMPLING_YUV420)
 		input_mode_supported = config->dual_pixel && !config->ddr;
+	else if (config->input_height == 240 &&
+		 (config->input_width == 1440 || config->input_width == 2880))
+		input_mode_supported = (config->dual_pixel && config->ddr) ||
+				       (!config->dual_pixel && !config->ddr);
 	else if (native_4k_high_rate || native_4k_low_rate ||
 		 native_2880x2160 ||
 		 native_1440_high_rate || native_1440p60 ||

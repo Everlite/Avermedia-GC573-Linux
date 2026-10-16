@@ -345,7 +345,7 @@ class GameStreamer:
             clk_m = re.search(r"Pixelclock:\s*(\d+)", out)
             tot_w = re.search(r"Total width:\s*(\d+)", out)
             tot_h = re.search(r"Total height:\s*(\d+)", out)
-            il_m = re.search(r"Interlaced:\s*(yes|1)", out, re.IGNORECASE)
+            il_m = re.search(r"interlaced", out, re.IGNORECASE)
             scan = "i" if il_m else "p"
 
             if w_m and h_m:
@@ -357,12 +357,15 @@ class GameStreamer:
                     th = int(tot_h.group(1))
                     if tw > 0 and th > 0:
                         fps_calc = clk / (tw * th)
+                        if scan == "i":
+                            fps_calc *= 2.0
                         if abs(fps_calc - round(fps_calc)) < 0.01:
                             fps_str = f"{int(round(fps_calc))} FPS"
                         else:
                             fps_str = f"{fps_calc:.2f} FPS"
+                disp_w = 720 if (w == 1440 and (h == 480 or h == 576)) else (320 if (w == 2880 and h == 240) else w)
                 info["locked"] = True
-                info["resolution"] = f"{w}x{h}{scan}"
+                info["resolution"] = f"{disp_w}x{h}{scan}"
                 info["framerate"] = fps_str
 
                 info["hdr"] = self.hdr_label() or "SDR"
@@ -416,7 +419,7 @@ class GameStreamer:
             clk_m = re.search(r"Pixelclock:\s*(\d+)", out)
             tot_w = re.search(r"Total width:\s*(\d+)", out)
             tot_h = re.search(r"Total height:\s*(\d+)", out)
-            il_m = re.search(r"Interlaced:\s*(yes|1)", out, re.IGNORECASE)
+            il_m = re.search(r"interlaced", out, re.IGNORECASE)
             scan = "i" if il_m else "p"
             if w_m and h_m:
                 w, h = int(w_m.group(1)), int(h_m.group(1))
@@ -427,11 +430,14 @@ class GameStreamer:
                     th = int(tot_h.group(1))
                     if tw > 0 and th > 0:
                         fps_calc = clk / (tw * th)
+                        if scan == "i":
+                            fps_calc *= 2.0
                         if abs(fps_calc - round(fps_calc)) < 0.01:
                             fps_str = f"{int(round(fps_calc))} FPS"
                         else:
                             fps_str = f"{fps_calc:.2f} FPS"
-                return f"{w}x{h}{scan}", fps_str
+                disp_w = 720 if (w == 1440 and (h == 480 or h == 576)) else (320 if (w == 2880 and h == 240) else w)
+                return f"{disp_w}x{h}{scan}", fps_str
         except Exception:
             pass
 
@@ -441,12 +447,13 @@ class GameStreamer:
                 stderr=subprocess.DEVNULL, timeout=0.5
             ).decode()
             m = re.search(r"Width/Height\s*:\s*(\d+)/(\d+)", out)
-            il_m = re.search(r"Field\s*:\s*Interlaced", out, re.IGNORECASE)
+            il_m = re.search(r"Field\s*:\s*(Interlaced|Alternate|Top|Bottom)", out, re.IGNORECASE)
             scan = "i" if il_m else "p"
             if m:
                 w, h = int(m.group(1)), int(m.group(2))
+                disp_w = 720 if (w == 1440 and (h == 480 or h == 576)) else (320 if (w == 2880 and h == 240) else w)
                 if w > 0 and h > 0:
-                    return f"{w}x{h}{scan}", None
+                    return f"{disp_w}x{h}{scan}", None
         except Exception:
             pass
         return None, None
