@@ -369,7 +369,7 @@ class GameStreamer:
         except Exception:
             return False
 
-    def start(self, preset_name: str = "Auto (HDMI Signal)", fullscreen: bool = False, volume: float = 1.0, vsync: bool = False) -> bool:
+    def start(self, preset_name: str = "Auto (HDMI Signal)", fullscreen: bool = False, volume: float = 1.0, vsync: bool = False, streamer_mode: bool = False) -> bool:
         if self.is_running:
             return True
 
@@ -416,6 +416,8 @@ class GameStreamer:
                 cmd.append("-f")
             if vsync:
                 cmd.append("--vsync")
+            if streamer_mode:
+                cmd.append("--streamer-mode")
             cmd.extend(["-v", f"{volume:.2f}"])
             print(f"[*] Starte nativen EverLive Direct-Renderer (Pure Native Wayland): {' '.join(cmd)}")
             try:
@@ -455,6 +457,8 @@ class GameStreamer:
 
         if fullscreen:
             mpv_cmd.append("--fullscreen")
+        if streamer_mode:
+            mpv_cmd.extend(["--no-osc", "--osd-level=0", "--cursor-autohide=always"])
 
         try:
             self.mpv_proc = subprocess.Popen(mpv_cmd, env=mpv_env, start_new_session=True)
@@ -534,12 +538,14 @@ class GameStreamer:
 
 if HAS_QT:
     class MainWindow(QMainWindow):
-        def __init__(self, streamer: GameStreamer, vsync: bool = False):
+        def __init__(self, streamer: GameStreamer, vsync: bool = False, streamer_mode: bool = False):
             super().__init__()
             self.streamer = streamer
             self.enable_vsync = vsync
             self.muted = False
             self.saved_cfg = load_settings()
+            if streamer_mode:
+                self.saved_cfg["streamer_mode"] = True
 
             self.init_ui()
 
@@ -744,27 +750,33 @@ if HAS_QT:
             self.btn_launch.clicked.connect(self.toggle_stream)
             v_hero.addWidget(self.btn_launch)
 
-            # Launch Options
-            h_opts = QHBoxLayout()
-            h_opts.setSpacing(18)
+            # Launch Options (2x2 Grid)
+            grid_opts = QGridLayout()
+            grid_opts.setHorizontalSpacing(18)
+            grid_opts.setVerticalSpacing(8)
 
             self.chk_fullscreen = QCheckBox("⛶ Direkt im Vollbild starten")
             self.chk_fullscreen.setChecked(self.saved_cfg.get("fullscreen", True))
             self.chk_fullscreen.toggled.connect(lambda val: save_settings({"fullscreen": val}))
-            h_opts.addWidget(self.chk_fullscreen)
+            grid_opts.addWidget(self.chk_fullscreen, 0, 0)
+
+            self.chk_vsync = QCheckBox("🔒 VSync (120 Hz Takt)")
+            self.chk_vsync.setChecked(self.saved_cfg.get("vsync", self.enable_vsync))
+            self.chk_vsync.toggled.connect(lambda val: save_settings({"vsync": val}))
+            grid_opts.addWidget(self.chk_vsync, 0, 1)
 
             self.chk_autostart = QCheckBox("⚡ Beim Start automatisch öffnen")
             self.chk_autostart.setChecked(self.saved_cfg.get("autostart", False))
             self.chk_autostart.toggled.connect(lambda val: save_settings({"autostart": val}))
-            h_opts.addWidget(self.chk_autostart)
+            grid_opts.addWidget(self.chk_autostart, 1, 0)
 
-            self.chk_vsync = QCheckBox("🔒 VSync aktivieren (120 Hz Takt)")
-            self.chk_vsync.setChecked(self.saved_cfg.get("vsync", self.enable_vsync))
-            self.chk_vsync.toggled.connect(lambda val: save_settings({"vsync": val}))
-            h_opts.addWidget(self.chk_vsync)
+            self.chk_streamer = QCheckBox("🎥 Streamer Mode (Clean Feed)")
+            self.chk_streamer.setToolTip("Sperrt Maus-Steuerleiste, HUD und Toasts für ungestörte OBS-Aufnahmen (Hotkey: 'S')")
+            self.chk_streamer.setChecked(self.saved_cfg.get("streamer_mode", False))
+            self.chk_streamer.toggled.connect(lambda val: save_settings({"streamer_mode": val}))
+            grid_opts.addWidget(self.chk_streamer, 1, 1)
 
-            h_opts.addStretch(1)
-            v_hero.addLayout(h_opts)
+            v_hero.addLayout(grid_opts)
 
             root_layout.addWidget(card_hero)
 
@@ -866,7 +878,7 @@ if HAS_QT:
 
             b_layout.addStretch(1)
 
-            lbl_hints = QLabel("Im Spielfenster: Taste F = Vollbild • Tab = HUD Stats • M = Stumm • H = Re-Sync • Esc/Q = Beenden")
+            lbl_hints = QLabel("Im Spielfenster: F = Vollbild • Tab = Stats • S = Streamer Mode • M = Stumm • H = Re-Sync • Esc = Beenden")
             lbl_hints.setStyleSheet("color: #58a6ff; font-size: 11px;")
             b_layout.addWidget(lbl_hints)
 
@@ -891,13 +903,15 @@ if HAS_QT:
             vol = self.slider_vol.value() / 100.0
             is_fs = self.chk_fullscreen.isChecked()
             is_vsync = self.chk_vsync.isChecked()
+            is_streamer = self.chk_streamer.isChecked()
             save_settings({
                 "preset": preset,
                 "volume": vol,
                 "fullscreen": is_fs,
                 "vsync": is_vsync,
+                "streamer_mode": is_streamer,
             })
-            success = self.streamer.start(preset_name=preset, fullscreen=is_fs, volume=vol, vsync=is_vsync)
+            success = self.streamer.start(preset_name=preset, fullscreen=is_fs, volume=vol, vsync=is_vsync, streamer_mode=is_streamer)
             if success:
                 self.btn_launch.setText("⏹ Gaming Screen beenden")
                 self.btn_launch.setObjectName("btnLaunchStop")
@@ -1006,6 +1020,7 @@ def main():
     parser.add_argument("-f", "--fullscreen", action="store_true", help="Direkt im Vollbild starten")
     parser.add_argument("-p", "--preset", default="Auto (HDMI Signal)", choices=list(PRESETS.keys()), help="Auflösungs-Preset")
     parser.add_argument("--vsync", action="store_true", help="Aktiviert VSync für ruckelfreie Präsentation auf passenden Monitoren")
+    parser.add_argument("-s", "--streamer-mode", "--clean", action="store_true", help="Streamer Mode: Clean Feed ohne On-Screen HUD und Kontrollleiste")
     parser.add_argument("--cli", action="store_true", help="Startet direkt ohne GUI")
     parser.add_argument("--mpv", action="store_true", help="Erzwingt mpv als Video-Engine anstelle von everlive_display")
     parser.add_argument("--led", type=str, default=None,
@@ -1053,7 +1068,7 @@ def main():
         if not info["locked"]:
             print("[!] Warnung: Es wurde aktuell kein aktives HDMI-Signal auf der GC573 erkannt.")
             print("    Bitte prüfen, ob die Quelle eingeschaltet ist und ein Bild ausgibt.")
-        if not streamer.start(preset_name=args.preset, fullscreen=args.fullscreen, volume=args.volume, vsync=args.vsync):
+        if not streamer.start(preset_name=args.preset, fullscreen=args.fullscreen, volume=args.volume, vsync=args.vsync, streamer_mode=args.streamer_mode):
             sys.exit(1)
         print("[+] Fenster geöffnet. Drücke 'q' im Fenster oder Strg+C zum Beenden.")
         while streamer.poll():
@@ -1062,7 +1077,7 @@ def main():
     else:
         app = QApplication(sys.argv)
         app.setApplicationName("EverLive")
-        window = MainWindow(streamer, vsync=args.vsync)
+        window = MainWindow(streamer, vsync=args.vsync, streamer_mode=args.streamer_mode)
         window.show()
         sys.exit(app.exec())
 

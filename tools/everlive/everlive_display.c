@@ -118,6 +118,7 @@ static float g_volume = 1.0f;
 static volatile sig_atomic_t g_audio_dirty = 1;
 static bool g_show_stats = true;
 static bool g_hud_visible = true;
+static bool g_streamer_mode = false;
 static uint32_t g_last_mouse_time = 0;
 static uint32_t g_volume_toast_time = 0;
 static char g_toast_custom[64] = "";
@@ -469,6 +470,8 @@ int main(int argc, char *argv[])
             start_fullscreen = true;
         else if (!strcmp(argv[i], "--vsync"))
             enable_vsync = true;
+        else if (!strcmp(argv[i], "-s") || !strcmp(argv[i], "--streamer-mode") || !strcmp(argv[i], "--clean"))
+            g_streamer_mode = true;
         else if (!strcmp(argv[i], "-d") && i + 1 < argc)
             vdev = argv[++i];
         else if (!strcmp(argv[i], "-a") && i + 1 < argc)
@@ -484,7 +487,7 @@ int main(int argc, char *argv[])
         else if (!strcmp(argv[i], "--no-audio") || !strcmp(argv[i], "-n"))
             adev = "none";
         else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
-            printf("Usage: %s [-f|--fullscreen] [--vsync] [-d /dev/videoX] [-a hw:CARD,DEV|none] [-w wid] [--no-audio]\n", argv[0]);
+            printf("Usage: %s [-f|--fullscreen] [--vsync] [-s|--streamer-mode] [-d /dev/videoX] [-a hw:CARD,DEV|none] [-w wid] [--no-audio]\n", argv[0]);
             return 0;
         }
     }
@@ -714,9 +717,13 @@ int main(int argc, char *argv[])
                 g_running = 0;
             } else if (ev.type == SDL_MOUSEMOTION) {
                 g_last_mouse_time = SDL_GetTicks();
-                SDL_ShowCursor(SDL_ENABLE);
+                if (!g_streamer_mode) {
+                    SDL_ShowCursor(SDL_ENABLE);
+                } else {
+                    SDL_ShowCursor(SDL_DISABLE);
+                }
 
-                if (dragging_volume) {
+                if (dragging_volume && !g_streamer_mode) {
                     int mx = ev.motion.x;
                     float ratio = (float)(mx - slider_rect.x) / (float)slider_rect.w;
                     if (ratio < 0.0f) ratio = 0.0f;
@@ -728,13 +735,17 @@ int main(int argc, char *argv[])
                 }
             } else if (ev.type == SDL_MOUSEBUTTONDOWN) {
                 g_last_mouse_time = SDL_GetTicks();
-                SDL_ShowCursor(SDL_ENABLE);
+                if (!g_streamer_mode) {
+                    SDL_ShowCursor(SDL_ENABLE);
+                } else {
+                    SDL_ShowCursor(SDL_DISABLE);
+                }
 
                 if (ev.button.button == SDL_BUTTON_LEFT) {
                     if (ev.button.clicks == 2 && g_embed_wid == 0) {
                         /* Double-click toggles fullscreen */
                         update_fullscreen(window, !g_fullscreen);
-                    } else if (g_hud_visible && ev.button.y >= hud_y && ev.button.y <= hud_y + hud_h) {
+                    } else if (!g_streamer_mode && g_hud_visible && ev.button.y >= hud_y && ev.button.y <= hud_y + hud_h) {
                         int bx = ev.button.x;
                         /* Mute toggle button (hud_x + 10 .. + 55) */
                         if (bx >= hud_x + 10 && bx <= hud_x + 58) {
@@ -775,7 +786,9 @@ int main(int argc, char *argv[])
                 }
             } else if (ev.type == SDL_MOUSEWHEEL) {
                 g_last_mouse_time = SDL_GetTicks();
-                SDL_ShowCursor(SDL_ENABLE);
+                if (!g_streamer_mode) {
+                    SDL_ShowCursor(SDL_ENABLE);
+                }
 
                 if (ev.wheel.y > 0) {
                     g_volume = (g_volume < 1.45f) ? g_volume + 0.05f : 1.5f;
@@ -784,28 +797,42 @@ int main(int argc, char *argv[])
                     g_volume = (g_volume > 0.05f) ? g_volume - 0.05f : 0.0f;
                 }
                 g_audio_dirty = 1;
-                g_volume_toast_time = SDL_GetTicks();
+                if (!g_streamer_mode) {
+                    g_volume_toast_time = SDL_GetTicks();
+                }
             } else if (ev.type == SDL_KEYDOWN) {
                 g_last_mouse_time = SDL_GetTicks();
-                SDL_ShowCursor(SDL_ENABLE);
+                if (!g_streamer_mode) {
+                    SDL_ShowCursor(SDL_ENABLE);
+                }
 
                 if ((ev.key.keysym.sym == SDLK_ESCAPE || ev.key.keysym.sym == SDLK_q) && g_embed_wid == 0) {
                     g_running = 0;
                 } else if ((ev.key.keysym.sym == SDLK_f || ev.key.keysym.sym == SDLK_F11) && g_embed_wid == 0) {
                     update_fullscreen(window, !g_fullscreen);
+                } else if (ev.key.keysym.sym == SDLK_s || ev.key.keysym.sym == SDLK_F10) {
+                    g_streamer_mode = !g_streamer_mode;
+                    if (g_streamer_mode) {
+                        SDL_ShowCursor(SDL_DISABLE);
+                        printf("[*] Streamer Mode (Clean Feed) AKTIVIERT: Overlays und Mauszeiger gesperrt\n");
+                    } else {
+                        g_last_mouse_time = SDL_GetTicks();
+                        SDL_ShowCursor(SDL_ENABLE);
+                        printf("[*] Streamer Mode DEAKTIVIERT: Normaler OSD-Modus aktiv\n");
+                    }
                 } else if (ev.key.keysym.sym == SDLK_m) {
                     g_muted = !g_muted;
                     g_audio_dirty = 1;
-                    g_volume_toast_time = SDL_GetTicks();
+                    if (!g_streamer_mode) g_volume_toast_time = SDL_GetTicks();
                 } else if (ev.key.keysym.sym == SDLK_0 || ev.key.keysym.sym == SDLK_UP || ev.key.keysym.sym == SDLK_PLUS) {
                     g_volume = (g_volume < 1.45f) ? g_volume + 0.05f : 1.5f;
                     g_muted = false;
                     g_audio_dirty = 1;
-                    g_volume_toast_time = SDL_GetTicks();
+                    if (!g_streamer_mode) g_volume_toast_time = SDL_GetTicks();
                 } else if (ev.key.keysym.sym == SDLK_9 || ev.key.keysym.sym == SDLK_DOWN || ev.key.keysym.sym == SDLK_MINUS) {
                     g_volume = (g_volume > 0.05f) ? g_volume - 0.05f : 0.0f;
                     g_audio_dirty = 1;
-                    g_volume_toast_time = SDL_GetTicks();
+                    if (!g_streamer_mode) g_volume_toast_time = SDL_GetTicks();
                 } else if (ev.key.keysym.sym == SDLK_TAB || ev.key.keysym.sym == SDLK_i) {
                     g_show_stats = !g_show_stats;
                 } else if (ev.key.keysym.sym == SDLK_h || ev.key.keysym.sym == SDLK_r) {
@@ -864,10 +891,10 @@ int main(int argc, char *argv[])
                 draw_string(renderer, "EVERLIVE GAMING SCREEN", card_x + 65, card_y + 25, 2, (SDL_Color){240, 246, 252, 255});
                 draw_string(renderer, "Warte auf HDMI-Signal...", card_x + 140, card_y + 70, 1, (SDL_Color){210, 153, 34, 255});
                 draw_string(renderer, "Konsole oder Bildquelle einschalten", card_x + 105, card_y + 98, 1, (SDL_Color){139, 148, 158, 255});
-                draw_string(renderer, "[H] Re-Sync  *  [Esc] Beenden", card_x + 130, card_y + 126, 1, (SDL_Color){88, 166, 255, 255});
+                draw_string(renderer, "[H] Re-Sync  *  [S] Streamer Mode  *  [Esc] Beenden", card_x + 90, card_y + 126, 1, (SDL_Color){88, 166, 255, 255});
 
                 /* HUD zeichnen damit Lautstaerke/Exit nutzbar bleiben */
-                if (g_hud_visible) {
+                if (g_hud_visible && !g_streamer_mode) {
                     SDL_Rect hud_bg = { hud_x, hud_y, hud_w, hud_h };
                     SDL_SetRenderDrawColor(renderer, 15, 18, 26, 215);
                     SDL_RenderFillRect(renderer, &hud_bg);
@@ -1040,7 +1067,10 @@ int main(int argc, char *argv[])
         now_ticks = SDL_GetTicks();
 
         /* Auto-hide HUD and cursor on idle */
-        if (now_ticks - g_last_mouse_time > 2500 && !dragging_volume) {
+        if (g_streamer_mode) {
+            g_hud_visible = false;
+            SDL_ShowCursor(SDL_DISABLE);
+        } else if (now_ticks - g_last_mouse_time > 2500 && !dragging_volume) {
             g_hud_visible = false;
             SDL_ShowCursor(SDL_DISABLE);
         } else {
@@ -1048,7 +1078,7 @@ int main(int argc, char *argv[])
         }
 
         /* 1. Draw On-Screen Display HUD if active */
-        if (g_hud_visible) {
+        if (g_hud_visible && !g_streamer_mode) {
             SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 
             /* Main HUD Panel Bar */
@@ -1125,7 +1155,7 @@ int main(int argc, char *argv[])
         }
 
         /* 2. Top-Right Stats HUD Overlay (if enabled) */
-        if (g_show_stats) {
+        if (g_show_stats && !g_streamer_mode) {
             SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
             int box_w = 200;
             int box_h = 75;
@@ -1149,7 +1179,7 @@ int main(int argc, char *argv[])
         }
 
         /* 3. Center Toast (pops up on scroll/key volume changes or HDMI re-sync) */
-        if (now_ticks - g_volume_toast_time < 1200 || now_ticks - g_toast_time < 1200) {
+        if (!g_streamer_mode && (now_ticks - g_volume_toast_time < 1200 || now_ticks - g_toast_time < 1200)) {
             SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
             int tw = 220;
             int th = 40;
@@ -1186,11 +1216,13 @@ int main(int argc, char *argv[])
 
             if (g_embed_wid == 0) {
                 char title[180];
-                snprintf(title, sizeof(title), "EverLive - %ux%u @ %.2f FPS | Latenz: %.1f ms | Vol: %d%%",
-                         ctx.width, ctx.height, live_fps, lat_ms, g_muted ? 0 : (int)(g_volume * 100.0f));
+                snprintf(title, sizeof(title), "EverLive - %ux%u @ %.2f FPS | Latenz: %.1f ms | Vol: %d%%%s",
+                         ctx.width, ctx.height, live_fps, lat_ms, g_muted ? 0 : (int)(g_volume * 100.0f),
+                         g_streamer_mode ? " [STREAMER MODE]" : "");
                 SDL_SetWindowTitle(window, title);
-                printf("[*] Stream: %ux%u @ %.2f FPS | Latenz: %.1f ms | Jitter: %u/s\n",
-                       ctx.width, ctx.height, live_fps, lat_ms, live_jitter);
+                printf("[*] Stream: %ux%u @ %.2f FPS | Latenz: %.1f ms | Jitter: %u/s%s\n",
+                       ctx.width, ctx.height, live_fps, lat_ms, live_jitter,
+                       g_streamer_mode ? " [STREAMER MODE]" : "");
                 fflush(stdout);
             }
         }

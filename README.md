@@ -91,6 +91,7 @@ After installation, launch **EverLive** from your application menu, or run:
 **Command-line options:**
 ```bash
 ./play.sh -f                 # start the game window immediately (fullscreen)
+./play.sh -s                 # start in Streamer Mode (clean feed without overlays)
 ./play.sh --cli -f           # no GUI, game window only
 ./play.sh --vsync            # enable VSync
 ./play.sh --led off          # set RGB LED and exit
@@ -160,6 +161,7 @@ These controls work inside the game window:
 |:---|:---|
 | **Mouse Wheel Up / Down** | Volume up / down in 5% steps (with an on-screen notice) |
 | **HUD Volume Slider** | Drag the slider in the bar at the bottom center of the window |
+| <kbd>s</kbd> or <kbd>F10</kbd> | Toggle **Streamer Mode (Clean Feed)** — locks overlays, hides cursor & suppresses HUD for OBS capture |
 | <kbd>m</kbd> | Mute / unmute audio |
 | <kbd>F11</kbd> or <kbd>f</kbd> (or double-click) | Toggle borderless fullscreen |
 | <kbd>Tab</kbd> or <kbd>i</kbd> | Show / hide the stats overlay (FPS, latency, jitter) |
@@ -167,7 +169,7 @@ These controls work inside the game window:
 | <kbd>+</kbd> / <kbd>-</kbd>, <kbd>↑</kbd> / <kbd>↓</kbd> or <kbd>0</kbd> / <kbd>9</kbd> | Volume up / down in 5% steps (0–150%) |
 | <kbd>Esc</kbd> or <kbd>q</kbd> | Close the game window |
 
-*Note: The mouse cursor and HUD fade out after 2.5 seconds without input so nothing blocks your view.*
+*Note: The mouse cursor and HUD fade out after 2.5 seconds without input so nothing blocks your view. In Streamer Mode (<kbd>s</kbd>), all overlays and cursor popups are hard-disabled for clean capture.*
 
 ---
 
