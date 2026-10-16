@@ -16,6 +16,7 @@ Unlike the proprietary vendor driver package, `open_gc573` requires **no binary 
 - **Dynamic FPGA Clocking:** Automatically calculates and programs internal VIP Frame Period (`0x103c` @ 148.5 MHz) to prevent hardware frame rate decimation.
 - **High-Bandwidth DDR Dual-Pixel Mode:** Enables dual-pixel DDR mode (`0x3` in VIP Pixel Mode `0x1088`) for >400 MHz pixel clocks (1440p120, 4K60).
 - **Format Flexibility:** Supports NV12, YUYV (YUY2), RGB32, and P010 (10-bit).
+- **Extensive Mode & Refresh Support:** Supports standard resolutions from 480p up to 4K60, 1440p120, 1080p up to 240Hz (including 180Hz), ultrawide 3840×1080 (RetroTINK 4K 120Hz BFI mode), and 1920×1200 WUXGA. Non-integer refresh rates within ±2 Hz (such as 59.94 Hz NTSC and 119.88 Hz) are seamlessly supported.
 - **Live HDR metadata:** PQ and HLG are classified from the DRM InfoFrame. A colorimetry or HDR change at the same resolution updates the color matrix and does not reset the VIP or DMA. Userspace reads the read-only V4L2 control `hdr_mode` (`0` SDR, `1` PQ, `2` PQ BT.2020, `3` HLG). YUYV PQ is reported as transfer function SMPTE 2084.
 - **ALSA Multi-Channel & Stereo HDMI Audio:** Native ALSA capture device supporting 8-channel (7.1 surround), 6-channel (5.1 surround), and 2-channel stereo LPCM.
 - **On-the-Fly Hardware RGB Control:** Sysfs attribute `led_mode` (BAR 0 `0x0800`–`0x086c` & script RAM `0x2008`) permanently solves the factory blinking loop and enables instant color switching (Off, Blue, Green, Red, Cyan, Magenta, Yellow, White) without stream restarts.
