@@ -33,10 +33,14 @@ rm -f /etc/udev/rules.d/70-everlive.rules
 udevadm control --reload-rules 2>/dev/null || true
 udevadm trigger 2>/dev/null || true
 
-# 5. Desktop-Einträge entfernen
+# 5. Desktop-Einträge & Icons entfernen
 rm -f "${TARGET_HOME}/.local/share/applications/everlive.desktop"
+rm -f "${TARGET_HOME}/.local/share/icons/hicolor/"*/apps/everlive.png
 if command -v update-desktop-database >/dev/null 2>&1; then
     update-desktop-database "${TARGET_HOME}/.local/share/applications" 2>/dev/null || true
+fi
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -f -t "${TARGET_HOME}/.local/share/icons/hicolor" 2>/dev/null || true
 fi
 
 echo "[+] EverLive wurde sauber deinstalliert."

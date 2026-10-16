@@ -218,11 +218,28 @@ udevadm trigger 2>/dev/null || true
 # Benutzer zur video & audio Gruppe hinzufügen falls nötig
 usermod -aG video,audio "${TARGET_USER}" 2>/dev/null || true
 
-# 6. Desktop-Verknüpfung (Startmenü)
-echo -e "\n${BLUE}[5/5] Installiere EverLive Desktop-Starter ins Anwendungsmenü...${NC}"
+# 6. Desktop-Verknüpfung & Application-Icon (Startmenü)
+echo -e "\n${BLUE}[5/5] Installiere EverLive Desktop-Starter & Anwendungs-Icon ins System...${NC}"
 APPS_DIR="${TARGET_HOME}/.local/share/applications"
 mkdir -p "${APPS_DIR}"
 rm -f "${APPS_DIR}/gc573-ps5.desktop"
+
+# Installiere hochauflösende Icons in alle Standard-Größen
+ICONS_BASE="${TARGET_HOME}/.local/share/icons/hicolor"
+for sz in 16 32 48 64 128 256 512; do
+    if [ -f "${VIEWER_DIR}/icons/${sz}x${sz}/apps/everlive.png" ]; then
+        mkdir -p "${ICONS_BASE}/${sz}x${sz}/apps"
+        cp -f "${VIEWER_DIR}/icons/${sz}x${sz}/apps/everlive.png" "${ICONS_BASE}/${sz}x${sz}/apps/everlive.png"
+    fi
+done
+if [ -f "${VIEWER_DIR}/icons/scalable/apps/everlive.png" ]; then
+    mkdir -p "${ICONS_BASE}/scalable/apps"
+    cp -f "${VIEWER_DIR}/icons/scalable/apps/everlive.png" "${ICONS_BASE}/scalable/apps/everlive.png"
+fi
+chown -R "${TARGET_USER}:${TARGET_USER}" "${ICONS_BASE}" 2>/dev/null || true
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -f -t "${ICONS_BASE}" 2>/dev/null || true
+fi
 
 cat > "${APPS_DIR}/everlive.desktop" <<EOF
 [Desktop Entry]
@@ -230,11 +247,12 @@ Name=EverLive
 GenericName=Console Gaming Screen
 Comment=Ultra-Low-Latency HDMI Gaming Screen für PS5 & Konsolen (AVerMedia GC573)
 Exec=${SCRIPT_DIR}/play.sh
-Icon=input-gaming
+Icon=everlive
 Terminal=false
 Type=Application
 Categories=Game;AudioVideo;Video;
 Keywords=EverLive;PS5;Capture;AVerMedia;GC573;HDMI;Gaming;Console;
+StartupWMClass=EverLive
 EOF
 
 chown -R "${TARGET_USER}:${TARGET_USER}" "${APPS_DIR}/everlive.desktop" 2>/dev/null || true

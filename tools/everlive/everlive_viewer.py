@@ -562,6 +562,11 @@ if HAS_QT:
             self.setWindowTitle("EverLive - Live Gamer 4K Console Hub")
             self.setFixedSize(680, 530)
 
+            # Application & Window Icon
+            icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "everlive.png")
+            if os.path.isfile(icon_path):
+                self.setWindowIcon(QIcon(icon_path))
+
             # EverLive Dark Studio Theme
             self.setStyleSheet("""
                 QMainWindow {
@@ -1077,6 +1082,10 @@ def main():
     else:
         app = QApplication(sys.argv)
         app.setApplicationName("EverLive")
+        app.setDesktopFileName("everlive.desktop")
+        icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "everlive.png")
+        if os.path.isfile(icon_path):
+            app.setWindowIcon(QIcon(icon_path))
         window = MainWindow(streamer, vsync=args.vsync, streamer_mode=args.streamer_mode)
         window.show()
         sys.exit(app.exec())

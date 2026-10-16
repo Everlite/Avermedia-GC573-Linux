@@ -615,6 +615,25 @@ int main(int argc, char *argv[])
             win_w, win_h,
             win_flags
         );
+        if (window) {
+            char exe_dir[512] = "";
+            ssize_t len = readlink("/proc/self/exe", exe_dir, sizeof(exe_dir) - 1);
+            if (len > 0) {
+                exe_dir[len] = '\0';
+                char *slash = strrchr(exe_dir, '/');
+                if (slash) *slash = '\0';
+            }
+            char icon_path[600];
+            snprintf(icon_path, sizeof(icon_path), "%s/everlive.bmp", exe_dir);
+            SDL_Surface *icon = SDL_LoadBMP(icon_path);
+            if (!icon) {
+                icon = SDL_LoadBMP("tools/everlive/everlive.bmp");
+            }
+            if (icon) {
+                SDL_SetWindowIcon(window, icon);
+                SDL_FreeSurface(icon);
+            }
+        }
         if (start_fullscreen && window) {
             update_fullscreen(window, true);
         }
