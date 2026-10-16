@@ -23,8 +23,8 @@ depmod -a "$(uname -r)"
 
 # 3. DKMS entfernen falls vorhanden
 if command -v dkms >/dev/null 2>&1; then
-    dkms remove -m everlive -v 1.0.0 --all 2>/dev/null || true
-    rm -rf /usr/src/everlive-1.0.0
+    dkms remove -m everlive -v 0.2.0 --all 2>/dev/null || true
+    rm -rf /usr/src/everlive-0.2.0
 fi
 
 # 4. Autostart & udev Regeln entfernen

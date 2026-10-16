@@ -1,6 +1,7 @@
 # EverLive - AVerMedia GC573 Linux Gaming Suite & Open Driver
 
 [![EverLive](https://img.shields.io/badge/project-EverLive-8a2be2.svg)](#)
+[![Discord](https://img.shields.io/badge/Discord-Join%20Community-5865F2?logo=discord&logoColor=white)](https://discord.com/invite/D2XFhkPMmc)
 [![Status](https://img.shields.io/badge/status-low%20latency%20(experimental)-brightgreen.svg)](#highlights--verified-capabilities)
 [![open_gc573](https://img.shields.io/badge/driver-open__gc573%20(100%25%20blob--free)-2e7d32.svg)](#hardware-and-kernel-compatibility)
 [![RGB Control](https://img.shields.io/badge/RGB%20Control-On--the--Fly%20Hardware%20MMIO-blueviolet.svg)](#-hardware-rgb-led-lighting-on-the-fly-control)
@@ -288,6 +289,19 @@ Run the uninstaller in the repository folder:
 ```bash
 sudo ./uninstall.sh
 ```
+
+---
+
+## 💬 Community & Discord
+
+Have questions, want to share your hardware setup, or discuss compatibility across different consoles, monitors, and Linux distributions?
+
+Join our official community on Discord:  
+👉 **[Join the EverLive Discord Server](https://discord.com/invite/D2XFhkPMmc)**
+
+* Share logs, `dmesg` outputs, and hardware configs
+* Get help setting up PS5, Xbox Series X, Switch, or RetroTINK
+* Chat about upcoming driver milestones and latency tuning
 
 ---
 

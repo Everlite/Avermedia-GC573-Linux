@@ -15,6 +15,8 @@ import re
 import json
 from typing import Optional, Tuple, Dict
 
+__version__ = "0.2.0-beta"
+
 CONFIG_DIR = os.path.expanduser("~/.config/everlive")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "settings.json")
 
