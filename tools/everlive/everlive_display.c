@@ -1022,28 +1022,14 @@ int main(int argc, char *argv[])
             }
         }
 
-        /* Auf Hardware-Aufloesungswechsel mitten im Betrieb pruefen (alle 30 Frames) */
-        if (frame_count % 30 == 0 && ctx.active) {
-            struct v4l2_dv_timings check_dv = {};
-            if (ioctl(fd, VIDIOC_QUERY_DV_TIMINGS, &check_dv) == 0) {
-                if (check_dv.bt.width > 0 && check_dv.bt.height > 0 &&
-                    (check_dv.bt.width != ctx.width || check_dv.bt.height != ctx.height)) {
-                    printf("[*] HDMI Aufloesungswechsel erkannt: %ux%u -> %ux%u\n",
-                           ctx.width, ctx.height, check_dv.bt.width, check_dv.bt.height);
-                    stream_stop(&ctx);
-                    if (stream_start(&ctx, renderer)) {
-                        last_frame_ticks = SDL_GetTicks();
-                    }
-                    continue;
-                }
-            }
-        }
-
         int poll_ret = poll(&pfd, 1, 50);
+        uint32_t now_ticks_poll = SDL_GetTicks();
+        uint32_t elapsed_since_frame = (now_ticks_poll >= last_frame_ticks) ? (now_ticks_poll - last_frame_ticks) : 0;
+
         if (poll_ret <= 0) {
-            if (ctx.active && (now_ticks - last_frame_ticks > 350)) {
+            if (ctx.active && elapsed_since_frame > 500) {
                 printf("[*] HDMI Frame-Stall erkannt (%u ms ohne Frame, Aufloesungswechsel?), wechsle in Standby...\n",
-                       now_ticks - last_frame_ticks);
+                       elapsed_since_frame);
                 stream_stop(&ctx);
             } else if (pfd.revents & (POLLERR | POLLHUP)) {
                 printf("[*] HDMI-Signal unterbrochen, wechsle in Standby...\n");
@@ -1057,8 +1043,8 @@ int main(int argc, char *argv[])
         buf.memory = V4L2_MEMORY_MMAP;
         if (ioctl(fd, VIDIOC_DQBUF, &buf) < 0) {
             if (errno == EAGAIN) {
-                if (ctx.active && (now_ticks - last_frame_ticks > 350)) {
-                    printf("[*] HDMI Frame-Stall (EAGAIN > 350 ms), wechsle in Standby...\n");
+                if (ctx.active && elapsed_since_frame > 500) {
+                    printf("[*] HDMI Frame-Stall (EAGAIN > 500 ms), wechsle in Standby...\n");
                     stream_stop(&ctx);
                 }
                 continue;
@@ -1068,7 +1054,7 @@ int main(int argc, char *argv[])
             continue;
         }
 
-        last_frame_ticks = now_ticks;
+        last_frame_ticks = now_ticks_poll;
 
         /* Calculate exact capture-to-display latency */
         struct timespec now_ts;
