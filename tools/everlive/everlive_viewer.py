@@ -554,8 +554,7 @@ if HAS_QT:
 
         def init_ui(self):
             self.setWindowTitle("EverLive - Live Gamer 4K Console Hub")
-            self.resize(680, 520)
-            self.setMinimumSize(620, 480)
+            self.setFixedSize(680, 530)
 
             # EverLive Dark Studio Theme
             self.setStyleSheet("""
