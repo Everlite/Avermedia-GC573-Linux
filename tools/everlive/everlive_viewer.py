@@ -388,10 +388,37 @@ class GameStreamer:
             pass
         return ""
 
-    def get_active_resolution(self) -> Optional[str]:
-        """Reads active driver streaming resolution without touching HDMI I2C."""
+    def get_active_format(self) -> Tuple[Optional[str], Optional[str]]:
+        """Reads active driver streaming resolution and framerate without touching HDMI I2C."""
         if not self.vdev or not os.path.exists(self.vdev):
-            return None
+            return None, None
+        try:
+            out = subprocess.check_output(
+                ["v4l2-ctl", "-d", self.vdev, "--get-dv-timings"],
+                stderr=subprocess.DEVNULL, timeout=0.5
+            ).decode()
+            w_m = re.search(r"Active width:\s*(\d+)", out)
+            h_m = re.search(r"Active height:\s*(\d+)", out)
+            clk_m = re.search(r"Pixelclock:\s*(\d+)", out)
+            tot_w = re.search(r"Total width:\s*(\d+)", out)
+            tot_h = re.search(r"Total height:\s*(\d+)", out)
+            if w_m and h_m:
+                w, h = int(w_m.group(1)), int(h_m.group(1))
+                fps_str = None
+                if clk_m and tot_w and tot_h:
+                    clk = int(clk_m.group(1))
+                    tw = int(tot_w.group(1))
+                    th = int(tot_h.group(1))
+                    if tw > 0 and th > 0:
+                        fps_calc = clk / (tw * th)
+                        if abs(fps_calc - round(fps_calc)) < 0.01:
+                            fps_str = f"{int(round(fps_calc))} FPS"
+                        else:
+                            fps_str = f"{fps_calc:.2f} FPS"
+                return f"{w}x{h}", fps_str
+        except Exception:
+            pass
+
         try:
             out = subprocess.check_output(
                 ["v4l2-ctl", "-d", self.vdev, "--get-fmt-video"],
@@ -401,10 +428,14 @@ class GameStreamer:
             if m:
                 w, h = int(m.group(1)), int(m.group(2))
                 if w > 0 and h > 0:
-                    return f"{w}x{h}"
+                    return f"{w}x{h}", None
         except Exception:
             pass
-        return None
+        return None, None
+
+    def get_active_resolution(self) -> Optional[str]:
+        res, _ = self.get_active_format()
+        return res
 
     def resync(self) -> bool:
         """Forces hardware HDMI HPD re-sync and updates timings via v4l2-ctl query."""
@@ -1172,13 +1203,16 @@ if HAS_QT:
                     self.btn_launch.setStyle(self.btn_launch.style())
                     return
                 live = getattr(self, "_live", None)
-                active_res = self.streamer.get_active_resolution()
+                active_res, active_fps = self.streamer.get_active_format()
                 hdr = self.streamer.hdr_label(fallback=False)
                 if live and live.get("locked"):
                     updated = False
                     live = dict(live)
                     if active_res and active_res != live.get("resolution"):
                         live["resolution"] = active_res
+                        updated = True
+                    if active_fps and active_fps != live.get("framerate"):
+                        live["framerate"] = active_fps
                         updated = True
                     if hdr and hdr != live.get("hdr"):
                         live["hdr"] = hdr

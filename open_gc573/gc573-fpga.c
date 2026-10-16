@@ -648,6 +648,26 @@ gc555_fpga_is_native_4k_low_rate(
 }
 
 static bool
+gc555_fpga_is_native_2880x2160(
+	const struct gc555_fpga_video_config *config)
+{
+	bool supported_rate = (config->input_frame_rate_hz >= 23 &&
+			       config->input_frame_rate_hz <= 25) ||
+			      (config->input_frame_rate_hz >= 29 &&
+			       config->input_frame_rate_hz <= 31) ||
+			      (config->input_frame_rate_hz >= 48 &&
+			       config->input_frame_rate_hz <= 52) ||
+			      (config->input_frame_rate_hz >= 57 &&
+			       config->input_frame_rate_hz <= 63);
+
+	return config->input_class == GC555_VIDEO_INPUT_UHD &&
+	       config->input_width == 2880 && config->input_height == 2160 &&
+	       config->output_width == 2880 && config->output_height == 2160 &&
+	       supported_rate &&
+	       config->output_frame_rate_hz == config->input_frame_rate_hz;
+}
+
+static bool
 gc555_fpga_is_native_1440_high_rate(
 	const struct gc555_fpga_video_config *config)
 {
@@ -822,6 +842,7 @@ static bool gc555_fpga_is_native_hdr_p010(
 {
 	bool native_mode = gc555_fpga_is_native_4k_high_rate(config) ||
 		gc555_fpga_is_native_4k_low_rate(config) ||
+		gc555_fpga_is_native_2880x2160(config) ||
 		gc555_fpga_is_native_1440_high_rate(config) ||
 		gc555_fpga_is_native_1440p60(config) ||
 		gc555_fpga_is_native_3440x1440(config) ||
@@ -855,6 +876,7 @@ static bool gc555_fpga_is_native_bt2020_passthrough(
 {
 	bool native_mode = gc555_fpga_is_native_4k_high_rate(config) ||
 		gc555_fpga_is_native_4k_low_rate(config) ||
+		gc555_fpga_is_native_2880x2160(config) ||
 		gc555_fpga_is_native_1440_high_rate(config) ||
 		gc555_fpga_is_native_1440p60(config) ||
 		gc555_fpga_is_native_3440x1440(config) ||
@@ -920,30 +942,71 @@ gc555_fpga_is_native_640x480_rgb_full(
 }
 
 static bool
-gc555_fpga_is_native_broadcast_sd_rgb_limited(
+gc555_fpga_is_native_640x480_rgb_limited(
 	const struct gc555_fpga_video_config *config)
 {
-	bool native_480p = config->input_width == 720 &&
-		config->input_height == 480 &&
-		config->input_frame_rate_hz >= 57 &&
-		config->input_frame_rate_hz <= 63;
-	bool native_576p = config->input_width == 720 &&
-		config->input_height == 576 &&
-		config->input_frame_rate_hz >= 48 &&
-		config->input_frame_rate_hz <= 52;
+	bool supported_rate = config->input_frame_rate_hz == 60 ||
+		config->input_frame_rate_hz == 75;
 
 	return config->input_class == GC555_VIDEO_INPUT_SD &&
-	       (native_480p || native_576p) &&
+	       config->input_width == 640 && config->input_height == 480 &&
+	       config->output_width == 640 && config->output_height == 480 &&
+	       supported_rate &&
+	       config->output_frame_rate_hz == config->input_frame_rate_hz &&
+	       config->input_encoding == GC555_VIDEO_ENCODING_RGB_LIMITED;
+}
+
+static bool
+gc555_fpga_is_native_broadcast_sd(
+	const struct gc555_fpga_video_config *config)
+{
+	bool native_480 = config->input_width == 720 &&
+		config->input_height == 480 &&
+		((!config->interlaced &&
+		  ((config->input_frame_rate_hz >= 57 &&
+		    config->input_frame_rate_hz <= 63) ||
+		   (config->input_frame_rate_hz >= 48 &&
+		    config->input_frame_rate_hz <= 52) ||
+		   (config->input_frame_rate_hz >= 23 &&
+		    config->input_frame_rate_hz <= 31))) ||
+		 (config->interlaced &&
+		  config->input_frame_rate_hz >= 28 &&
+		  config->input_frame_rate_hz <= 31));
+	bool native_576 = config->input_width == 720 &&
+		config->input_height == 576 &&
+		((!config->interlaced &&
+		  ((config->input_frame_rate_hz >= 48 &&
+		    config->input_frame_rate_hz <= 52) ||
+		   (config->input_frame_rate_hz >= 57 &&
+		    config->input_frame_rate_hz <= 63) ||
+		   (config->input_frame_rate_hz >= 24 &&
+		    config->input_frame_rate_hz <= 26))) ||
+		 (config->interlaced &&
+		  config->input_frame_rate_hz >= 24 &&
+		  config->input_frame_rate_hz <= 26));
+
+	return config->input_class == GC555_VIDEO_INPUT_SD &&
+	       (native_480 || native_576) &&
 	       config->output_width == config->input_width &&
 	       config->output_height == config->input_height &&
 	       config->output_frame_rate_hz == config->input_frame_rate_hz &&
+	       (config->input_encoding == GC555_VIDEO_ENCODING_RGB_FULL ||
+	        config->input_encoding == GC555_VIDEO_ENCODING_RGB_LIMITED);
+}
+
+static bool
+gc555_fpga_is_native_broadcast_sd_rgb_limited(
+	const struct gc555_fpga_video_config *config)
+{
+	return gc555_fpga_is_native_broadcast_sd(config) &&
 	       config->input_encoding == GC555_VIDEO_ENCODING_RGB_LIMITED;
 }
 
 static bool
 gc555_fpga_is_native_cea_yuv(const struct gc555_fpga_video_config *config)
 {
-	bool native_4k = config->input_width == 3840 &&
+	bool native_4k = (config->input_width == 3840 ||
+			  config->input_width == 2880) &&
 		config->input_height == 2160 && !config->interlaced &&
 		((config->input_frame_rate_hz >= 23 &&
 		  config->input_frame_rate_hz <= 25) ||
@@ -978,15 +1041,31 @@ gc555_fpga_is_native_cea_yuv(const struct gc555_fpga_video_config *config)
 		  config->input_frame_rate_hz <= 52) ||
 		 (config->input_frame_rate_hz >= 57 &&
 		  config->input_frame_rate_hz <= 63));
-	bool native_480p = config->input_width == 720 &&
-		config->input_height == 480 && !config->interlaced &&
-		config->input_frame_rate_hz >= 57 &&
-		config->input_frame_rate_hz <= 63;
-	bool native_576p = config->input_width == 720 &&
-		config->input_height == 576 && !config->interlaced &&
-		config->input_frame_rate_hz >= 48 &&
-		config->input_frame_rate_hz <= 52;
-	bool native_sd = native_480p || native_576p;
+	bool native_480 = config->input_width == 720 &&
+		config->input_height == 480 &&
+		((!config->interlaced &&
+		  ((config->input_frame_rate_hz >= 57 &&
+		    config->input_frame_rate_hz <= 63) ||
+		   (config->input_frame_rate_hz >= 48 &&
+		    config->input_frame_rate_hz <= 52) ||
+		   (config->input_frame_rate_hz >= 23 &&
+		    config->input_frame_rate_hz <= 31))) ||
+		 (config->interlaced &&
+		  config->input_frame_rate_hz >= 28 &&
+		  config->input_frame_rate_hz <= 31));
+	bool native_576 = config->input_width == 720 &&
+		config->input_height == 576 &&
+		((!config->interlaced &&
+		  ((config->input_frame_rate_hz >= 48 &&
+		    config->input_frame_rate_hz <= 52) ||
+		   (config->input_frame_rate_hz >= 57 &&
+		    config->input_frame_rate_hz <= 63) ||
+		   (config->input_frame_rate_hz >= 24 &&
+		    config->input_frame_rate_hz <= 26))) ||
+		 (config->interlaced &&
+		  config->input_frame_rate_hz >= 24 &&
+		  config->input_frame_rate_hz <= 26));
+	bool native_sd = native_480 || native_576;
 	bool native_size = config->output_width == config->input_width &&
 		config->output_height == config->input_height &&
 		config->output_frame_rate_hz == config->input_frame_rate_hz;
@@ -995,7 +1074,8 @@ gc555_fpga_is_native_cea_yuv(const struct gc555_fpga_video_config *config)
 		config->input_sampling == GC555_VIDEO_SAMPLING_YUV444 ||
 		config->input_sampling == GC555_VIDEO_SAMPLING_YUV420;
 	bool colorimetry_supported = native_sd ?
-		config->input_colorimetry == GC555_VIDEO_COLORIMETRY_BT601 :
+		(config->input_colorimetry == GC555_VIDEO_COLORIMETRY_BT601 ||
+		 config->input_colorimetry == GC555_VIDEO_COLORIMETRY_BT709) :
 		config->input_colorimetry == GC555_VIDEO_COLORIMETRY_BT709;
 	bool input_class_supported;
 
@@ -1026,6 +1106,7 @@ gc555_fpga_validate_config(const struct gc555_fpga_video_config *config)
 {
 	bool native_4k_high_rate;
 	bool native_4k_low_rate;
+	bool native_2880x2160;
 	bool native_1440_high_rate;
 	bool native_1440_high_rate_yuv444;
 	bool native_1440_rgb_limited;
@@ -1041,6 +1122,8 @@ gc555_fpga_validate_config(const struct gc555_fpga_video_config *config)
 	bool native_1080i_rgb_limited;
 	bool native_720p_rgb_limited;
 	bool native_640x480_rgb_full;
+	bool native_640x480_rgb_limited;
+	bool native_broadcast_sd;
 	bool native_broadcast_sd_rgb_limited;
 	bool native_hdr_p010;
 	bool native_cea_yuv;
@@ -1059,6 +1142,7 @@ gc555_fpga_validate_config(const struct gc555_fpga_video_config *config)
 
 	native_4k_high_rate = gc555_fpga_is_native_4k_high_rate(config);
 	native_4k_low_rate = gc555_fpga_is_native_4k_low_rate(config);
+	native_2880x2160 = gc555_fpga_is_native_2880x2160(config);
 	native_1440_high_rate = gc555_fpga_is_native_1440_high_rate(config);
 	native_1440_high_rate_yuv444 =
 		gc555_fpga_is_native_1440_high_rate_yuv444(config);
@@ -1081,18 +1165,24 @@ gc555_fpga_validate_config(const struct gc555_fpga_video_config *config)
 		gc555_fpga_is_native_720p_rgb_limited(config);
 	native_640x480_rgb_full =
 		gc555_fpga_is_native_640x480_rgb_full(config);
+	native_640x480_rgb_limited =
+		gc555_fpga_is_native_640x480_rgb_limited(config);
+	native_broadcast_sd =
+		gc555_fpga_is_native_broadcast_sd(config);
 	native_broadcast_sd_rgb_limited =
 		gc555_fpga_is_native_broadcast_sd_rgb_limited(config);
 	native_hdr_p010 = gc555_fpga_is_native_hdr_p010(config) ||
 		gc555_fpga_is_native_bt2020_passthrough(config);
 	native_cea_yuv = gc555_fpga_is_native_cea_yuv(config);
 	native_sd = native_640x480_rgb_full ||
-		native_broadcast_sd_rgb_limited;
+		native_640x480_rgb_limited ||
+		native_broadcast_sd;
 
 	if (native_cea_yuv &&
 	    config->input_sampling == GC555_VIDEO_SAMPLING_YUV420)
 		input_mode_supported = config->dual_pixel && !config->ddr;
 	else if (native_4k_high_rate || native_4k_low_rate ||
+		 native_2880x2160 ||
 		 native_1440_high_rate || native_1440p60 ||
 		 native_3440x1440 || native_3840x1080 ||
 		 native_1920x1200p60 || native_1080_high_rate ||
@@ -1107,9 +1197,9 @@ gc555_fpga_validate_config(const struct gc555_fpga_video_config *config)
 	       config->input_encoding != GC555_VIDEO_ENCODING_RGB_LIMITED) ||
 	      config->input_sampling != GC555_VIDEO_SAMPLING_RGB)) ||
 	    (config->interlaced && !native_1080i_rgb_limited &&
-	     !native_cea_yuv) ||
+	     !native_broadcast_sd && !native_cea_yuv) ||
 	    (config->input_class != GC555_VIDEO_INPUT_HD && !native_sd &&
-	     !(native_4k_high_rate || native_4k_low_rate) &&
+	     !(native_4k_high_rate || native_4k_low_rate || native_2880x2160) &&
 	     !native_cea_yuv) ||
 	    (config->input_hdr_mode != GC555_VIDEO_HDR_SDR &&
 	     config->input_hdr_mode != GC555_VIDEO_HDR_HLG &&
@@ -1127,8 +1217,10 @@ gc555_fpga_validate_config(const struct gc555_fpga_video_config *config)
 	     !native_2560x1080p144 &&
 	     !native_4k_high_rate &&
 	     !native_4k_low_rate &&
+	     !native_2880x2160 &&
 	     !native_1080i_rgb_limited && !native_720p_rgb_limited &&
-	     !native_broadcast_sd_rgb_limited && !native_hdr_p010) ||
+	     !native_broadcast_sd_rgb_limited &&
+	     !native_640x480_rgb_limited && !native_hdr_p010) ||
 	    (!native_cea_yuv &&
 	     config->input_sampling != GC555_VIDEO_SAMPLING_RGB &&
 	     !native_1440_high_rate_yuv444 && !native_hdr_p010) ||

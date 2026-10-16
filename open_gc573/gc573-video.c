@@ -113,8 +113,8 @@ static const struct gc555_video_format_info gc555_video_formats[] = {
 
 static const struct gc555_video_mode gc555_video_modes[] = {
 	{ 640, 480, { 60, 75 }, 2 },
-	{ 720, 480, { 60 }, 1 },
-	{ 720, 576, { 50 }, 1 },
+	{ 720, 480, { 24, 25, 30, 50, 60 }, 5 },
+	{ 720, 576, { 25, 50, 60 }, 3 },
 	{ 800, 600, { 60 }, 1 },
 	{ 1024, 768, { 60, 75 }, 2 },
 	{ 1280, 800, { 60 }, 1 },
@@ -128,6 +128,7 @@ static const struct gc555_video_mode gc555_video_modes[] = {
 	{ 1920, 1200, { 60 }, 1 },
 	{ 2560, 1080, { 60, 144 }, 2 },
 	{ 2560, 1440, { 60, 120, 144 }, 3 },
+	{ 2880, 2160, { 24, 25, 30, 50, 60 }, 5 },
 	{ 3440, 1440, { 50, 60, 100 }, 3 },
 	{ 3840, 1080, { 60, 120 }, 2 },
 	{ 3840, 2160, { 24, 25, 30, 50, 60 }, 5 },
@@ -201,6 +202,8 @@ gc555_video_mode_supports_p010(const struct gc555_video_mode *mode)
 		return mode->height == 1080 || mode->height == 1200;
 	case 2560:
 		return mode->height == 1080 || mode->height == 1440;
+	case 2880:
+		return mode->height == 2160;
 	case 3440:
 		return mode->height == 1440;
 	case 3840:
@@ -1387,7 +1390,7 @@ gc555_video_fill_dv_timings_cap(struct v4l2_dv_timings_cap *cap)
 	cap->bt.max_width = 3840;
 	cap->bt.min_height = 480;
 	cap->bt.max_height = 2160;
-	cap->bt.min_pixelclock = 25000000ULL;
+	cap->bt.min_pixelclock = 13500000ULL;
 	cap->bt.max_pixelclock = 600000000ULL;
 	cap->bt.standards = V4L2_DV_BT_STD_CEA861 |
 			    V4L2_DV_BT_STD_DMT |
