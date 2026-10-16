@@ -48,8 +48,8 @@ try:
         QGridLayout, QLabel, QPushButton, QComboBox, QCheckBox, QSlider, QFrame,
         QGroupBox, QMessageBox, QStackedLayout, QSizePolicy
     )
-    from PySide6.QtCore import Qt, QTimer, QThread, Signal, QEvent, QUrl
-    from PySide6.QtGui import QFont, QIcon, QColor, QPalette, QKeySequence, QShortcut, QDesktopServices
+    from PySide6.QtCore import Qt, QTimer, QThread, Signal, QEvent, QUrl, QSize
+    from PySide6.QtGui import QFont, QIcon, QColor, QPalette, QKeySequence, QShortcut, QDesktopServices, QPixmap, QPainter
     HAS_QT = True
 except ImportError:
     HAS_QT = False
@@ -120,14 +120,14 @@ PRESETS = {
 }
 
 LED_MODES = {
-    "🌑 Aus (Dunkel)": 0,
-    "🔵 Blau (Standard)": 1,
-    "🟢 Grün": 2,
-    "🔴 Rot": 3,
-    "🔷 Cyan / Türkis": 4,
-    "🟣 Magenta / Lila": 5,
-    "🟡 Gelb": 6,
-    "⚪ Weiß": 7,
+    "Aus (Dunkel)": 0,
+    "Blau (Standard)": 1,
+    "Grün": 2,
+    "Rot": 3,
+    "Cyan / Türkis": 4,
+    "Magenta / Lila": 5,
+    "Gelb": 6,
+    "Weiß": 7,
 }
 
 LED_NAME_MAP = {
@@ -140,6 +140,38 @@ LED_NAME_MAP = {
     "6": 6, "yellow": 6, "gelb": 6,
     "7": 7, "white": 7, "weiss": 7, "weiß": 7,
 }
+
+LED_COLORS = {
+    0: "#334155",  # Aus (Dunkel)
+    1: "#3b82f6",  # Blau (Standard)
+    2: "#10b981",  # Grün
+    3: "#ef4444",  # Rot
+    4: "#06b6d4",  # Cyan / Türkis
+    5: "#d946ef",  # Magenta / Lila
+    6: "#eab308",  # Gelb
+    7: "#f8fafc",  # Weiß
+}
+
+
+def create_led_icon(mode: int, size: int = 14):
+    """Creates a smooth anti-aliased circular color swatch for the LED mode dropdown."""
+    if not HAS_QT:
+        return None
+    pix = QPixmap(size, size)
+    pix.fill(Qt.transparent)
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.Antialiasing)
+    color_hex = LED_COLORS.get(mode, "#94a3b8")
+    painter.setBrush(QColor(color_hex))
+    if mode == 0:
+        painter.setPen(QColor("#64748b"))
+    elif mode == 7:
+        painter.setPen(QColor("#94a3b8"))
+    else:
+        painter.setPen(Qt.NoPen)
+    painter.drawEllipse(1, 1, size - 2, size - 2)
+    painter.end()
+    return QIcon(pix)
 
 
 def find_led_sysfs_path() -> Optional[str]:
@@ -562,159 +594,229 @@ if HAS_QT:
 
         def init_ui(self):
             self.setWindowTitle("EverLive - Live Gamer 4K Console Hub")
-            self.setFixedSize(680, 530)
+            self.setFixedSize(690, 520)
 
             # Application & Window Icon
             icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "everlive.png")
             if os.path.isfile(icon_path):
                 self.setWindowIcon(QIcon(icon_path))
 
-            # EverLive Dark Studio Theme
+            # EverLive Clean Dark Studio Theme
             self.setStyleSheet("""
                 QMainWindow {
                     background-color: #0b0d13;
                 }
                 QFrame#cardFrame {
-                    background-color: #131722;
-                    border: 1px solid #232838;
-                    border-radius: 10px;
+                    background-color: #12151f;
+                    border: 1px solid #1f2537;
+                    border-radius: 8px;
                     padding: 14px;
                 }
                 QFrame#bottomBar {
-                    background-color: #0f1118;
-                    border-top: 1px solid #1c202e;
-                    padding: 4px 10px;
+                    background-color: #080a0e;
+                    border-top: 1px solid #171b26;
+                    padding: 5px 12px;
                 }
                 QLabel {
-                    color: #e6edf3;
-                    font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+                    color: #e2e8f0;
+                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
                 }
                 QLabel#logoTitle {
                     color: #ffffff;
-                    font-size: 16px;
-                    font-weight: 800;
+                    font-size: 15px;
+                    font-weight: 700;
                     letter-spacing: 0.5px;
                 }
+                QLabel#logoVersion {
+                    color: #64748b;
+                    font-size: 11px;
+                    font-weight: 500;
+                }
                 QLabel#badgeModel {
-                    color: #ff3344;
-                    background-color: #2b1115;
-                    border: 1px solid #5a1e25;
+                    color: #94a3b8;
+                    background-color: #1a202c;
+                    border: 1px solid #2d3748;
                     border-radius: 4px;
                     padding: 2px 7px;
                     font-size: 10px;
-                    font-weight: bold;
-                    letter-spacing: 1px;
+                    font-weight: 600;
+                    letter-spacing: 0.5px;
                 }
                 QLabel#pillLive {
                     border-radius: 12px;
                     padding: 4px 12px;
+                    font-size: 11px;
+                    font-weight: 600;
+                }
+                QLabel#sectionTitle {
+                    color: #64748b;
+                    font-size: 11px;
+                    font-weight: 700;
+                    letter-spacing: 0.8px;
+                }
+                QLabel#heroSignal {
+                    color: #ffffff;
+                    font-size: 18px;
+                    font-weight: 700;
+                }
+                QLabel#heroMeta {
+                    color: #94a3b8;
                     font-size: 12px;
-                    font-weight: bold;
+                }
+                QLabel#engineBadge {
+                    background-color: #0d2318;
+                    color: #34d399;
+                    border: 1px solid #164e32;
+                    border-radius: 4px;
+                    padding: 3px 8px;
+                    font-size: 11px;
+                    font-weight: 600;
                 }
                 QComboBox {
-                    background-color: #1b202c;
-                    color: #f0f6fc;
-                    border: 1px solid #303749;
+                    background-color: #171b26;
+                    color: #f1f5f9;
+                    border: 1px solid #2b3348;
                     border-radius: 6px;
                     padding: 6px 10px;
                     font-size: 12px;
-                    min-height: 24px;
+                    min-height: 22px;
                 }
                 QComboBox:hover {
-                    border-color: #58a6ff;
+                    border-color: #3b82f6;
                 }
                 QComboBox::drop-down {
                     border: none;
                     width: 20px;
                 }
                 QCheckBox {
-                    color: #c9d1d9;
+                    color: #94a3b8;
                     font-size: 12px;
-                    spacing: 6px;
+                    spacing: 8px;
                 }
                 QCheckBox:hover {
-                    color: #ffffff;
+                    color: #f1f5f9;
+                }
+                QCheckBox::indicator {
+                    width: 15px;
+                    height: 15px;
+                    border-radius: 3px;
+                    border: 1px solid #2d3748;
+                    background-color: #171b26;
+                }
+                QCheckBox::indicator:hover {
+                    border-color: #3b82f6;
+                }
+                QCheckBox::indicator:checked {
+                    background-color: #2563eb;
+                    border-color: #3b82f6;
                 }
                 QPushButton {
-                    background-color: #1f2533;
-                    color: #e6edf3;
-                    border: 1px solid #323b4e;
+                    background-color: #1a202c;
+                    color: #e2e8f0;
+                    border: 1px solid #2d3748;
                     border-radius: 6px;
                     padding: 6px 14px;
                     font-size: 12px;
-                    font-weight: 600;
+                    font-weight: 500;
                 }
                 QPushButton:hover {
-                    background-color: #2b3346;
-                    border-color: #58a6ff;
+                    background-color: #252d3d;
+                    border-color: #3b82f6;
+                }
+                QPushButton:pressed {
+                    background-color: #141822;
                 }
                 QPushButton#btnDiscord {
                     background-color: #5865F2;
                     color: #ffffff;
                     border: none;
-                    border-radius: 6px;
+                    border-radius: 4px;
                     padding: 4px 10px;
                     font-size: 11px;
-                    font-weight: bold;
+                    font-weight: 600;
                 }
                 QPushButton#btnDiscord:hover {
                     background-color: #4752c4;
                 }
+                QPushButton#btnMute {
+                    background-color: #1a202c;
+                    color: #e2e8f0;
+                    border: 1px solid #2d3748;
+                    border-radius: 5px;
+                    padding: 4px 6px;
+                    font-size: 11px;
+                    font-weight: 600;
+                }
+                QPushButton#btnMute:hover {
+                    background-color: #252d3d;
+                    border-color: #3b82f6;
+                }
                 QPushButton#btnLaunchStart {
-                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1f7a37, stop:1 #2ea043);
-                    color: white;
+                    background-color: #10b981;
+                    color: #ffffff;
                     border: none;
-                    font-size: 15px;
-                    font-weight: bold;
-                    border-radius: 8px;
-                    padding: 12px 20px;
+                    font-size: 14px;
+                    font-weight: 600;
+                    border-radius: 6px;
+                    padding: 11px 18px;
                 }
                 QPushButton#btnLaunchStart:hover {
-                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #2ea043, stop:1 #3fb950);
+                    background-color: #059669;
                 }
                 QPushButton#btnLaunchStop {
-                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #b62324, stop:1 #da3633);
-                    color: white;
+                    background-color: #ef4444;
+                    color: #ffffff;
                     border: none;
-                    font-size: 15px;
-                    font-weight: bold;
-                    border-radius: 8px;
-                    padding: 12px 20px;
+                    font-size: 14px;
+                    font-weight: 600;
+                    border-radius: 6px;
+                    padding: 11px 18px;
                 }
                 QPushButton#btnLaunchStop:hover {
-                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #da3633, stop:1 #f85149);
+                    background-color: #dc2626;
                 }
                 QSlider::groove:horizontal {
-                    height: 5px;
-                    background: #252c3c;
+                    height: 4px;
+                    background: #1e2537;
                     border-radius: 2px;
                 }
                 QSlider::sub-page:horizontal {
-                    background: #ff3344;
+                    background: #3b82f6;
                     border-radius: 2px;
                 }
                 QSlider::handle:horizontal {
-                    background: #ffffff;
+                    background: #e2e8f0;
                     width: 14px;
                     margin-top: -5px;
                     margin-bottom: -5px;
                     border-radius: 7px;
+                }
+                QSlider::handle:horizontal:hover {
+                    background: #ffffff;
                 }
             """)
 
             central_widget = QWidget()
             self.setCentralWidget(central_widget)
             root_layout = QVBoxLayout(central_widget)
-            root_layout.setContentsMargins(18, 14, 18, 14)
-            root_layout.setSpacing(14)
+            root_layout.setContentsMargins(18, 14, 18, 12)
+            root_layout.setSpacing(12)
 
             # -------------------------------------------------------------
-            # Top Bar: Brand, Badge & Signal Pill
+            # Top Bar: Logo, Title, Badge, Discord, Signal Pill
             # -------------------------------------------------------------
             top_bar = QHBoxLayout()
             top_bar.setSpacing(10)
 
-            lbl_logo = QLabel("🟣 EverLive")
+            # Application branding icon
+            if os.path.isfile(icon_path):
+                lbl_icon = QLabel()
+                pix = QPixmap(icon_path).scaled(22, 22, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                lbl_icon.setPixmap(pix)
+                lbl_icon.setFixedSize(22, 22)
+                top_bar.addWidget(lbl_icon)
+
+            lbl_logo = QLabel("EVERLIVE")
             lbl_logo.setObjectName("logoTitle")
             top_bar.addWidget(lbl_logo)
 
@@ -722,55 +824,57 @@ if HAS_QT:
             lbl_badge.setObjectName("badgeModel")
             top_bar.addWidget(lbl_badge)
 
+            lbl_ver = QLabel(f"v{__version__}")
+            lbl_ver.setObjectName("logoVersion")
+            top_bar.addWidget(lbl_ver)
+
             top_bar.addStretch(1)
 
-            btn_discord = QPushButton("💬 Discord")
+            btn_discord = QPushButton("Discord")
             btn_discord.setObjectName("btnDiscord")
             btn_discord.setCursor(Qt.PointingHandCursor)
-            btn_discord.setToolTip("Tritt der EverLive Discord-Community bei (Feedback & Hardware-Support)")
+            btn_discord.setToolTip("EverLive Discord-Community beitreten (Feedback & Hardware-Support)")
             btn_discord.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://discord.com/invite/D2XFhkPMmc")))
             top_bar.addWidget(btn_discord)
 
-            self.lbl_pill = QLabel("● PRÜFE SIGNAL...")
+            self.lbl_pill = QLabel("○ Standby")
             self.lbl_pill.setObjectName("pillLive")
-            self.lbl_pill.setStyleSheet("background-color: #2b2518; color: #d29922; border: 1px solid #7d5918;")
+            self.lbl_pill.setStyleSheet("background-color: #1a202c; color: #94a3b8; border: 1px solid #2d3748;")
             top_bar.addWidget(self.lbl_pill)
 
             root_layout.addLayout(top_bar)
 
             # -------------------------------------------------------------
-            # Card 1: Hero Launcher (Separate Native Wayland Window)
+            # Card 1: Signal & Launch Controls
             # -------------------------------------------------------------
             card_hero = QFrame()
             card_hero.setObjectName("cardFrame")
             v_hero = QVBoxLayout(card_hero)
             v_hero.setSpacing(12)
+            v_hero.setContentsMargins(14, 12, 14, 14)
 
             h_sig_info = QHBoxLayout()
             v_sig_text = QVBoxLayout()
-            v_sig_text.setSpacing(2)
+            v_sig_text.setSpacing(3)
 
             self.lbl_hero_signal = QLabel("Warte auf HDMI-Signal...")
-            self.lbl_hero_signal.setStyleSheet("font-size: 15px; font-weight: bold; color: #ffffff;")
+            self.lbl_hero_signal.setObjectName("heroSignal")
             v_sig_text.addWidget(self.lbl_hero_signal)
 
-            self.lbl_hero_meta = QLabel("Prüfe Eingangsquelle (PS5 / Konsole)...")
-            self.lbl_hero_meta.setStyleSheet("font-size: 12px; color: #8b949e;")
+            self.lbl_hero_meta = QLabel("Prüfe Eingangsquelle (Konsole / PC)...")
+            self.lbl_hero_meta.setObjectName("heroMeta")
             v_sig_text.addWidget(self.lbl_hero_meta)
 
             h_sig_info.addLayout(v_sig_text, 1)
 
-            lbl_engine_badge = QLabel("⚡ Pure Native Wayland")
-            lbl_engine_badge.setStyleSheet("""
-                background-color: #12281a; color: #3fb950; border: 1px solid #238636;
-                border-radius: 6px; padding: 4px 8px; font-size: 11px; font-weight: bold;
-            """)
+            lbl_engine_badge = QLabel("Direct Wayland (< 2ms)")
+            lbl_engine_badge.setObjectName("engineBadge")
             h_sig_info.addWidget(lbl_engine_badge, 0, Qt.AlignVCenter)
 
             v_hero.addLayout(h_sig_info)
 
-            # Big Action Launch Button
-            self.btn_launch = QPushButton("🎮 Gaming Screen starten")
+            # Confident Action Button
+            self.btn_launch = QPushButton("Gaming Screen starten")
             self.btn_launch.setObjectName("btnLaunchStart")
             self.btn_launch.setCursor(Qt.PointingHandCursor)
             self.btn_launch.clicked.connect(self.toggle_stream)
@@ -778,46 +882,53 @@ if HAS_QT:
 
             # Launch Options (2x2 Grid)
             grid_opts = QGridLayout()
-            grid_opts.setHorizontalSpacing(18)
+            grid_opts.setHorizontalSpacing(24)
             grid_opts.setVerticalSpacing(8)
 
-            self.chk_fullscreen = QCheckBox("⛶ Direkt im Vollbild starten")
+            self.chk_fullscreen = QCheckBox("Direkt im Vollbild starten")
             self.chk_fullscreen.setChecked(self.saved_cfg.get("fullscreen", True))
             self.chk_fullscreen.toggled.connect(lambda val: save_settings({"fullscreen": val}))
             grid_opts.addWidget(self.chk_fullscreen, 0, 0)
 
-            self.chk_vsync = QCheckBox("🔒 VSync (120 Hz Takt)")
+            self.chk_vsync = QCheckBox("VSync aktivieren (120 Hz)")
             self.chk_vsync.setChecked(self.saved_cfg.get("vsync", self.enable_vsync))
             self.chk_vsync.toggled.connect(lambda val: save_settings({"vsync": val}))
             grid_opts.addWidget(self.chk_vsync, 0, 1)
 
-            self.chk_autostart = QCheckBox("⚡ Beim Start automatisch öffnen")
+            self.chk_autostart = QCheckBox("Automatisch beim Start öffnen")
             self.chk_autostart.setChecked(self.saved_cfg.get("autostart", False))
             self.chk_autostart.toggled.connect(lambda val: save_settings({"autostart": val}))
             grid_opts.addWidget(self.chk_autostart, 1, 0)
 
-            self.chk_streamer = QCheckBox("🎥 Streamer Mode (Clean Feed)")
-            self.chk_streamer.setToolTip("Sperrt Maus-Steuerleiste, HUD und Toasts für ungestörte OBS-Aufnahmen (Hotkey: 'S')")
+            self.chk_streamer = QCheckBox("Streamer Mode (Clean Feed)")
+            self.chk_streamer.setToolTip("Sperrt Maus-Steuerleiste, HUD und Overlays für ungestörte Videoaufnahmen (Hotkey: 'S')")
             self.chk_streamer.setChecked(self.saved_cfg.get("streamer_mode", False))
             self.chk_streamer.toggled.connect(lambda val: save_settings({"streamer_mode": val}))
             grid_opts.addWidget(self.chk_streamer, 1, 1)
 
             v_hero.addLayout(grid_opts)
-
             root_layout.addWidget(card_hero)
 
             # -------------------------------------------------------------
-            # Card 2: Settings & Hardware Controls
+            # Card 2: Hardware & Capture Settings
             # -------------------------------------------------------------
             card_settings = QFrame()
             card_settings.setObjectName("cardFrame")
-            grid = QGridLayout(card_settings)
+            v_settings = QVBoxLayout(card_settings)
+            v_settings.setSpacing(10)
+            v_settings.setContentsMargins(14, 12, 14, 14)
+
+            lbl_sec_settings = QLabel("HARDWARE & CAPTURE")
+            lbl_sec_settings.setObjectName("sectionTitle")
+            v_settings.addWidget(lbl_sec_settings)
+
+            grid = QGridLayout()
             grid.setHorizontalSpacing(14)
-            grid.setVerticalSpacing(12)
+            grid.setVerticalSpacing(10)
 
             # Row 0: Preset & LED
             lbl_preset = QLabel("Format / Preset:")
-            lbl_preset.setStyleSheet("font-weight: 600; color: #c9d1d9;")
+            lbl_preset.setStyleSheet("font-weight: 500; color: #94a3b8;")
             grid.addWidget(lbl_preset, 0, 0)
 
             self.combo_presets = QComboBox()
@@ -827,13 +938,18 @@ if HAS_QT:
             self.combo_presets.currentIndexChanged.connect(self.on_preset_changed)
             grid.addWidget(self.combo_presets, 0, 1)
 
-            lbl_led = QLabel("GC573 LED:")
-            lbl_led.setStyleSheet("font-weight: 600; color: #c9d1d9;")
+            lbl_led = QLabel("Karten-LED:")
+            lbl_led.setStyleSheet("font-weight: 500; color: #94a3b8;")
             grid.addWidget(lbl_led, 0, 2)
 
             self.combo_led = QComboBox()
+            self.combo_led.setIconSize(QSize(14, 14))
             for name, val in LED_MODES.items():
-                self.combo_led.addItem(name, val)
+                icon = create_led_icon(val)
+                if icon:
+                    self.combo_led.addItem(icon, name, val)
+                else:
+                    self.combo_led.addItem(name, val)
 
             saved_led = self.saved_cfg.get("led_mode", 1)
             if saved_led is not None and isinstance(saved_led, int) and 0 <= saved_led <= 7:
@@ -854,13 +970,14 @@ if HAS_QT:
 
             # Row 1: Volume & Re-Sync
             lbl_audio = QLabel("Lautstärke:")
-            lbl_audio.setStyleSheet("font-weight: 600; color: #c9d1d9;")
+            lbl_audio.setStyleSheet("font-weight: 500; color: #94a3b8;")
             grid.addWidget(lbl_audio, 1, 0)
 
             h_vol = QHBoxLayout()
-            h_vol.setSpacing(6)
-            self.btn_mute = QPushButton("🔊")
-            self.btn_mute.setFixedWidth(34)
+            h_vol.setSpacing(8)
+            self.btn_mute = QPushButton("Mute")
+            self.btn_mute.setObjectName("btnMute")
+            self.btn_mute.setFixedWidth(66)
             self.btn_mute.setCursor(Qt.PointingHandCursor)
             self.btn_mute.clicked.connect(self.toggle_mute)
             h_vol.addWidget(self.btn_mute)
@@ -873,39 +990,40 @@ if HAS_QT:
             h_vol.addWidget(self.slider_vol, 1)
 
             self.lbl_vol = QLabel(f"{initial_vol}%")
-            self.lbl_vol.setFixedWidth(36)
-            self.lbl_vol.setStyleSheet("color: #8b949e; font-size: 11px;")
+            self.lbl_vol.setFixedWidth(34)
+            self.lbl_vol.setStyleSheet("color: #94a3b8; font-size: 11px;")
             h_vol.addWidget(self.lbl_vol)
             grid.addLayout(h_vol, 1, 1)
 
-            lbl_sync = QLabel("HDMI Handshake:")
-            lbl_sync.setStyleSheet("font-weight: 600; color: #c9d1d9;")
+            lbl_sync = QLabel("HDMI-Sync:")
+            lbl_sync.setStyleSheet("font-weight: 500; color: #94a3b8;")
             grid.addWidget(lbl_sync, 1, 2)
 
-            self.btn_resync = QPushButton("🔄 HDMI Re-Sync")
+            self.btn_resync = QPushButton("Signal synchronisieren")
             self.btn_resync.setCursor(Qt.PointingHandCursor)
-            self.btn_resync.setToolTip("HDMI Handshake per Hardware-HPD neu auslösen (auch Taste 'H' im Spielfenster)")
+            self.btn_resync.setToolTip("Hardware HDMI-Handshake (HPD-Puls) auslösen (im Fenster auch Taste 'H')")
             self.btn_resync.clicked.connect(self.force_resync)
             grid.addWidget(self.btn_resync, 1, 3)
 
+            v_settings.addLayout(grid)
             root_layout.addWidget(card_settings)
 
             # -------------------------------------------------------------
-            # Bottom Info / Shortcut Guide
+            # Bottom Bar: Device Info & Shortcuts
             # -------------------------------------------------------------
             bottom_box = QFrame()
             bottom_box.setObjectName("bottomBar")
             b_layout = QHBoxLayout(bottom_box)
-            b_layout.setContentsMargins(8, 4, 8, 4)
+            b_layout.setContentsMargins(4, 2, 4, 2)
 
-            lbl_vdev = QLabel(f"🎮 Video: {self.streamer.vdev} • Audio: {self.streamer.adev}")
-            lbl_vdev.setStyleSheet("color: #8b949e; font-size: 11px;")
+            lbl_vdev = QLabel(f"V4L2: {self.streamer.vdev} • ALSA: {self.streamer.adev}")
+            lbl_vdev.setStyleSheet("color: #64748b; font-size: 11px;")
             b_layout.addWidget(lbl_vdev)
 
             b_layout.addStretch(1)
 
-            lbl_hints = QLabel("Im Spielfenster: F = Vollbild • Tab = Stats • S = Streamer Mode • M = Stumm • H = Re-Sync • Esc = Beenden")
-            lbl_hints.setStyleSheet("color: #58a6ff; font-size: 11px;")
+            lbl_hints = QLabel("F Vollbild • Tab Stats • S Streamer • M Stumm • H Re-Sync • Esc Beenden")
+            lbl_hints.setStyleSheet("color: #64748b; font-size: 11px;")
             b_layout.addWidget(lbl_hints)
 
             root_layout.addWidget(bottom_box)
@@ -916,7 +1034,7 @@ if HAS_QT:
         def toggle_stream(self):
             if self.streamer.is_running:
                 self.streamer.stop()
-                self.btn_launch.setText("🎮 Gaming Screen starten")
+                self.btn_launch.setText("Gaming Screen starten")
                 self.btn_launch.setObjectName("btnLaunchStart")
                 self.btn_launch.setStyle(self.btn_launch.style())
             else:
@@ -939,7 +1057,7 @@ if HAS_QT:
             })
             success = self.streamer.start(preset_name=preset, fullscreen=is_fs, volume=vol, vsync=is_vsync, streamer_mode=is_streamer)
             if success:
-                self.btn_launch.setText("⏹ Gaming Screen beenden")
+                self.btn_launch.setText("Gaming Screen beenden")
                 self.btn_launch.setObjectName("btnLaunchStop")
                 self.btn_launch.setStyle(self.btn_launch.style())
                 set_audio_volume(self.slider_vol.value())
@@ -959,7 +1077,12 @@ if HAS_QT:
 
         def toggle_mute(self):
             self.muted = not self.muted
-            self.btn_mute.setText("🔇" if self.muted else "🔊")
+            if self.muted:
+                self.btn_mute.setText("Unmute")
+                self.btn_mute.setStyleSheet("background-color: #36171d; color: #f87171; border: 1px solid #7f1d1d;")
+            else:
+                self.btn_mute.setText("Mute")
+                self.btn_mute.setStyleSheet("")
             set_audio_mute(self.muted)
 
         def on_volume_changed(self, val: int):
@@ -975,11 +1098,12 @@ if HAS_QT:
             self._resyncing = True
             if hasattr(self, "btn_resync"):
                 self.btn_resync.setEnabled(False)
+                self.btn_resync.setText("Synchronisiere...")
             try:
                 was_running = self.streamer.is_running
                 if was_running:
                     self.streamer.stop()
-                    self.btn_launch.setText("🎮 Gaming Screen starten")
+                    self.btn_launch.setText("Gaming Screen starten")
                     self.btn_launch.setObjectName("btnLaunchStart")
                     self.btn_launch.setStyle(self.btn_launch.style())
                 self.streamer.resync()
@@ -989,7 +1113,11 @@ if HAS_QT:
             except Exception as e:
                 print(f"[!] Fehler bei HDMI Re-Sync: {e}")
             finally:
-                QTimer.singleShot(2500, lambda: (setattr(self, "_resyncing", False), hasattr(self, "btn_resync") and self.btn_resync.setEnabled(True)))
+                QTimer.singleShot(2500, lambda: (
+                    setattr(self, "_resyncing", False),
+                    hasattr(self, "btn_resync") and self.btn_resync.setEnabled(True),
+                    hasattr(self, "btn_resync") and self.btn_resync.setText("Signal synchronisieren")
+                ))
 
         def _wait_and_restart_after_resync(self, attempts=12):
             if self.streamer.is_running:
@@ -1002,10 +1130,12 @@ if HAS_QT:
 
         def _show_live(self, info):
             hdr_str = f" • {info['hdr']}" if info.get("hdr") else ""
-            self.lbl_pill.setText(f"● LIVE: {info['resolution']} @ {info['framerate']}{hdr_str}")
-            self.lbl_pill.setStyleSheet("background-color: #12281a; color: #3fb950; border: 1px solid #238636;")
-            self.lbl_hero_signal.setText(f"HDMI Signal: {info['resolution']} @ {info['framerate']}")
-            self.lbl_hero_meta.setText(f"Status: Signal synchronisiert • Farbraum: {info.get('hdr', 'SDR')} • Audio: 8 Kanäle LPCM")
+            self.lbl_pill.setText(f"● {info['resolution']} @ {info['framerate']}{hdr_str}")
+            self.lbl_pill.setStyleSheet("background-color: #0d2318; color: #34d399; border: 1px solid #164e32;")
+            res_clean = info['resolution'].replace('x', ' × ')
+            self.lbl_hero_signal.setText(f"{res_clean} @ {info['framerate']}")
+            hdr_val = info.get('hdr', 'SDR')
+            self.lbl_hero_meta.setText(f"Signal synchronisiert • Farbraum: {hdr_val} • 8ch LPCM (PipeWire)")
 
         def update_status(self):
             # While the gaming screen is open, only read the cached HDR control.
@@ -1013,7 +1143,7 @@ if HAS_QT:
             if self.streamer.is_running:
                 if not self.streamer.poll():
                     # Window was closed by user
-                    self.btn_launch.setText("🎮 Gaming Screen starten")
+                    self.btn_launch.setText("Gaming Screen starten")
                     self.btn_launch.setObjectName("btnLaunchStart")
                     self.btn_launch.setStyle(self.btn_launch.style())
                     return
@@ -1031,10 +1161,10 @@ if HAS_QT:
             if info["locked"]:
                 self._show_live(info)
             else:
-                self.lbl_pill.setText("○ KEIN HDMI-SIGNAL")
-                self.lbl_pill.setStyleSheet("background-color: #2b1313; color: #f85149; border: 1px solid #7d2323;")
-                self.lbl_hero_signal.setText("Warte auf HDMI-Signal...")
-                self.lbl_hero_meta.setText("Bitte HDMI-Quelle (z.B. PS5) einschalten und Kabelverbindung prüfen.")
+                self.lbl_pill.setText("○ Standby")
+                self.lbl_pill.setStyleSheet("background-color: #1a202c; color: #94a3b8; border: 1px solid #2d3748;")
+                self.lbl_hero_signal.setText("Kein HDMI-Signal")
+                self.lbl_hero_meta.setText("Warte auf Eingangssignal (z. B. Konsole oder PC einschalten)...")
 
         def closeEvent(self, event):
             self.streamer.stop()

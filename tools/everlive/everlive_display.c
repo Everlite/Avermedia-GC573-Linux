@@ -310,6 +310,15 @@ static void draw_string(SDL_Renderer *r, const char *str, int x, int y, int scal
     }
 }
 
+static void draw_string_centered(SDL_Renderer *r, const char *str, int center_x, int y, int scale, SDL_Color color)
+{
+    int len = 0;
+    const char *p = str;
+    while (*p++) len++;
+    int total_w = len * 8 * scale;
+    draw_string(r, str, center_x - total_w / 2, y, scale, color);
+}
+
 static void update_fullscreen(SDL_Window *window, bool enable)
 {
     g_fullscreen = enable;
@@ -895,22 +904,31 @@ int main(int argc, char *argv[])
                 SDL_SetRenderDrawColor(renderer, 13, 17, 23, 255);
                 SDL_RenderClear(renderer);
 
-                int card_w = 480;
-                int card_h = 160;
+                int card_w = 560;
+                int card_h = 180;
                 int card_x = (cur_w - card_w) / 2;
                 int card_y = (cur_h - card_h) / 2 - 20;
+                int center_x = card_x + card_w / 2;
 
                 SDL_Rect card_rect = { card_x, card_y, card_w, card_h };
                 SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-                SDL_SetRenderDrawColor(renderer, 22, 27, 34, 230);
+                /* Card body: sleek dark studio background */
+                SDL_SetRenderDrawColor(renderer, 18, 22, 32, 245);
                 SDL_RenderFillRect(renderer, &card_rect);
-                SDL_SetRenderDrawColor(renderer, 56, 139, 253, 180);
+                /* Card outline: subtle dark slate border */
+                SDL_SetRenderDrawColor(renderer, 35, 45, 65, 255);
                 SDL_RenderDrawRect(renderer, &card_rect);
 
-                draw_string(renderer, "EVERLIVE GAMING SCREEN", card_x + 65, card_y + 25, 2, (SDL_Color){240, 246, 252, 255});
-                draw_string(renderer, "Warte auf HDMI-Signal...", card_x + 140, card_y + 70, 1, (SDL_Color){210, 153, 34, 255});
-                draw_string(renderer, "Konsole oder Bildquelle einschalten", card_x + 105, card_y + 98, 1, (SDL_Color){139, 148, 158, 255});
-                draw_string(renderer, "[H] Re-Sync  *  [S] Streamer Mode  *  [Esc] Beenden", card_x + 90, card_y + 126, 1, (SDL_Color){88, 166, 255, 255});
+                /* Top accent line (2px royal blue) */
+                SDL_Rect top_accent = { card_x + 1, card_y + 1, card_w - 2, 2 };
+                SDL_SetRenderDrawColor(renderer, 59, 130, 246, 200);
+                SDL_RenderFillRect(renderer, &top_accent);
+
+                /* Texts - automatically, perfectly centered */
+                draw_string_centered(renderer, "EVERLIVE GAMING SCREEN", center_x, card_y + 26, 2, (SDL_Color){248, 250, 252, 255});
+                draw_string_centered(renderer, "Warte auf HDMI-Signal...", center_x, card_y + 72, 1, (SDL_Color){234, 179, 8, 255});
+                draw_string_centered(renderer, "Konsole oder Bildquelle einschalten", center_x, card_y + 100, 1, (SDL_Color){148, 163, 184, 255});
+                draw_string_centered(renderer, "[H] Re-Sync   *   [S] Streamer Mode   *   [Esc] Beenden", center_x, card_y + 134, 1, (SDL_Color){96, 165, 250, 255});
 
                 /* HUD zeichnen damit Lautstaerke/Exit nutzbar bleiben */
                 if (g_hud_visible && !g_streamer_mode) {
