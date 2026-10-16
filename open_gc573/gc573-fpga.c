@@ -703,6 +703,37 @@ gc555_fpga_is_native_3440x1440(
 }
 
 static bool
+gc555_fpga_is_native_3840x1080(
+	const struct gc555_fpga_video_config *config)
+{
+	bool supported_rate = (config->input_frame_rate_hz >= 48 &&
+			       config->input_frame_rate_hz <= 52) ||
+			      (config->input_frame_rate_hz >= 57 &&
+			       config->input_frame_rate_hz <= 63) ||
+			      (config->input_frame_rate_hz >= 115 &&
+			       config->input_frame_rate_hz <= 125);
+
+	return config->input_class == GC555_VIDEO_INPUT_HD &&
+	       config->input_width == 3840 && config->input_height == 1080 &&
+	       config->output_width == 3840 && config->output_height == 1080 &&
+	       supported_rate &&
+	       config->output_frame_rate_hz == config->input_frame_rate_hz;
+}
+
+static bool
+gc555_fpga_is_native_1920x1200p60(
+	const struct gc555_fpga_video_config *config)
+{
+	return config->input_class == GC555_VIDEO_INPUT_HD &&
+	       config->input_width == 1920 && config->input_height == 1200 &&
+	       config->output_width == 1920 && config->output_height == 1200 &&
+	       config->input_frame_rate_hz >= 57 &&
+	       config->input_frame_rate_hz <= 63 &&
+	       config->output_frame_rate_hz >= 57 &&
+	       config->output_frame_rate_hz <= 63;
+}
+
+static bool
 gc555_fpga_is_native_1080_high_rate(
 	const struct gc555_fpga_video_config *config)
 {
@@ -710,6 +741,8 @@ gc555_fpga_is_native_1080_high_rate(
 			       config->input_frame_rate_hz <= 125) ||
 			      (config->input_frame_rate_hz >= 140 &&
 			       config->input_frame_rate_hz <= 148) ||
+			      (config->input_frame_rate_hz >= 175 &&
+			       config->input_frame_rate_hz <= 185) ||
 			      (config->input_frame_rate_hz >= 235 &&
 			       config->input_frame_rate_hz <= 245);
 
@@ -792,6 +825,8 @@ static bool gc555_fpga_is_native_hdr_p010(
 		gc555_fpga_is_native_1440_high_rate(config) ||
 		gc555_fpga_is_native_1440p60(config) ||
 		gc555_fpga_is_native_3440x1440(config) ||
+		gc555_fpga_is_native_3840x1080(config) ||
+		gc555_fpga_is_native_1920x1200p60(config) ||
 		gc555_fpga_is_native_1080_high_rate(config) ||
 		gc555_fpga_is_native_2560x1080p60(config) ||
 		gc555_fpga_is_native_2560x1080p144(config) ||
@@ -823,6 +858,8 @@ static bool gc555_fpga_is_native_bt2020_passthrough(
 		gc555_fpga_is_native_1440_high_rate(config) ||
 		gc555_fpga_is_native_1440p60(config) ||
 		gc555_fpga_is_native_3440x1440(config) ||
+		gc555_fpga_is_native_3840x1080(config) ||
+		gc555_fpga_is_native_1920x1200p60(config) ||
 		gc555_fpga_is_native_1080_high_rate(config) ||
 		gc555_fpga_is_native_2560x1080p60(config) ||
 		gc555_fpga_is_native_2560x1080p144(config) ||
@@ -994,6 +1031,8 @@ gc555_fpga_validate_config(const struct gc555_fpga_video_config *config)
 	bool native_1440_rgb_limited;
 	bool native_1440p60;
 	bool native_3440x1440;
+	bool native_3840x1080;
+	bool native_1920x1200p60;
 	bool native_1080_high_rate;
 	bool native_2560x1080p60;
 	bool native_2560x1080p60_rgb;
@@ -1027,6 +1066,8 @@ gc555_fpga_validate_config(const struct gc555_fpga_video_config *config)
 		gc555_fpga_is_native_1440_rgb_limited(config);
 	native_1440p60 = gc555_fpga_is_native_1440p60(config);
 	native_3440x1440 = gc555_fpga_is_native_3440x1440(config);
+	native_3840x1080 = gc555_fpga_is_native_3840x1080(config);
+	native_1920x1200p60 = gc555_fpga_is_native_1920x1200p60(config);
 	native_1080_high_rate = gc555_fpga_is_native_1080_high_rate(config);
 	native_2560x1080p60 = gc555_fpga_is_native_2560x1080p60(config);
 	native_2560x1080p60_rgb =
@@ -1053,7 +1094,8 @@ gc555_fpga_validate_config(const struct gc555_fpga_video_config *config)
 		input_mode_supported = config->dual_pixel && !config->ddr;
 	else if (native_4k_high_rate || native_4k_low_rate ||
 		 native_1440_high_rate || native_1440p60 ||
-		 native_3440x1440 || native_1080_high_rate ||
+		 native_3440x1440 || native_3840x1080 ||
+		 native_1920x1200p60 || native_1080_high_rate ||
 		 native_2560x1080p60 || native_2560x1080p144)
 		input_mode_supported = config->dual_pixel && config->ddr;
 	else
@@ -1078,6 +1120,13 @@ gc555_fpga_validate_config(const struct gc555_fpga_video_config *config)
 	     !native_1440_high_rate_yuv444 && !native_1440_rgb_limited &&
 	     !native_2560x1080p60_rgb &&
 	     !native_1080p_low_rate_rgb_limited &&
+	     !native_1080_high_rate &&
+	     !native_3840x1080 &&
+	     !native_1920x1200p60 &&
+	     !native_3440x1440 &&
+	     !native_2560x1080p144 &&
+	     !native_4k_high_rate &&
+	     !native_4k_low_rate &&
 	     !native_1080i_rgb_limited && !native_720p_rgb_limited &&
 	     !native_broadcast_sd_rgb_limited && !native_hdr_p010) ||
 	    (!native_cea_yuv &&

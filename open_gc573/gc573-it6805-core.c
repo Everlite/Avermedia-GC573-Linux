@@ -2578,7 +2578,7 @@ static bool it6805_rescale_frame_rate(u32 frame_rate_hz, u32 pixel_clock_khz,
 				      u8 *rate)
 {
 	static const u32 std_khz[] = {
-		25200, 27000, 74250, 148500, 241500, 297000, 445500, 483400, 594000,
+		25200, 27000, 74250, 148500, 241500, 297000, 483400, 594000,
 	};
 	static const u8 std_fps[] = { 24, 25, 30, 50, 60, 120, 144, 180, 240 };
 	u32 ref = 0, ref_diff = 0, scaled, i;
