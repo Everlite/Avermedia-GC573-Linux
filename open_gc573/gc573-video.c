@@ -122,12 +122,16 @@ static const struct gc555_video_mode gc555_video_modes[] = {
 	{ 1280, 720, { 50, 60 }, 2 },
 	{ 1280, 1024, { 60, 75 }, 2 },
 	{ 1360, 765, { 60 }, 1 },
+	{ 1440, 240, { 50, 60 }, 2 },
+	{ 1440, 480, { 24, 25, 30, 50, 60 }, 5 },
+	{ 1440, 576, { 25, 50, 60 }, 3 },
 	{ 1440, 900, { 60 }, 1 },
 	{ 1680, 1050, { 60 }, 1 },
 	{ 1920, 1080, { 24, 25, 30, 50, 60, 120, 144, 180, 240 }, 9 },
 	{ 1920, 1200, { 60 }, 1 },
 	{ 2560, 1080, { 60, 144 }, 2 },
 	{ 2560, 1440, { 60, 120, 144 }, 3 },
+	{ 2880, 240, { 50, 60 }, 2 },
 	{ 2880, 2160, { 24, 25, 30, 50, 60 }, 5 },
 	{ 3440, 1440, { 50, 60, 100 }, 3 },
 	{ 3840, 1080, { 60, 120 }, 2 },
@@ -195,7 +199,8 @@ gc555_video_mode_supports_p010(const struct gc555_video_mode *mode)
 		return mode->height == 720 || mode->height == 800 ||
 		       mode->height == 1024;
 	case 1440:
-		return mode->height == 900;
+		return mode->height == 240 || mode->height == 480 ||
+		       mode->height == 576 || mode->height == 900;
 	case 1680:
 		return mode->height == 1050;
 	case 1920:
@@ -203,7 +208,7 @@ gc555_video_mode_supports_p010(const struct gc555_video_mode *mode)
 	case 2560:
 		return mode->height == 1080 || mode->height == 1440;
 	case 2880:
-		return mode->height == 2160;
+		return mode->height == 240 || mode->height == 2160;
 	case 3440:
 		return mode->height == 1440;
 	case 3840:

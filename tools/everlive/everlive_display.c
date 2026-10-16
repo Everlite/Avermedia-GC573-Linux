@@ -341,6 +341,7 @@ struct stream_ctx {
     uint32_t pixelformat;
     uint32_t bytesperline;
     uint32_t sdl_format;
+    bool interlaced;
     struct v4l2_mmap_buffer buffers[BUFFER_COUNT];
     unsigned int buffer_count;
     SDL_Texture *texture;
@@ -378,16 +379,18 @@ static bool stream_start(struct stream_ctx *ctx, SDL_Renderer *renderer)
 {
     stream_stop(ctx);
 
-    /* Hardware DV-Timings vom HDMI-Empfaenger synchronisieren */
+    /* Hardware DV-Timings query and synchronization */
     struct v4l2_dv_timings dv = {};
+    bool dv_interlaced = false;
     if (ioctl(ctx->fd, VIDIOC_QUERY_DV_TIMINGS, &dv) == 0 && dv.bt.width > 0 && dv.bt.height > 0) {
+        dv_interlaced = (dv.bt.interlaced == V4L2_DV_INTERLACED);
         ioctl(ctx->fd, VIDIOC_S_DV_TIMINGS, &dv);
         struct v4l2_format sfmt = {};
         sfmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         sfmt.fmt.pix.width = dv.bt.width;
         sfmt.fmt.pix.height = dv.bt.height;
         sfmt.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
-        sfmt.fmt.pix.field = V4L2_FIELD_NONE;
+        sfmt.fmt.pix.field = dv_interlaced ? V4L2_FIELD_INTERLACED : V4L2_FIELD_NONE;
         ioctl(ctx->fd, VIDIOC_S_FMT, &sfmt);
     }
 
@@ -401,6 +404,10 @@ static bool stream_start(struct stream_ctx *ctx, SDL_Renderer *renderer)
     ctx->height = fmt.fmt.pix.height;
     ctx->pixelformat = fmt.fmt.pix.pixelformat;
     ctx->bytesperline = fmt.fmt.pix.bytesperline;
+    ctx->interlaced = dv_interlaced ||
+                      fmt.fmt.pix.field == V4L2_FIELD_INTERLACED ||
+                      fmt.fmt.pix.field == V4L2_FIELD_INTERLACED_TB ||
+                      fmt.fmt.pix.field == V4L2_FIELD_INTERLACED_BT;
 
     if (ctx->width == 0 || ctx->height == 0) {
         return false;
@@ -460,7 +467,7 @@ static bool stream_start(struct stream_ctx *ctx, SDL_Renderer *renderer)
         return false;
     }
 
-    /* Leere eventuelle Alt-Puffer aus der V4L2 Queue fuer minimale Latenz */
+    /* Drain any stale buffers from V4L2 queue for minimal latency */
     struct v4l2_buffer drain_buf = {};
     drain_buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     drain_buf.memory = V4L2_MEMORY_MMAP;
@@ -472,7 +479,8 @@ static bool stream_start(struct stream_ctx *ctx, SDL_Renderer *renderer)
     }
 
     ctx->active = true;
-    printf("[+] HDMI Stream aktiv: %ux%u (%u bytes/line)\n", ctx->width, ctx->height, ctx->bytesperline);
+    printf("[+] HDMI Stream active: %ux%u%c (%u bytes/line)\n",
+           ctx->width, ctx->height, ctx->interlaced ? 'i' : 'p', ctx->bytesperline);
     return true;
 }
 
@@ -591,6 +599,15 @@ int main(int argc, char *argv[])
     } else {
         int win_w = (int)init_w;
         int win_h = (init_w == 3840 && init_h == 1080) ? 2160 : (int)init_h;
+        if (init_w == 1440 && (init_h == 480 || init_h == 576)) {
+            win_w = 720;
+        } else if (init_w == 2880 && init_h == 240) {
+            win_w = 640;
+            win_h = 480;
+        } else if (init_w == 1440 && init_h == 240) {
+            win_w = 640;
+            win_h = 480;
+        }
         Uint32 win_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
         if (start_fullscreen) {
             win_flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
@@ -949,11 +966,11 @@ int main(int argc, char *argv[])
 
                 /* Texts - automatically, perfectly centered */
                 draw_string_centered(renderer, "EVERLIVE GAMING SCREEN", center_x, card_y + 26, 2, (SDL_Color){248, 250, 252, 255});
-                draw_string_centered(renderer, "Warte auf HDMI-Signal...", center_x, card_y + 72, 1, (SDL_Color){234, 179, 8, 255});
-                draw_string_centered(renderer, "Konsole oder Bildquelle einschalten", center_x, card_y + 100, 1, (SDL_Color){148, 163, 184, 255});
-                draw_string_centered(renderer, "[H] Re-Sync   *   [S] Streamer Mode   *   [Esc] Beenden", center_x, card_y + 134, 1, (SDL_Color){96, 165, 250, 255});
+                draw_string_centered(renderer, "Waiting for HDMI signal...", center_x, card_y + 72, 1, (SDL_Color){234, 179, 8, 255});
+                draw_string_centered(renderer, "Power on console or video source", center_x, card_y + 100, 1, (SDL_Color){148, 163, 184, 255});
+                draw_string_centered(renderer, "[H] Re-Sync   *   [S] Streamer Mode   *   [Esc] Exit", center_x, card_y + 134, 1, (SDL_Color){96, 165, 250, 255});
 
-                /* HUD zeichnen damit Lautstaerke/Exit nutzbar bleiben */
+                /* Draw HUD so volume and controls remain usable in standby */
                 if (g_hud_visible && !g_streamer_mode) {
                     SDL_Rect hud_bg = { hud_x, hud_y, hud_w, hud_h };
                     SDL_SetRenderDrawColor(renderer, 15, 18, 26, 215);
@@ -1010,7 +1027,7 @@ int main(int argc, char *argv[])
                     last_title_time = now_ticks;
                     if (g_embed_wid == 0) {
                         char title[180];
-                        snprintf(title, sizeof(title), "EverLive - Warte auf HDMI-Signal... | Vol: %d%%",
+                        snprintf(title, sizeof(title), "EverLive - Waiting for HDMI signal... | Vol: %d%%",
                                  g_muted ? 0 : (int)(g_volume * 100.0f));
                         SDL_SetWindowTitle(window, title);
                     }
@@ -1091,12 +1108,25 @@ int main(int argc, char *argv[])
         SDL_Rect dest_rect;
         if (ctx.width > 0 && ctx.height > 0 && cur_w > 0 && cur_h > 0) {
             /* 3840x1080 is an anamorphic half-vertical 4K120 signal (e.g. RetroTINK 4K Pro)
-             * that requires 2x vertical stretching to restore the intended 16:9 aspect ratio. */
-            int eff_h = (ctx.width == 3840 && ctx.height == 1080) ? (ctx.height * 2) : ctx.height;
-            double scale_w = (double)cur_w / (double)ctx.width;
+             * that requires 2x vertical stretching to restore the intended 16:9 aspect ratio.
+             * 1440x480 / 1440x576 are 2x pixel-repeated SD signals (CEA-861 VIC 6/21)
+             * 2880x240 is 4x/8x pixel-repeated 240p (RetroTINK 4K).
+             * These require 4:3 aspect ratio display (effective width = 720 or 320). */
+            int eff_w = ctx.width;
+            int eff_h = ctx.height;
+            if (ctx.width == 3840 && ctx.height == 1080) {
+                eff_h = ctx.height * 2;
+            } else if (ctx.width == 1440 && (ctx.height == 480 || ctx.height == 576)) {
+                eff_w = 720;
+            } else if (ctx.width == 2880 && ctx.height == 240) {
+                eff_w = 320;
+            } else if (ctx.width == 1440 && ctx.height == 240) {
+                eff_w = 320;
+            }
+            double scale_w = (double)cur_w / (double)eff_w;
             double scale_h = (double)cur_h / (double)eff_h;
             double scale = (scale_w < scale_h) ? scale_w : scale_h;
-            dest_rect.w = (int)(ctx.width * scale);
+            dest_rect.w = (int)(eff_w * scale);
             dest_rect.h = (int)(eff_h * scale);
             dest_rect.x = (cur_w - dest_rect.w) / 2;
             dest_rect.y = (cur_h - dest_rect.h) / 2;
@@ -1187,7 +1217,7 @@ int main(int argc, char *argv[])
 
             /* Signal Info Badge */
             char sig_txt[32];
-            snprintf(sig_txt, sizeof(sig_txt), "%ux%u@%.2f", ctx.width, ctx.height, live_fps > 0.0 ? live_fps : 60.0);
+            snprintf(sig_txt, sizeof(sig_txt), "%ux%u%c@%.2f", ctx.width, ctx.height, ctx.interlaced ? 'i' : 'p', live_fps > 0.0 ? live_fps : 60.0);
             draw_string(renderer, sig_txt, hud_x + 260, hud_y + 18, 1, (SDL_Color){63, 185, 80, 255});
 
             /* Separator */
@@ -1278,12 +1308,12 @@ int main(int argc, char *argv[])
 
             if (g_embed_wid == 0) {
                 char title[180];
-                snprintf(title, sizeof(title), "EverLive - %ux%u @ %.2f FPS | Latenz: %.1f ms | Vol: %d%%%s",
-                         ctx.width, ctx.height, live_fps, lat_ms, g_muted ? 0 : (int)(g_volume * 100.0f),
+                snprintf(title, sizeof(title), "EverLive - %ux%u%c @ %.2f FPS | Latency: %.1f ms | Vol: %d%%%s",
+                         ctx.width, ctx.height, ctx.interlaced ? 'i' : 'p', live_fps, lat_ms, g_muted ? 0 : (int)(g_volume * 100.0f),
                          g_streamer_mode ? " [STREAMER MODE]" : "");
                 SDL_SetWindowTitle(window, title);
-                printf("[*] Stream: %ux%u @ %.2f FPS | Latenz: %.1f ms | Jitter: %u/s%s\n",
-                       ctx.width, ctx.height, live_fps, lat_ms, live_jitter,
+                printf("[*] Stream: %ux%u%c @ %.2f FPS | Latency: %.1f ms | Jitter: %u/s%s\n",
+                       ctx.width, ctx.height, ctx.interlaced ? 'i' : 'p', live_fps, lat_ms, live_jitter,
                        g_streamer_mode ? " [STREAMER MODE]" : "");
                 fflush(stdout);
             }
@@ -1302,6 +1332,6 @@ int main(int argc, char *argv[])
     SDL_DestroyWindow(window);
     SDL_Quit();
 
-    printf("[+] Beendet.\n");
+    printf("[+] Exited.\n");
     return 0;
 }

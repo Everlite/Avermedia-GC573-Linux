@@ -112,22 +112,36 @@ DEFAULT_ADEV = find_gc573_adev()
 
 PRESETS = {
     "Auto (HDMI Signal)": None,
+    "3840x2160 @ 60 FPS":  {"width": 3840, "height": 2160, "fps": 60,  "fmt": "YUYV"},
+    "3840x2160 @ 30 FPS":  {"width": 3840, "height": 2160, "fps": 30,  "fmt": "YUYV"},
+    "3840x2160 @ 24 FPS":  {"width": 3840, "height": 2160, "fps": 24,  "fmt": "YUYV"},
+    "2880x2160 @ 60 FPS (4:3 4K)": {"width": 2880, "height": 2160, "fps": 60, "fmt": "YUYV"},
+    "3840x1080 @ 120 FPS": {"width": 3840, "height": 1080, "fps": 120, "fmt": "YUYV"},
+    "3840x1080 @ 60 FPS":  {"width": 3840, "height": 1080, "fps": 60,  "fmt": "YUYV"},
+    "2560x1440 @ 144 FPS": {"width": 2560, "height": 1440, "fps": 144, "fmt": "YUYV"},
     "2560x1440 @ 120 FPS": {"width": 2560, "height": 1440, "fps": 120, "fmt": "YUYV"},
     "2560x1440 @ 60 FPS":  {"width": 2560, "height": 1440, "fps": 60,  "fmt": "YUYV"},
+    "2560x1080 @ 144 FPS": {"width": 2560, "height": 1080, "fps": 144, "fmt": "YUYV"},
+    "2560x1080 @ 60 FPS":  {"width": 2560, "height": 1080, "fps": 60,  "fmt": "YUYV"},
+    "1920x1080 @ 240 FPS": {"width": 1920, "height": 1080, "fps": 240, "fmt": "YUYV"},
+    "1920x1080 @ 180 FPS": {"width": 1920, "height": 1080, "fps": 180, "fmt": "YUYV"},
+    "1920x1080 @ 144 FPS": {"width": 1920, "height": 1080, "fps": 144, "fmt": "YUYV"},
     "1920x1080 @ 120 FPS": {"width": 1920, "height": 1080, "fps": 120, "fmt": "YUYV"},
     "1920x1080 @ 60 FPS":  {"width": 1920, "height": 1080, "fps": 60,  "fmt": "YUYV"},
-    "3840x2160 @ 60 FPS":  {"width": 3840, "height": 2160, "fps": 60,  "fmt": "YUYV"},
+    "1280x720 @ 60 FPS":   {"width": 1280, "height": 720,  "fps": 60,  "fmt": "YUYV"},
+    "720x480 @ 60 FPS (480p)": {"width": 720, "height": 480, "fps": 60, "fmt": "YUYV"},
+    "720x576 @ 50 FPS (576p)": {"width": 720, "height": 576, "fps": 50, "fmt": "YUYV"},
 }
 
 LED_MODES = {
-    "Aus (Dunkel)": 0,
-    "Blau (Standard)": 1,
-    "Grün": 2,
-    "Rot": 3,
-    "Cyan / Türkis": 4,
-    "Magenta / Lila": 5,
-    "Gelb": 6,
-    "Weiß": 7,
+    "Off (Dark)": 0,
+    "Blue (Default)": 1,
+    "Green": 2,
+    "Red": 3,
+    "Cyan": 4,
+    "Magenta": 5,
+    "Yellow": 6,
+    "White": 7,
 }
 
 LED_NAME_MAP = {
@@ -311,13 +325,13 @@ class GameStreamer:
         """Queries current signal status via v4l2-ctl."""
         info = {
             "locked": False,
-            "resolution": "Kein Signal",
+            "resolution": "No Signal",
             "framerate": "",
             "pixelformat": "",
-            "audio": "8 Kanäle @ 48 kHz"
+            "audio": "8 Channels @ 48 kHz"
         }
         if not os.path.exists(self.vdev):
-            info["resolution"] = f"{self.vdev} nicht gefunden"
+            info["resolution"] = f"{self.vdev} not found"
             return info
 
         try:
@@ -326,12 +340,13 @@ class GameStreamer:
                 stderr=subprocess.DEVNULL, timeout=1.0
             ).decode()
             
-            # Example: Active width: 2560, Active height: 1440, Pixelclock: 489300000 Hz
             w_m = re.search(r"Active width:\s*(\d+)", out)
             h_m = re.search(r"Active height:\s*(\d+)", out)
             clk_m = re.search(r"Pixelclock:\s*(\d+)", out)
             tot_w = re.search(r"Total width:\s*(\d+)", out)
             tot_h = re.search(r"Total height:\s*(\d+)", out)
+            il_m = re.search(r"Interlaced:\s*(yes|1)", out, re.IGNORECASE)
+            scan = "i" if il_m else "p"
 
             if w_m and h_m:
                 w, h = int(w_m.group(1)), int(h_m.group(1))
@@ -347,14 +362,13 @@ class GameStreamer:
                         else:
                             fps_str = f"{fps_calc:.2f} FPS"
                 info["locked"] = True
-                info["resolution"] = f"{w}x{h}"
+                info["resolution"] = f"{w}x{h}{scan}"
                 info["framerate"] = fps_str
 
                 info["hdr"] = self.hdr_label() or "SDR"
         except Exception:
-            # Kein aktiver HDMI-Signal-Lock über DV-Timings vorhanden
             info["locked"] = False
-            info["resolution"] = "Kein Signal"
+            info["resolution"] = "No Signal"
             info["framerate"] = ""
             info["hdr"] = ""
 
@@ -402,6 +416,8 @@ class GameStreamer:
             clk_m = re.search(r"Pixelclock:\s*(\d+)", out)
             tot_w = re.search(r"Total width:\s*(\d+)", out)
             tot_h = re.search(r"Total height:\s*(\d+)", out)
+            il_m = re.search(r"Interlaced:\s*(yes|1)", out, re.IGNORECASE)
+            scan = "i" if il_m else "p"
             if w_m and h_m:
                 w, h = int(w_m.group(1)), int(h_m.group(1))
                 fps_str = None
@@ -415,7 +431,7 @@ class GameStreamer:
                             fps_str = f"{int(round(fps_calc))} FPS"
                         else:
                             fps_str = f"{fps_calc:.2f} FPS"
-                return f"{w}x{h}", fps_str
+                return f"{w}x{h}{scan}", fps_str
         except Exception:
             pass
 
@@ -425,10 +441,12 @@ class GameStreamer:
                 stderr=subprocess.DEVNULL, timeout=0.5
             ).decode()
             m = re.search(r"Width/Height\s*:\s*(\d+)/(\d+)", out)
+            il_m = re.search(r"Field\s*:\s*Interlaced", out, re.IGNORECASE)
+            scan = "i" if il_m else "p"
             if m:
                 w, h = int(m.group(1)), int(m.group(2))
                 if w > 0 and h > 0:
-                    return f"{w}x{h}", None
+                    return f"{w}x{h}{scan}", None
         except Exception:
             pass
         return None, None
@@ -458,7 +476,7 @@ class GameStreamer:
 
         self.vsync = vsync
         if not os.path.exists(self.vdev):
-            print(f"[!] Fehler: Videogerät {self.vdev} existiert nicht.")
+            print(f"[!] Error: Video device {self.vdev} does not exist.")
             return False
 
         preset = PRESETS.get(preset_name)
@@ -476,7 +494,7 @@ class GameStreamer:
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1.0
                 )
             except Exception as e:
-                print(f"[*] Hinweis beim Setzen des Formats: {e}")
+                print(f"[*] Note while setting format: {e}")
         else:
             # Auto (HDMI Signal): Synchronous v4l2 query only needed for mpv fallback.
             # Native everlive_display manages DV-Timings and Standby asynchronously without blocking GUI.
@@ -508,13 +526,13 @@ class GameStreamer:
             if streamer_mode:
                 cmd.append("--streamer-mode")
             cmd.extend(["-v", f"{volume:.2f}"])
-            print(f"[*] Starte nativen EverLive Direct-Renderer (Pure Native Wayland): {' '.join(cmd)}")
+            print(f"[*] Starting native EverLive Direct-Renderer (Pure Native Wayland): {' '.join(cmd)}")
             try:
                 self.mpv_proc = subprocess.Popen(cmd, start_new_session=True)
                 self.is_running = True
                 return True
             except Exception as e:
-                print(f"[!] Fehler beim Starten von everlive_display ({e}), weiche auf mpv aus...")
+                print(f"[!] Error launching everlive_display ({e}), falling back to mpv...")
 
         # Fallback: optimized mpv command with zero-delay low-latency profile
         mpv_cmd = [
@@ -562,10 +580,10 @@ class GameStreamer:
                     )
                     self.pwplay_proc = subprocess.Popen(cmd, shell=True, preexec_fn=os.setsid)
                 except Exception as ae:
-                    print(f"[*] Hinweis beim Starten des Audio-Streams: {ae}")
+                    print(f"[*] Note while starting audio stream: {ae}")
             return True
         except Exception as e:
-            print(f"[!] mpv konnte nicht gestartet werden: {e}")
+            print(f"[!] Failed to launch mpv: {e}")
             self.stop()
             return False
 
@@ -888,7 +906,7 @@ if HAS_QT:
             btn_discord = QPushButton("Discord")
             btn_discord.setObjectName("btnDiscord")
             btn_discord.setCursor(Qt.PointingHandCursor)
-            btn_discord.setToolTip("EverLive Discord-Community beitreten (Feedback & Hardware-Support)")
+            btn_discord.setToolTip("Join the EverLive Discord community (Feedback & Hardware Support)")
             btn_discord.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://discord.com/invite/D2XFhkPMmc")))
             top_bar.addWidget(btn_discord)
 
@@ -912,11 +930,11 @@ if HAS_QT:
             v_sig_text = QVBoxLayout()
             v_sig_text.setSpacing(3)
 
-            self.lbl_hero_signal = QLabel("Warte auf HDMI-Signal...")
+            self.lbl_hero_signal = QLabel("Waiting for HDMI signal...")
             self.lbl_hero_signal.setObjectName("heroSignal")
             v_sig_text.addWidget(self.lbl_hero_signal)
 
-            self.lbl_hero_meta = QLabel("Prüfe Eingangsquelle (Konsole / PC)...")
+            self.lbl_hero_meta = QLabel("Checking input source (Console / PC)...")
             self.lbl_hero_meta.setObjectName("heroMeta")
             v_sig_text.addWidget(self.lbl_hero_meta)
 
@@ -929,7 +947,7 @@ if HAS_QT:
             v_hero.addLayout(h_sig_info)
 
             # Confident Action Button
-            self.btn_launch = QPushButton("Gaming Screen starten")
+            self.btn_launch = QPushButton("Start Gaming Screen")
             self.btn_launch.setObjectName("btnLaunchStart")
             self.btn_launch.setCursor(Qt.PointingHandCursor)
             self.btn_launch.clicked.connect(self.toggle_stream)
@@ -940,23 +958,23 @@ if HAS_QT:
             grid_opts.setHorizontalSpacing(24)
             grid_opts.setVerticalSpacing(8)
 
-            self.chk_fullscreen = QCheckBox("Direkt im Vollbild starten")
+            self.chk_fullscreen = QCheckBox("Start in Fullscreen")
             self.chk_fullscreen.setChecked(self.saved_cfg.get("fullscreen", True))
             self.chk_fullscreen.toggled.connect(lambda val: save_settings({"fullscreen": val}))
             grid_opts.addWidget(self.chk_fullscreen, 0, 0)
 
-            self.chk_vsync = QCheckBox("VSync aktivieren (120 Hz)")
+            self.chk_vsync = QCheckBox("Enable VSync (120 Hz)")
             self.chk_vsync.setChecked(self.saved_cfg.get("vsync", self.enable_vsync))
             self.chk_vsync.toggled.connect(lambda val: save_settings({"vsync": val}))
             grid_opts.addWidget(self.chk_vsync, 0, 1)
 
-            self.chk_autostart = QCheckBox("Automatisch beim Start öffnen")
+            self.chk_autostart = QCheckBox("Auto-start on launch")
             self.chk_autostart.setChecked(self.saved_cfg.get("autostart", False))
             self.chk_autostart.toggled.connect(lambda val: save_settings({"autostart": val}))
             grid_opts.addWidget(self.chk_autostart, 1, 0)
 
             self.chk_streamer = QCheckBox("Streamer Mode (Clean Feed)")
-            self.chk_streamer.setToolTip("Sperrt Maus-Steuerleiste, HUD und Overlays für ungestörte Videoaufnahmen (Hotkey: 'S')")
+            self.chk_streamer.setToolTip("Hides mouse control bar, HUD, and overlays for clean recordings (Hotkey: 'S')")
             self.chk_streamer.setChecked(self.saved_cfg.get("streamer_mode", False))
             self.chk_streamer.toggled.connect(lambda val: save_settings({"streamer_mode": val}))
             grid_opts.addWidget(self.chk_streamer, 1, 1)
@@ -993,7 +1011,7 @@ if HAS_QT:
             self.combo_presets.currentIndexChanged.connect(self.on_preset_changed)
             grid.addWidget(self.combo_presets, 0, 1)
 
-            lbl_led = QLabel("Karten-LED:")
+            lbl_led = QLabel("Card LED:")
             lbl_led.setStyleSheet("font-weight: 500; color: #94a3b8;")
             grid.addWidget(lbl_led, 0, 2)
 
@@ -1024,7 +1042,7 @@ if HAS_QT:
             grid.addWidget(self.combo_led, 0, 3)
 
             # Row 1: Volume & Re-Sync
-            lbl_audio = QLabel("Lautstärke:")
+            lbl_audio = QLabel("Volume:")
             lbl_audio.setStyleSheet("font-weight: 500; color: #94a3b8;")
             grid.addWidget(lbl_audio, 1, 0)
 
@@ -1050,13 +1068,13 @@ if HAS_QT:
             h_vol.addWidget(self.lbl_vol)
             grid.addLayout(h_vol, 1, 1)
 
-            lbl_sync = QLabel("HDMI-Sync:")
+            lbl_sync = QLabel("HDMI Sync:")
             lbl_sync.setStyleSheet("font-weight: 500; color: #94a3b8;")
             grid.addWidget(lbl_sync, 1, 2)
 
-            self.btn_resync = QPushButton("Signal synchronisieren")
+            self.btn_resync = QPushButton("Re-sync Signal")
             self.btn_resync.setCursor(Qt.PointingHandCursor)
-            self.btn_resync.setToolTip("Hardware HDMI-Handshake (HPD-Puls) auslösen (im Fenster auch Taste 'H')")
+            self.btn_resync.setToolTip("Trigger hardware HDMI handshake (HPD pulse) - also key 'H' in window")
             self.btn_resync.clicked.connect(self.force_resync)
             grid.addWidget(self.btn_resync, 1, 3)
 
@@ -1077,7 +1095,7 @@ if HAS_QT:
 
             b_layout.addStretch(1)
 
-            lbl_hints = QLabel("F Vollbild • Tab Stats • S Streamer • M Stumm • H Re-Sync • Esc Beenden")
+            lbl_hints = QLabel("F Fullscreen • Tab Stats • S Streamer • M Mute • H Re-Sync • Esc Exit")
             lbl_hints.setStyleSheet("color: #64748b; font-size: 11px;")
             b_layout.addWidget(lbl_hints)
 
@@ -1089,7 +1107,7 @@ if HAS_QT:
         def toggle_stream(self):
             if self.streamer.is_running:
                 self.streamer.stop()
-                self.btn_launch.setText("Gaming Screen starten")
+                self.btn_launch.setText("Start Gaming Screen")
                 self.btn_launch.setObjectName("btnLaunchStart")
                 self.btn_launch.setStyle(self.btn_launch.style())
             else:
@@ -1112,7 +1130,7 @@ if HAS_QT:
             })
             success = self.streamer.start(preset_name=preset, fullscreen=is_fs, volume=vol, vsync=is_vsync, streamer_mode=is_streamer)
             if success:
-                self.btn_launch.setText("Gaming Screen beenden")
+                self.btn_launch.setText("Stop Gaming Screen")
                 self.btn_launch.setObjectName("btnLaunchStop")
                 self.btn_launch.setStyle(self.btn_launch.style())
                 set_audio_volume(self.slider_vol.value())
@@ -1153,12 +1171,12 @@ if HAS_QT:
             self._resyncing = True
             if hasattr(self, "btn_resync"):
                 self.btn_resync.setEnabled(False)
-                self.btn_resync.setText("Synchronisiere...")
+                self.btn_resync.setText("Synchronizing...")
             try:
                 was_running = self.streamer.is_running
                 if was_running:
                     self.streamer.stop()
-                    self.btn_launch.setText("Gaming Screen starten")
+                    self.btn_launch.setText("Start Gaming Screen")
                     self.btn_launch.setObjectName("btnLaunchStart")
                     self.btn_launch.setStyle(self.btn_launch.style())
                 self.streamer.resync()
@@ -1166,12 +1184,12 @@ if HAS_QT:
                 if was_running:
                     QTimer.singleShot(600, lambda: self._wait_and_restart_after_resync(12))
             except Exception as e:
-                print(f"[!] Fehler bei HDMI Re-Sync: {e}")
+                print(f"[!] Error during HDMI re-sync: {e}")
             finally:
                 QTimer.singleShot(2500, lambda: (
                     setattr(self, "_resyncing", False),
                     hasattr(self, "btn_resync") and self.btn_resync.setEnabled(True),
-                    hasattr(self, "btn_resync") and self.btn_resync.setText("Signal synchronisieren")
+                    hasattr(self, "btn_resync") and self.btn_resync.setText("Re-sync Signal")
                 ))
 
         def _wait_and_restart_after_resync(self, attempts=12):
@@ -1187,10 +1205,10 @@ if HAS_QT:
             hdr_str = f" • {info['hdr']}" if info.get("hdr") else ""
             self.lbl_pill.setText(f"● {info['resolution']} @ {info['framerate']}{hdr_str}")
             self.lbl_pill.setStyleSheet("background-color: #0d2318; color: #34d399; border: 1px solid #164e32;")
-            res_clean = info['resolution'].replace('x', ' × ')
+            res_clean = re.sub(r"(\d+)x(\d+)([pi]?)", r"\1 × \2\3", info['resolution'])
             self.lbl_hero_signal.setText(f"{res_clean} @ {info['framerate']}")
             hdr_val = info.get('hdr', 'SDR')
-            self.lbl_hero_meta.setText(f"Signal synchronisiert • Farbraum: {hdr_val} • 8ch LPCM (PipeWire)")
+            self.lbl_hero_meta.setText(f"Signal locked • Color: {hdr_val} • 8ch LPCM (PipeWire)")
 
         def update_status(self):
             # While the gaming screen is open, only read the cached driver format and HDR control.
@@ -1198,7 +1216,7 @@ if HAS_QT:
             if self.streamer.is_running:
                 if not self.streamer.poll():
                     # Window was closed by user
-                    self.btn_launch.setText("Gaming Screen starten")
+                    self.btn_launch.setText("Start Gaming Screen")
                     self.btn_launch.setObjectName("btnLaunchStart")
                     self.btn_launch.setStyle(self.btn_launch.style())
                     return
@@ -1229,8 +1247,8 @@ if HAS_QT:
             else:
                 self.lbl_pill.setText("○ Standby")
                 self.lbl_pill.setStyleSheet("background-color: #1a202c; color: #94a3b8; border: 1px solid #2d3748;")
-                self.lbl_hero_signal.setText("Kein HDMI-Signal")
-                self.lbl_hero_meta.setText("Warte auf Eingangssignal (z. B. Konsole oder PC einschalten)...")
+                self.lbl_hero_signal.setText("No HDMI Signal")
+                self.lbl_hero_meta.setText("Waiting for input signal (e.g. power on console or PC)...")
 
         def closeEvent(self, event):
             self.streamer.stop()
@@ -1239,17 +1257,17 @@ if HAS_QT:
 
 def main():
     parser = argparse.ArgumentParser(description="EverLive - Live Gamer 4K Console Gaming Screen")
-    parser.add_argument("-f", "--fullscreen", action="store_true", help="Direkt im Vollbild starten")
-    parser.add_argument("-p", "--preset", default="Auto (HDMI Signal)", choices=list(PRESETS.keys()), help="Auflösungs-Preset")
-    parser.add_argument("--vsync", action="store_true", help="Aktiviert VSync für ruckelfreie Präsentation auf passenden Monitoren")
-    parser.add_argument("-s", "--streamer-mode", "--clean", action="store_true", help="Streamer Mode: Clean Feed ohne On-Screen HUD und Kontrollleiste")
-    parser.add_argument("--cli", action="store_true", help="Startet direkt ohne GUI")
-    parser.add_argument("--mpv", action="store_true", help="Erzwingt mpv als Video-Engine anstelle von everlive_display")
+    parser.add_argument("-f", "--fullscreen", action="store_true", help="Launch directly in fullscreen")
+    parser.add_argument("-p", "--preset", default="Auto (HDMI Signal)", choices=list(PRESETS.keys()), help="Resolution preset")
+    parser.add_argument("--vsync", action="store_true", help="Enable VSync for smooth tearing-free presentation")
+    parser.add_argument("-s", "--streamer-mode", "--clean", action="store_true", help="Streamer Mode: Clean feed without HUD or controls")
+    parser.add_argument("--cli", action="store_true", help="Launch directly in CLI mode without Qt GUI")
+    parser.add_argument("--mpv", action="store_true", help="Force mpv backend instead of everlive_display")
     parser.add_argument("--led", type=str, default=None,
-                        help="GC573 LED Beleuchtung sofort ändern (0-7 oder off/blue/green/red/cyan/magenta/yellow/white)")
-    parser.add_argument("-v", "--volume", type=float, default=1.0, help="Lautstärke (0.0 bis 1.5)")
-    parser.add_argument("-d", "--device", default=None, help="V4L2 Video Device (z.B. /dev/video0, Standard: Auto-Erkennung)")
-    parser.add_argument("-a", "--audio", default=None, help="ALSA Audio Device (z.B. hw:CARD=A4K,DEV=0, Standard: Auto-Erkennung)")
+                        help="Change GC573 LED lighting immediately (0-7 or off/blue/green/red/cyan/magenta/yellow/white)")
+    parser.add_argument("-v", "--volume", type=float, default=1.0, help="Audio volume (0.0 to 1.5)")
+    parser.add_argument("-d", "--device", default=None, help="V4L2 video device (e.g. /dev/video0, default: auto-detect)")
+    parser.add_argument("-a", "--audio", default=None, help="ALSA audio device (e.g. hw:CARD=A4K,DEV=0, default: auto-detect)")
     args = parser.parse_args()
 
     if args.led is not None:
@@ -1262,11 +1280,11 @@ def main():
                 pass
         if val is not None and 0 <= val <= 7:
             if write_led_mode(val):
-                print(f"[+] GC573 LED Beleuchtung erfolgreich auf Modus {val} gesetzt.")
+                print(f"[+] GC573 LED lighting set to mode {val}.")
             else:
-                print(f"[!] Fehler beim Setzen der GC573 LED auf Modus {val}.")
+                print(f"[!] Failed to set GC573 LED to mode {val}.")
         else:
-            print(f"[!] Ungültiger LED Modus '{args.led}'. Gültig: {list(LED_NAME_MAP.keys())}")
+            print(f"[!] Invalid LED mode '{args.led}'. Valid: {list(LED_NAME_MAP.keys())}")
         if not args.cli and not any(arg in sys.argv for arg in ["-f", "--fullscreen", "-p", "--preset"]):
             sys.exit(0)
 
@@ -1284,15 +1302,15 @@ def main():
     signal.signal(signal.SIGTERM, sig_handler)
 
     if args.cli or not HAS_QT:
-        print("[*] Starte PS5 Gaming Screen im Low-Latency-Modus...")
+        print("[*] Launching Gaming Screen in low-latency mode...")
         info = streamer.get_signal_info()
         print(f"[*] Signal: {info['resolution']} {info['framerate']}".strip())
         if not info["locked"]:
-            print("[!] Warnung: Es wurde aktuell kein aktives HDMI-Signal auf der GC573 erkannt.")
-            print("    Bitte prüfen, ob die Quelle eingeschaltet ist und ein Bild ausgibt.")
+            print("[!] Warning: No active HDMI signal detected on GC573.")
+            print("    Please check if the video source is powered on and sending video.")
         if not streamer.start(preset_name=args.preset, fullscreen=args.fullscreen, volume=args.volume, vsync=args.vsync, streamer_mode=args.streamer_mode):
             sys.exit(1)
-        print("[+] Fenster geöffnet. Drücke 'q' im Fenster oder Strg+C zum Beenden.")
+        print("[+] Window opened. Press 'q' in window or Ctrl+C to exit.")
         while streamer.poll():
             time.sleep(0.5)
         streamer.stop()

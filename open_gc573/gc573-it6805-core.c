@@ -4251,6 +4251,8 @@ it6805_video_input_class(u32 width, u32 height)
 {
 	if (width >= 1920 && height >= 2160)
 		return GC555_VIDEO_INPUT_UHD;
+	if (height <= 576)
+		return GC555_VIDEO_INPUT_SD;
 	if (width > 720 || height > 576)
 		return GC555_VIDEO_INPUT_HD;
 
