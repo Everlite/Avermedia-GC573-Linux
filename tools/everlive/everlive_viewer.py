@@ -369,7 +369,7 @@ class GameStreamer:
                             fps_str = f"{int(round(fps_calc))} FPS"
                         else:
                             fps_str = f"{fps_calc:.2f} FPS"
-                disp_w = 720 if (w == 1440 and (h == 480 or h == 576)) else (320 if ((w == 1440 or w == 1920 or w == 2880) and h == 240) else w)
+                disp_w = 720 if (w == 1440 and (h == 480 or h == 576)) else w
                 info["locked"] = True
                 info["resolution"] = f"{disp_w}x{h}{scan}"
                 info["framerate"] = fps_str
@@ -442,7 +442,7 @@ class GameStreamer:
                             fps_str = f"{int(round(fps_calc))} FPS"
                         else:
                             fps_str = f"{fps_calc:.2f} FPS"
-                disp_w = 720 if (w == 1440 and (h == 480 or h == 576)) else (320 if ((w == 1440 or w == 1920 or w == 2880) and h == 240) else w)
+                disp_w = 720 if (w == 1440 and (h == 480 or h == 576)) else w
                 return f"{disp_w}x{h}{scan}", fps_str
         except Exception:
             pass
@@ -457,7 +457,7 @@ class GameStreamer:
             scan = "i" if il_m else "p"
             if m:
                 w, h = int(m.group(1)), int(m.group(2))
-                disp_w = 720 if (w == 1440 and (h == 480 or h == 576)) else (320 if ((w == 1440 or w == 1920 or w == 2880) and h == 240) else w)
+                disp_w = 720 if (w == 1440 and (h == 480 or h == 576)) else w
                 if w > 0 and h > 0:
                     return f"{disp_w}x{h}{scan}", None
         except Exception:
