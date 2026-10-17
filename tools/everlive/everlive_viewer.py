@@ -593,10 +593,12 @@ class GameStreamer:
                         "node.name = \"everlive-audio\" node.description = \"EverLive Game Audio\" "
                         "media.name = \"HDMI Game Audio\" media.role = \"Game\" }"
                     )
+                    plug_adev = f"plughw:{self.adev[3:]}" if self.adev.startswith("hw:") else self.adev
                     cmd = (
-                        f"{{ arecord -D '{self.adev}' -f S16_LE -c 8 -r 48000 -q 2>/dev/null || "
-                        f"   arecord -D '{self.adev}' -f S16_LE -c 6 -r 48000 -q 2>/dev/null || "
-                        f"   arecord -D '{self.adev}' -f S16_LE -c 2 -r 48000 -q 2>/dev/null; }} | "
+                        f"{{ arecord -D '{self.adev}' -f S16_LE -c 8 -r 48000 --period-time=10000 --buffer-time=40000 -q 2>/dev/null || "
+                        f"   arecord -D '{self.adev}' -f S16_LE -c 6 -r 48000 --period-time=10000 --buffer-time=40000 -q 2>/dev/null || "
+                        f"   arecord -D '{self.adev}' -f S16_LE -c 2 -r 48000 --period-time=10000 --buffer-time=40000 -q 2>/dev/null || "
+                        f"   arecord -D '{plug_adev}' -f S16_LE -c 2 -r 48000 --period-time=10000 --buffer-time=40000 -q 2>/dev/null; }} | "
                         f"pw-play --latency=20ms -P '{props}' - 2>/dev/null"
                     )
                     self.pwplay_proc = subprocess.Popen(cmd, shell=True, preexec_fn=os.setsid)

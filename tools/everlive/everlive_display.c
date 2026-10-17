@@ -181,11 +181,11 @@ static void start_audio_pipeline(const char *adev)
 
         char cmd[2048];
         snprintf(cmd, sizeof(cmd),
-                 "{ arecord -D \"%s\" -f S16_LE -c 8 -r 48000 -q 2>/dev/null || "
-                 "  arecord -D \"%s\" -f S16_LE -c 6 -r 48000 -q 2>/dev/null || "
-                 "  arecord -D \"%s\" -f S16_LE -c 2 -r 48000 -q 2>/dev/null || "
-                 "  arecord -D \"%s\" -f S16_LE -c 2 -r 48000 -q 2>/dev/null; } | "
-                 "pw-play --latency=10ms -P '{ application.name = \"EverLive\" application.icon-name = \"everlive\" application.id = \"everlive\" application.process.id = %d application.process.binary = \"everlive_display\" node.name = \"everlive-audio\" node.description = \"EverLive Game Audio\" media.name = \"HDMI Game Audio\" media.role = \"Game\" }' - 2>/dev/null",
+                 "{ arecord -D \"%s\" -f S16_LE -c 8 -r 48000 --period-time=10000 --buffer-time=40000 -q 2>/dev/null || "
+                 "  arecord -D \"%s\" -f S16_LE -c 6 -r 48000 --period-time=10000 --buffer-time=40000 -q 2>/dev/null || "
+                 "  arecord -D \"%s\" -f S16_LE -c 2 -r 48000 --period-time=10000 --buffer-time=40000 -q 2>/dev/null || "
+                 "  arecord -D \"%s\" -f S16_LE -c 2 -r 48000 --period-time=10000 --buffer-time=40000 -q 2>/dev/null; } | "
+                 "pw-play --latency=20ms -P '{ application.name = \"EverLive\" application.icon-name = \"everlive\" application.id = \"everlive\" application.process.id = %d application.process.binary = \"everlive_display\" node.name = \"everlive-audio\" node.description = \"EverLive Game Audio\" media.name = \"HDMI Game Audio\" media.role = \"Game\" }' - 2>/dev/null",
                  adev, adev, adev, plug_dev, (int)parent_pid);
         execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
         _exit(127);
