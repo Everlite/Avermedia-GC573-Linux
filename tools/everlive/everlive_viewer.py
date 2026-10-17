@@ -260,7 +260,7 @@ def set_audio_volume(vol_pct: int):
     try:
         out = subprocess.check_output(["wpctl", "status"], text=True, stderr=subprocess.DEVNULL)
         for line in out.splitlines():
-            if "output.gc573-audio" in line or "gc573-audio" in line:
+            if any(s in line for s in ["EverLive", "everlive-audio", "gc573-audio"]):
                 for part in line.strip().split():
                     clean = part.strip(".│*")
                     if clean.isdigit():
@@ -278,7 +278,7 @@ def set_audio_volume(vol_pct: int):
             line = line.strip()
             if line.startswith("Sink-Eingabe #") or line.startswith("Sink Input #"):
                 curr_id = line.split("#")[-1].strip()
-            elif "gc573-audio" in line and curr_id:
+            elif any(s in line for s in ["EverLive", "everlive-audio", "gc573-audio"]) and curr_id:
                 subprocess.run(["pactl", "set-sink-input-volume", curr_id, f"{vol_pct}%"],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 break
@@ -291,7 +291,7 @@ def set_audio_mute(mute: bool):
     try:
         out = subprocess.check_output(["wpctl", "status"], text=True, stderr=subprocess.DEVNULL)
         for line in out.splitlines():
-            if "output.gc573-audio" in line or "gc573-audio" in line:
+            if any(s in line for s in ["EverLive", "everlive-audio", "gc573-audio"]):
                 for part in line.strip().split():
                     clean = part.strip(".│*")
                     if clean.isdigit():
@@ -308,7 +308,7 @@ def set_audio_mute(mute: bool):
             line = line.strip()
             if line.startswith("Sink-Eingabe #") or line.startswith("Sink Input #"):
                 curr_id = line.split("#")[-1].strip()
-            elif "gc573-audio" in line and curr_id:
+            elif any(s in line for s in ["EverLive", "everlive-audio", "gc573-audio"]) and curr_id:
                 subprocess.run(["pactl", "set-sink-input-mute", curr_id, "1" if mute else "0"],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 break
@@ -585,11 +585,19 @@ class GameStreamer:
             self.is_running = True
             if self.adev and self.adev != "none":
                 try:
+                    mpv_pid = self.mpv_proc.pid if self.mpv_proc else os.getpid()
+                    props = (
+                        "{ application.name = \"EverLive\" application.icon-name = \"everlive\" "
+                        "application.id = \"everlive\" application.process.binary = \"everlive\" "
+                        f"application.process.id = {mpv_pid} "
+                        "node.name = \"everlive-audio\" node.description = \"EverLive Game Audio\" "
+                        "media.name = \"HDMI Game Audio\" media.role = \"Game\" }"
+                    )
                     cmd = (
                         f"{{ arecord -D '{self.adev}' -f S16_LE -c 8 -r 48000 -q 2>/dev/null || "
                         f"   arecord -D '{self.adev}' -f S16_LE -c 6 -r 48000 -q 2>/dev/null || "
                         f"   arecord -D '{self.adev}' -f S16_LE -c 2 -r 48000 -q 2>/dev/null; }} | "
-                        f"pw-play --latency=20ms -P 'application.name=gc573-audio node.name=gc573-audio' - 2>/dev/null"
+                        f"pw-play --latency=20ms -P '{props}' - 2>/dev/null"
                     )
                     self.pwplay_proc = subprocess.Popen(cmd, shell=True, preexec_fn=os.setsid)
                 except Exception as ae:

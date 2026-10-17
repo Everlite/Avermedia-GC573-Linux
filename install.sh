@@ -231,15 +231,20 @@ for sz in 16 32 48 64 128 256 512; do
     if [ -f "${VIEWER_DIR}/icons/${sz}x${sz}/apps/everlive.png" ]; then
         mkdir -p "${ICONS_BASE}/${sz}x${sz}/apps"
         cp -f "${VIEWER_DIR}/icons/${sz}x${sz}/apps/everlive.png" "${ICONS_BASE}/${sz}x${sz}/apps/everlive.png"
+        mkdir -p "/usr/share/icons/hicolor/${sz}x${sz}/apps" 2>/dev/null || true
+        cp -f "${VIEWER_DIR}/icons/${sz}x${sz}/apps/everlive.png" "/usr/share/icons/hicolor/${sz}x${sz}/apps/everlive.png" 2>/dev/null || true
     fi
 done
 if [ -f "${VIEWER_DIR}/icons/scalable/apps/everlive.png" ]; then
     mkdir -p "${ICONS_BASE}/scalable/apps"
     cp -f "${VIEWER_DIR}/icons/scalable/apps/everlive.png" "${ICONS_BASE}/scalable/apps/everlive.png"
+    mkdir -p "/usr/share/icons/hicolor/scalable/apps" 2>/dev/null || true
+    cp -f "${VIEWER_DIR}/icons/scalable/apps/everlive.png" "/usr/share/icons/hicolor/scalable/apps/everlive.png" 2>/dev/null || true
 fi
 chown -R "${TARGET_USER}:${TARGET_USER}" "${ICONS_BASE}" 2>/dev/null || true
 if command -v gtk-update-icon-cache >/dev/null 2>&1; then
     gtk-update-icon-cache -f -t "${ICONS_BASE}" 2>/dev/null || true
+    gtk-update-icon-cache -f -t "/usr/share/icons/hicolor" 2>/dev/null || true
 fi
 
 cat > "${APPS_DIR}/everlive.desktop" <<EOF

@@ -168,6 +168,7 @@ static void start_audio_pipeline(const char *adev)
 {
     if (g_audio_pid > 0) return;
 
+    pid_t parent_pid = getpid();
     pid_t pid = fork();
     if (pid == 0) {
         setpgid(0, 0);
@@ -178,14 +179,14 @@ static void start_audio_pipeline(const char *adev)
             snprintf(plug_dev, sizeof(plug_dev), "%s", adev);
         }
 
-        char cmd[1024];
+        char cmd[2048];
         snprintf(cmd, sizeof(cmd),
                  "{ arecord -D \"%s\" -f S16_LE -c 8 -r 48000 -q 2>/dev/null || "
                  "  arecord -D \"%s\" -f S16_LE -c 6 -r 48000 -q 2>/dev/null || "
                  "  arecord -D \"%s\" -f S16_LE -c 2 -r 48000 -q 2>/dev/null || "
                  "  arecord -D \"%s\" -f S16_LE -c 2 -r 48000 -q 2>/dev/null; } | "
-                 "pw-play --latency=10ms -P 'application.name=gc573-audio node.name=gc573-audio' - 2>/dev/null",
-                 adev, adev, adev, plug_dev);
+                 "pw-play --latency=10ms -P '{ application.name = \"EverLive\" application.icon-name = \"everlive\" application.id = \"everlive\" application.process.id = %d application.process.binary = \"everlive_display\" node.name = \"everlive-audio\" node.description = \"EverLive Game Audio\" media.name = \"HDMI Game Audio\" media.role = \"Game\" }' - 2>/dev/null",
+                 adev, adev, adev, plug_dev, (int)parent_pid);
         execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
         _exit(127);
     } else if (pid > 0) {
@@ -242,7 +243,7 @@ static void *audio_supervisor_thread(void *arg)
         /* Find PipeWire node ID (check at most once every 500ms) */
         static int search_counter = 0;
         if (node_id < 0 && g_audio_pid > 0 && (++search_counter % 20 == 0)) {
-            FILE *fp = popen("wpctl status 2>/dev/null | grep 'gc573-audio' | awk '{for(i=1;i<=NF;i++) if($i ~ /^[0-9]+\\.$/) {sub(/\\./,\"\",$i); print $i; exit}}'", "r");
+            FILE *fp = popen("wpctl status 2>/dev/null | grep -E 'EverLive|everlive-audio|gc573-audio' | awk '{for(i=1;i<=NF;i++) if($i ~ /^[0-9]+\\.$/) {sub(/\\./,\"\",$i); print $i; exit}}'", "r");
             if (fp) {
                 char buf[32];
                 if (fgets(buf, sizeof(buf), fp)) {
@@ -572,6 +573,7 @@ int main(int argc, char *argv[])
     }
 
     /* Initialize SDL2 */
+    SDL_SetHint(SDL_HINT_APP_NAME, "EverLive");
     if (g_embed_wid > 0) {
         setenv("SDL_VIDEODRIVER", "x11", 1);
     }
