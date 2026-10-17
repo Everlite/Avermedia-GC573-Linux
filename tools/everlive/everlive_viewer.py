@@ -107,6 +107,24 @@ def find_gc573_adev() -> str:
     return "hw:CARD=A4K,DEV=0"
 
 
+def find_pipewire_source_node() -> Optional[str]:
+    """Finds the native PipeWire Audio/Source node for GC573."""
+    try:
+        out = subprocess.check_output(["pw-dump", "Node"], stderr=subprocess.DEVNULL)
+        for n in json.loads(out):
+            p = n.get("info", {}).get("props", {})
+            if p.get("media.class") == "Audio/Source":
+                driver = p.get("alsa.driver_name", "")
+                card_id = p.get("alsa.id", "")
+                card_name = p.get("alsa.card_name", "")
+                dev = p.get("card.profile.device", 0)
+                if (driver == "open_gc573" or card_id in ("A4K", "GC573") or "Live Gamer 4K" in card_name) and dev in (0, "0", None):
+                    return p.get("node.name")
+    except Exception:
+        pass
+    return None
+
+
 DEFAULT_VDEV = find_gc573_vdev()
 DEFAULT_ADEV = find_gc573_adev()
 
@@ -593,14 +611,21 @@ class GameStreamer:
                         "node.name = \"everlive-audio\" node.description = \"EverLive Game Audio\" "
                         "media.name = \"HDMI Game Audio\" media.role = \"Game\" }"
                     )
-                    plug_adev = f"plughw:{self.adev[3:]}" if self.adev.startswith("hw:") else self.adev
-                    cmd = (
-                        f"{{ arecord -D '{self.adev}' -f S16_LE -c 8 -r 48000 --period-time=10000 --buffer-time=40000 -q 2>/dev/null || "
-                        f"   arecord -D '{self.adev}' -f S16_LE -c 6 -r 48000 --period-time=10000 --buffer-time=40000 -q 2>/dev/null || "
-                        f"   arecord -D '{self.adev}' -f S16_LE -c 2 -r 48000 --period-time=10000 --buffer-time=40000 -q 2>/dev/null || "
-                        f"   arecord -D '{plug_adev}' -f S16_LE -c 2 -r 48000 --period-time=10000 --buffer-time=40000 -q 2>/dev/null; }} | "
-                        f"pw-play --latency=20ms -P '{props}' - 2>/dev/null"
-                    )
+                    pw_node = find_pipewire_source_node()
+                    if pw_node:
+                        cmd = (
+                            f"pw-loopback -i '{{ target.object = \"{pw_node}\" }}' -l 20 "
+                            f"-o '{props}' 2>/dev/null"
+                        )
+                    else:
+                        plug_adev = f"plughw:{self.adev[3:]}" if self.adev.startswith("hw:") else self.adev
+                        cmd = (
+                            f"{{ arecord -D '{self.adev}' -f S16_LE -c 8 -r 48000 --period-time=10000 --buffer-time=40000 -q 2>/dev/null || "
+                            f"   arecord -D '{self.adev}' -f S16_LE -c 6 -r 48000 --period-time=10000 --buffer-time=40000 -q 2>/dev/null || "
+                            f"   arecord -D '{self.adev}' -f S16_LE -c 2 -r 48000 --period-time=10000 --buffer-time=40000 -q 2>/dev/null || "
+                            f"   arecord -D '{plug_adev}' -f S16_LE -c 2 -r 48000 --period-time=10000 --buffer-time=40000 -q 2>/dev/null; }} | "
+                            f"pw-play --latency=20ms -P '{props}' - 2>/dev/null"
+                        )
                     self.pwplay_proc = subprocess.Popen(cmd, shell=True, preexec_fn=os.setsid)
                 except Exception as ae:
                     print(f"[*] Note while starting audio stream: {ae}")
