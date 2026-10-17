@@ -1,0 +1,26 @@
+name: Discord Release Notification
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post release to Discord
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_RELEASES_WEBHOOK }}
+          NAME: ${{ github.event.release.name }}
+          TAG: ${{ github.event.release.tag_name }}
+          URL: ${{ github.event.release.html_url }}
+          BODY: ${{ github.event.release.body }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          TITLE="${NAME:-$TAG}"
+          if [ "$PRERELEASE" = "true" ]; then TITLE="🧪 $TITLE (pre-release)"; else TITLE="🚀 $TITLE"; fi
+          DESC="$(printf '%s' "$BODY" | head -c 3900)"
+          if [ "${#BODY}" -gt 3900 ]; then DESC="$DESC"$'\n\n'"… [Read the full release notes]($URL)"; fi
+          jq -n --arg t "$TITLE" --arg u "$URL" --arg d "$DESC" \
+            '{username: "EverLive Releases", embeds: [{title: $t, url: $u, description: $d, color: 7506394}]}' \
+            | curl -fsS -H "Content-Type: application/json" -d @- "$WEBHOOK"
