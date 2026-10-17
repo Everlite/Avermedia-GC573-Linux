@@ -610,6 +610,9 @@ int main(int argc, char *argv[])
         } else if (init_w == 1440 && init_h == 240) {
             win_w = 640;
             win_h = 480;
+        } else if (init_w == 1920 && init_h == 240) {
+            win_w = 640;
+            win_h = 480;
         }
         Uint32 win_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
         if (start_fullscreen) {
@@ -1139,6 +1142,8 @@ int main(int argc, char *argv[])
             } else if (ctx.width == 2880 && ctx.height == 240) {
                 eff_w = 320;
             } else if (ctx.width == 1440 && ctx.height == 240) {
+                eff_w = 320;
+            } else if (ctx.width == 1920 && ctx.height == 240) {
                 eff_w = 320;
             }
             double scale_w = (double)cur_w / (double)eff_w;

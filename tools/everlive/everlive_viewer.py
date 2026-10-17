@@ -120,6 +120,7 @@ PRESETS = {
     "3840x1080 @ 60 FPS":  {"width": 3840, "height": 1080, "fps": 60,  "fmt": "YUYV"},
     "2560x1440 @ 144 FPS": {"width": 2560, "height": 1440, "fps": 144, "fmt": "YUYV"},
     "2560x1440 @ 120 FPS": {"width": 2560, "height": 1440, "fps": 120, "fmt": "YUYV"},
+    "2560x1440 @ 100 FPS": {"width": 2560, "height": 1440, "fps": 100, "fmt": "YUYV"},
     "2560x1440 @ 60 FPS":  {"width": 2560, "height": 1440, "fps": 60,  "fmt": "YUYV"},
     "2560x1080 @ 144 FPS": {"width": 2560, "height": 1080, "fps": 144, "fmt": "YUYV"},
     "2560x1080 @ 60 FPS":  {"width": 2560, "height": 1080, "fps": 60,  "fmt": "YUYV"},
@@ -127,10 +128,15 @@ PRESETS = {
     "1920x1080 @ 180 FPS": {"width": 1920, "height": 1080, "fps": 180, "fmt": "YUYV"},
     "1920x1080 @ 144 FPS": {"width": 1920, "height": 1080, "fps": 144, "fmt": "YUYV"},
     "1920x1080 @ 120 FPS": {"width": 1920, "height": 1080, "fps": 120, "fmt": "YUYV"},
+    "1920x1080 @ 100 FPS": {"width": 1920, "height": 1080, "fps": 100, "fmt": "YUYV"},
     "1920x1080 @ 60 FPS":  {"width": 1920, "height": 1080, "fps": 60,  "fmt": "YUYV"},
+    "1920x1080 @ 50 FPS":  {"width": 1920, "height": 1080, "fps": 50,  "fmt": "YUYV"},
     "1280x720 @ 60 FPS":   {"width": 1280, "height": 720,  "fps": 60,  "fmt": "YUYV"},
     "720x480 @ 60 FPS (480p)": {"width": 720, "height": 480, "fps": 60, "fmt": "YUYV"},
     "720x576 @ 50 FPS (576p)": {"width": 720, "height": 576, "fps": 50, "fmt": "YUYV"},
+    "1920x240 @ 60 FPS (240p CRT)": {"width": 1920, "height": 240, "fps": 60, "fmt": "YUYV"},
+    "1440x240 @ 60 FPS (240p)": {"width": 1440, "height": 240, "fps": 60, "fmt": "YUYV"},
+    "2880x240 @ 60 FPS (240p RT4K)": {"width": 2880, "height": 240, "fps": 60, "fmt": "YUYV"},
 }
 
 LED_MODES = {
@@ -363,7 +369,7 @@ class GameStreamer:
                             fps_str = f"{int(round(fps_calc))} FPS"
                         else:
                             fps_str = f"{fps_calc:.2f} FPS"
-                disp_w = 720 if (w == 1440 and (h == 480 or h == 576)) else (320 if (w == 2880 and h == 240) else w)
+                disp_w = 720 if (w == 1440 and (h == 480 or h == 576)) else (320 if ((w == 1440 or w == 1920 or w == 2880) and h == 240) else w)
                 info["locked"] = True
                 info["resolution"] = f"{disp_w}x{h}{scan}"
                 info["framerate"] = fps_str
@@ -436,7 +442,7 @@ class GameStreamer:
                             fps_str = f"{int(round(fps_calc))} FPS"
                         else:
                             fps_str = f"{fps_calc:.2f} FPS"
-                disp_w = 720 if (w == 1440 and (h == 480 or h == 576)) else (320 if (w == 2880 and h == 240) else w)
+                disp_w = 720 if (w == 1440 and (h == 480 or h == 576)) else (320 if ((w == 1440 or w == 1920 or w == 2880) and h == 240) else w)
                 return f"{disp_w}x{h}{scan}", fps_str
         except Exception:
             pass
@@ -451,7 +457,7 @@ class GameStreamer:
             scan = "i" if il_m else "p"
             if m:
                 w, h = int(m.group(1)), int(m.group(2))
-                disp_w = 720 if (w == 1440 and (h == 480 or h == 576)) else (320 if (w == 2880 and h == 240) else w)
+                disp_w = 720 if (w == 1440 and (h == 480 or h == 576)) else (320 if ((w == 1440 or w == 1920 or w == 2880) and h == 240) else w)
                 if w > 0 and h > 0:
                     return f"{disp_w}x{h}{scan}", None
         except Exception:
